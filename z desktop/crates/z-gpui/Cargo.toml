@@ -1,0 +1,22 @@
+[package]
+name = "z-gpui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "ZeroGPUI — the Personal-mode UI runtime: input, layout, scene, render, text, scheduling."
+
+[dependencies]
+z-tokens = { workspace = true }
+
+winit = { workspace = true }
+wgpu = { workspace = true }
+raw-window-handle = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
+taffy = { workspace = true }
+accesskit = { workspace = true }
+accesskit_winit = { workspace = true }
+cosmic-text = { workspace = true }
+log = { workspace = true }
+png = { workspace = true }

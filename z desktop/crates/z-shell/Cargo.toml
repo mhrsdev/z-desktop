@@ -1,0 +1,13 @@
+[package]
+name = "z-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Panel Registry, Layout State and the Personal workspace shell model."
+
+[dependencies]
+z-tokens = { workspace = true, features = ["serde"] }
+z-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

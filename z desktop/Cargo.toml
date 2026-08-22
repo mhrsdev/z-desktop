@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/z-tokens",
+    "crates/z-protocol",
+    "crates/z-gpui",
+    "crates/z-shell",
+    "crates/z-core",
+    "crates/z-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "UNLICENSED"
+
+[workspace.dependencies]
+# Internal
+z-tokens = { path = "crates/z-tokens" }
+z-protocol = { path = "crates/z-protocol" }
+z-gpui = { path = "crates/z-gpui" }
+z-shell = { path = "crates/z-shell" }
+z-core = { path = "crates/z-core" }
+
+# Windowing / GPU
+winit = "0.30"
+wgpu = "30"
+raw-window-handle = "0.6"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+
+# Layout / text / a11y
+accesskit = "0.24"
+accesskit_winit = "0.33"
+taffy = "0.9"
+cosmic-text = "0.19"
+png = "0.18"
+
+# Serialization for versioned contracts
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Secret redaction patterns
+regex = "1"
+
+# HTTP client for model providers (blocking, rustls — no tokio in the core)
+ureq = { version = "2", default-features = false, features = ["tls", "gzip", "json"] }
+
+# Diagnostics
+log = "0.4"
+env_logger = "0.11"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+panic = "unwind"

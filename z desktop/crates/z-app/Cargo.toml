@@ -1,0 +1,22 @@
+[package]
+name = "zero-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Zero Desktop application binary."
+
+[[bin]]
+name = "zero"
+path = "src/main.rs"
+
+[dependencies]
+z-tokens = { workspace = true }
+z-protocol = { workspace = true }
+z-shell = { workspace = true }
+z-gpui = { workspace = true }
+z-core = { workspace = true }
+serde_json = { workspace = true }
+winit = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }

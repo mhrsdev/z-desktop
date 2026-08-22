@@ -1,0 +1,41 @@
+# --- Z Desktop Personal ---
+
+# Rust build artifacts
+"z desktop/target/"
+target/
+*.pdb
+*.exe
+
+# Local runtime data (sessions, config with BYOK keys, caches, journals)
+data/
+"z desktop/data/"
+
+# External research clones — NEVER publish third-party repositories.
+# See docs/Z-DESKTOP-REFERENCE-RESEARCH.md for the policy.
+references/external/
+deepseek-harness/
+hermes-agent/
+
+# User's local canonical Zero-era materials (private workspace history)
+zero final/
+
+# Secrets / credentials
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+credentials.json
+
+# Logs and temp files
+*.log
+tmp_*
+*.tmp
+
+# OS / IDE junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.swp

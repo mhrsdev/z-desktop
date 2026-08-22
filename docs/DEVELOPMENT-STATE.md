@@ -28,8 +28,9 @@ This session published the repository's canonical documentation layer:
 6. ✅ 19 operational skills under `skills/<name>/SKILL.md`.
 
 Publication: git repo initialized at workspace root; pushed to
-github.com/mhrsdev/z-desktop (branch main). Remote SHA recorded in git
-log; publication verified via `git ls-remote`.
+github.com/mhrsdev/z-desktop (branch main). Baseline commit
+`45935d6f84a5e6f87724bf69599bb0ffa9b37314` (75 files, 30,080 lines);
+publication verified via `git ls-remote` — remote SHA matches local HEAD.
 
 Next work continues per "Exact Next Tasks" below (steering queue →
 journal → index actor), now tracked as ledger IDs core-005..core-008,

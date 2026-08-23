@@ -5,6 +5,7 @@
 //! [`z_protocol`] contract: commands in, events out. It never depends on a UI
 //! crate, so the same binary can later serve a CLI or a remote client.
 
+pub mod evidence;
 pub mod journal;
 pub mod provider;
 pub mod redact;

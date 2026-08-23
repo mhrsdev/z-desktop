@@ -6,6 +6,24 @@
 
 Last updated: 2026-08-23
 
+## Evidence Records (sup-001/002) — 2026-08-23 COMPLETE
+
+1. ✅ **sup-001**: `z-core/src/evidence.rs` — Evidence envelope
+   {id, kind, thread_id, turn_id, ok, summary} with five kinds
+   (Build/Tests/Diff/Bench/Regression); record() appends EvidenceRecorded
+   journal events best-effort; EvidenceView folds payloads (malformed fails
+   loud). Helper constructors encode pass semantics: build() => exit==0,
+   tests() => failed==0.
+2. ✅ **sup-002 (partial)**: terminal_exec tool calls now also record Build
+   evidence through the journal already threaded into run_turn; exit code
+   parsed from the output's "[exit code: N]" marker.
+
+Verification: full workspace suite green — **350 tests, 0 failed**
+(345 → 350). Ledger: 50 IMPLEMENTED.
+
+Next work continues → sup-003 (test-runner parse) + sup-004 (diff capture)
+hooks, then core-013..019 doom-loop/retry per ADR-0017.
+
 ## Token Cache + ADR-0016 (2026-08-23) — COMPLETE
 
 1. ✅ **tok-003/004/005**: fs_read result cache — static map keyed by

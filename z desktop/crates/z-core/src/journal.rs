@@ -44,6 +44,9 @@ pub enum JournalKind {
     MessagePersisted,
     /// A task record changed status (orch-001; folded by the TasksView reducer).
     TaskStateChanged,
+    /// A supervision evidence record was captured (sup-001/sup-002, ADR-0016;
+    /// folded by the EvidenceView reducer).
+    EvidenceRecorded,
     /// Escape hatch for kinds this build does not know yet.
     Other(String),
 }
@@ -56,6 +59,7 @@ impl JournalKind {
             JournalKind::TurnFinished => "turn_finished",
             JournalKind::MessagePersisted => "message_persisted",
             JournalKind::TaskStateChanged => "task_state_changed",
+            JournalKind::EvidenceRecorded => "evidence_recorded",
             JournalKind::Other(s) => s.as_str(),
         }
     }
@@ -67,6 +71,7 @@ impl JournalKind {
             "turn_finished" => JournalKind::TurnFinished,
             "message_persisted" => JournalKind::MessagePersisted,
             "task_state_changed" => JournalKind::TaskStateChanged,
+            "evidence_recorded" => JournalKind::EvidenceRecorded,
             _ => JournalKind::Other(s),
         }
     }
@@ -338,6 +343,11 @@ mod journal_tests {
                 JournalKind::TaskStateChanged,
                 None,
                 json!({"id": "t-9", "status": "done"}),
+            ),
+            RecordDraft::new(
+                JournalKind::EvidenceRecorded,
+                Some("thread-1".into()),
+                json!({"id": "ev-1", "kind": "build", "ok": true}),
             ),
         ]
     }

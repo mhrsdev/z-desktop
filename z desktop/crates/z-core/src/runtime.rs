@@ -680,6 +680,20 @@ fn run_turn(
                 output.ok,
                 output.text.lines().next().unwrap_or("").chars().take(120).collect(),
             );
+            // sup-002 (ADR-0016): every terminal_exec result also lands a Build
+            // evidence record — capture-time proof, best-effort like all journal
+            // writes. Hooks observe results; they never gate them.
+            if call.name == "terminal_exec" {
+                let evidence = crate::evidence::Evidence::build(
+                    &thread_id,
+                    &turn_id,
+                    crate::evidence::parse_exit_code(&output.text),
+                    output.text.lines().next().unwrap_or("").to_string(),
+                );
+                if let Some(journal) = journal.as_deref() {
+                    crate::evidence::record(journal, &evidence);
+                }
+            }
             // Full output goes back to the model as the tool result.
             thread.messages.push(StoredMessage {
                 role: z_protocol::Role::User,

@@ -193,8 +193,8 @@ DOMAINS = [
         ("025", "Best-of-N budget cap enforcement test", ["013"], "PLANNED"),
     ]),
     ("sup", "Supervision & Evidence", [
-        ("001", "Evidence record types (Build/Tests/Diff/Bench/Regression)", [], "PLANNED"),
-        ("002", "Capture hook: sandbox exit codes → Build evidence", ["001"], "PLANNED"),
+        ("001", "Evidence record types (Build/Tests/Diff/Bench/Regression)", [], "IMPLEMENTED"),
+        ("002", "Capture hook: sandbox exit codes → Build evidence", ["001"], "IMPLEMENTED"),
         ("003", "Capture hook: test-runner output parsing", ["001"], "PLANNED"),
         ("004", "Capture hook: fs_write/edit_patch diffs", ["001", "edit-019"], "PLANNED"),
         ("005", "Claim regex set (conservative success phrases)", [], "PLANNED"),

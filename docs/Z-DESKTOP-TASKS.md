@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 46 |
+| IMPLEMENTED | 48 |
 | PARTIAL | 1 |
-| PLANNED | 676 |
+| PLANNED | 674 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -538,10 +538,10 @@
 
 ## Supervision & Evidence (`sup-*`)
 
-### [PLANNED] sup-001 — Evidence record types (Build/Tests/Diff/Bench/Regression)
+### [IMPLEMENTED] sup-001 — Evidence record types (Build/Tests/Diff/Bench/Regression)
 - depends: —
 
-### [PLANNED] sup-002 — Capture hook: sandbox exit codes → Build evidence
+### [IMPLEMENTED] sup-002 — Capture hook: sandbox exit codes → Build evidence
 - depends: sup-001
 
 ### [PLANNED] sup-003 — Capture hook: test-runner output parsing

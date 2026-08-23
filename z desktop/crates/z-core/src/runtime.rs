@@ -773,6 +773,26 @@ fn run_turn(
                     Err(err) => log::warn!("supervision: evidence fold failed: {err}"),
                 }
             }
+            // mem-005 (ADR-0014 D5): best-effort candidate extraction from the
+            // final text — provisional-only records, never a turn failure.
+            let candidates = crate::memory::extract_candidates(&outcome.text);
+            if !candidates.is_empty() {
+                if let Some(j) = journal.as_ref() {
+                    match crate::memory::promote_candidates(
+                        j,
+                        &data_dir,
+                        &candidates,
+                        &thread_id,
+                        &turn_id,
+                    ) {
+                        Ok(0) => {}
+                        Ok(n) => log::info!(
+                            "memory: {n} extracted candidate(s) recorded in turn {turn_id}"
+                        ),
+                        Err(e) => log::warn!("memory: candidate recording failed: {e}"),
+                    }
+                }
+            }
             persist(&thread);
             finish(true, None);
             return;

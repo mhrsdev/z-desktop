@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 65 |
+| IMPLEMENTED | 66 |
 | PARTIAL | 2 |
-| PLANNED | 656 |
+| PLANNED | 655 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -704,7 +704,7 @@
 ### [IMPLEMENTED] mem-004 — Superseding chain support
 - depends: mem-001
 
-### [PLANNED] mem-005 — Candidate extraction from journaled turns
+### [IMPLEMENTED] mem-005 — Candidate extraction from journaled turns
 - depends: mem-001, jour-005
 
 ### [PLANNED] mem-006 — Consolidation pass (batched, capped)

@@ -251,7 +251,7 @@ DOMAINS = [
         ("002", "Layer stores (project/semantic/episodic)", ["001"], "IMPLEMENTED"),
         ("003", "Provenance + confidence fields enforced", ["001"], "IMPLEMENTED"),
         ("004", "Superseding chain support", ["001"], "IMPLEMENTED"),
-        ("005", "Candidate extraction from journaled turns", ["001", "jour-005"], "PLANNED"),
+        ("005", "Candidate extraction from journaled turns", ["001", "jour-005"], "IMPLEMENTED"),
         ("006", "Consolidation pass (batched, capped)", ["005"], "PLANNED"),
         ("007", "Provisional→promoted lifecycle", ["006"], "PLANNED"),
         ("008", "Retrieval API (ranked candidates)", ["002"], "PLANNED"),

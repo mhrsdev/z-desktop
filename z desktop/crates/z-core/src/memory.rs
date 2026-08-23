@@ -8,6 +8,7 @@
 
 use crate::journal::{Journal, JournalKind, RecordDraft};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -235,6 +236,120 @@ impl MemoryStore {
     }
 }
 
+/// One heuristic hit from post-turn text extraction (mem-005, ADR-0014 D5).
+/// Lands Provisional only; promotion is mem-007's job.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedCandidate {
+    pub content: String,
+    pub layer: Layer,
+    pub confidence: f32,
+}
+
+/// Cap per extraction pass — well under ADR-0014 D5's ≤100/pass bound.
+const MAX_CANDIDATES_PER_PASS: usize = 20;
+
+/// Regex-free heuristics over one turn's final text: explicit-memory phrasing
+/// ("remember that", "note that", "keep in mind", "the user prefers",
+/// "always use", "never use") becomes Project-layer candidates at confidence
+/// 0.6; definitional "X means Y" / "X is a Y" sentences become Semantic-layer
+/// candidates at 0.5. Identical contents dedup; capped at
+/// [`MAX_CANDIDATES_PER_PASS`].
+/// ponytail: sentence-split + substring match — noisy on ordinary prose, safe
+/// because everything lands Provisional (never live until mem-006/007).
+pub fn extract_candidates(turn_text: &str) -> Vec<ExtractedCandidate> {
+    const PROJECT_MARKERS: [&str; 6] = [
+        "remember that",
+        "note that",
+        "keep in mind",
+        "the user prefers",
+        "always use",
+        "never use",
+    ];
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for raw in turn_text.split(|c| matches!(c, '.' | '!' | '?' | '\n' | ';')) {
+        let content = raw.trim();
+        if content.is_empty() {
+            continue;
+        }
+        let lower = content.to_lowercase();
+        let candidate = if PROJECT_MARKERS.iter().any(|m| lower.contains(m)) {
+            ExtractedCandidate {
+                content: content.to_string(),
+                layer: Layer::Project,
+                confidence: 0.6,
+            }
+        } else if lower.contains(" means ") || lower.contains(" is a ") {
+            ExtractedCandidate {
+                content: content.to_string(),
+                layer: Layer::Semantic,
+                confidence: 0.5,
+            }
+        } else {
+            continue;
+        };
+        if seen.insert(lower) && out.len() < MAX_CANDIDATES_PER_PASS {
+            out.push(candidate);
+        }
+    }
+    out
+}
+
+/// Writes each candidate as a Provisional `memory_recorded` event through the
+/// runtime journal (best-effort, mem-005 / ADR-0014 D5: supervised extraction,
+/// Message/turn refs). Skips candidates whose exact content already exists in
+/// any layer view (cheap exact-match slice of D5 step-2 similarity dedup).
+/// Returns how many records were written; callers rebuild views via
+/// [`MemoryStore`] when needed.
+pub fn promote_candidates(
+    journal: &Mutex<Journal>,
+    dir: &Path,
+    candidates: &[ExtractedCandidate],
+    thread_id: &str,
+    turn_id: &str,
+) -> Result<usize, String> {
+    let store = MemoryStore::open(dir);
+    let mut existing: HashSet<String> = HashSet::new();
+    for layer in [Layer::Project, Layer::Semantic, Layer::Episodic] {
+        for r in store.read_layer(layer)? {
+            existing.insert(r.content.trim().to_lowercase());
+        }
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let mut written = 0usize;
+    for (i, c) in candidates.iter().enumerate() {
+        let content = c.content.trim();
+        if !existing.insert(content.to_lowercase()) {
+            continue;
+        }
+        let provenance = Provenance {
+            kind: "extraction".into(),
+            r#ref: turn_id.into(),
+            thread_id: thread_id.into(),
+            turn_id: turn_id.into(),
+            ts_ms: now_ms,
+        };
+        match MemoryRecord::new(
+            format!("mem-ext-{now_ms}-{i}"),
+            c.layer,
+            content,
+            provenance,
+            c.confidence,
+            Status::Provisional,
+        ) {
+            Ok(r) => {
+                record(journal, &r);
+                written += 1;
+            }
+            Err(e) => log::warn!("memory: skipping invalid extracted candidate: {e}"),
+        }
+    }
+    Ok(written)
+}
+
 #[cfg(test)]
 mod memory_tests {
     use super::*;
@@ -447,5 +562,110 @@ mod memory_tests {
         let records = store.read_layer(Layer::Episodic).expect("skips survive");
         assert_eq!(records, vec![rec("mem-e", Status::Promoted)]);
         let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    fn cand(content: &str, layer: Layer, confidence: f32) {
+        let got = extract_candidates(content);
+        assert_eq!(got.len(), 1, "{content:?}");
+        assert_eq!(got[0].layer, layer);
+        assert_eq!(got[0].confidence, confidence);
+        assert_eq!(got[0].content.trim(), content.trim());
+    }
+
+    #[test]
+    fn marker_phrases_map_to_project_and_definitions_to_semantic() {
+        cand("Remember that the build uses pnpm", Layer::Project, 0.6);
+        cand("note that the cache is cold", Layer::Project, 0.6);
+        cand("keep in mind the deadline is Friday", Layer::Project, 0.6);
+        cand("the user prefers dark themes", Layer::Project, 0.6);
+        cand("always use rustfmt before committing", Layer::Project, 0.6);
+        cand("never use unwrap in library code", Layer::Project, 0.6);
+        cand("A mutex means exclusive access", Layer::Semantic, 0.5);
+        cand("A semaphore is a counting lock", Layer::Semantic, 0.5);
+        // Marker beats definition when both match.
+        assert_eq!(
+            extract_candidates("Note that a token bucket is a rate limiter")[0].layer,
+            Layer::Project
+        );
+    }
+
+    #[test]
+    fn identical_candidate_contents_dedup() {
+        let text = "Remember that deploys happen on Tuesday. \
+                    Remember that deploys happen on tuesday.";
+        let cands = extract_candidates(text);
+        assert_eq!(cands.len(), 1, "case-insensitive dedup: {cands:?}");
+    }
+
+    #[test]
+    fn extraction_is_capped_at_twenty_per_pass() {
+        let text: String = (0..50)
+            .map(|i| format!("Remember that fact number {i} is true."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(extract_candidates(&text).len(), MAX_CANDIDATES_PER_PASS);
+    }
+
+    #[test]
+    fn benign_text_yields_no_candidates() {
+        for benign in [
+            "The weather looks nice today",
+            "I fixed the bug and ran the test suite twice",
+            "",
+            "Here is your file listing",
+        ] {
+            assert!(extract_candidates(benign).is_empty(), "{benign:?}");
+        }
+    }
+
+    #[test]
+    fn promoted_extraction_records_are_provisional_in_the_journal_view() {
+        let dir = temp_dir("extract-promote");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let candidates = vec![
+            ExtractedCandidate {
+                content: "Always use pnpm".into(),
+                layer: Layer::Project,
+                confidence: 0.6,
+            },
+            ExtractedCandidate {
+                content: "A mutex means exclusive access".into(),
+                layer: Layer::Semantic,
+                confidence: 0.5,
+            },
+            // Duplicate of what is already stored below -> skipped.
+            ExtractedCandidate {
+                content: "Always use PNPM".into(),
+                layer: Layer::Project,
+                confidence: 0.6,
+            },
+        ];
+        let store = MemoryStore::open(&dir);
+        store
+            .write_layer_view(Layer::Project, &[rec("mem-seed", Status::Promoted)])
+            .expect("seed view");
+
+        let written =
+            promote_candidates(&journal, &dir, &candidates, "thread-1", "turn-9").expect("promote");
+        assert_eq!(written, 2);
+        drop(journal); // release handle before folding
+
+        let view = MemoryView::fold(&path).expect("fold");
+        assert_eq!(view.records.len(), 2, "duplicate content skipped");
+        for r in &view.records {
+            assert_eq!(r.status, Status::Provisional, "extraction never promotes");
+            assert_eq!(r.provenance.kind, "extraction");
+            assert_eq!(r.provenance.r#ref, "turn-9");
+            assert_eq!(r.provenance.turn_id, "turn-9");
+            assert_eq!(r.provenance.thread_id, "thread-1");
+            assert!(r.provenance.ts_ms > 0);
+        }
+        assert_eq!(view.records[0].layer, Layer::Project);
+        assert_eq!(view.records[0].content, "Always use pnpm");
+        assert_eq!(view.records[1].layer, Layer::Semantic);
+        // Provisional records are never live (D4 predicate holds).
+        assert!(view.live().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

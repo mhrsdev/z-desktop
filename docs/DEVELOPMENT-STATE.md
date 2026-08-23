@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-23
 
+## mem-005 Candidate Extraction — 2026-08-23 COMPLETE
+
+1. ✅ **mem-005**: extract_candidates — regex-free sentence heuristics;
+   marker phrases ("remember that", "the user prefers", "always/never
+   use") → Project candidates (0.6), definitional "X means/is a Y" →
+   Semantic (0.5); dedup + 20/pass cap. promote_candidates writes
+   Provisional MemoryRecorded events best-effort; run_turn success path
+   extracts from final text (never fails the turn).
+
+Verification: full workspace suite green — **392 tests, 0 failed**
+(387 → 392). Ledger: 68 IMPLEMENTED.
+
+Next work continues → mem-006 consolidation/promotion pass, sup-007
+fake-completion gating, or ui thread list panel.
+
 ## sup-005/006 Claim Linking — 2026-08-23 COMPLETE
 
 1. ✅ **sup-005**: ClaimSpan + extract_claims — regex-free sentence

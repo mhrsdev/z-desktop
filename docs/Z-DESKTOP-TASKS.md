@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 55 |
+| IMPLEMENTED | 56 |
 | PARTIAL | 1 |
-| PLANNED | 667 |
+| PLANNED | 666 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -760,7 +760,7 @@
 ### [IMPLEMENTED] ctx-002 — Priority allocation weights
 - depends: ctx-001
 
-### [PLANNED] ctx-003 — Compaction trigger integration
+### [IMPLEMENTED] ctx-003 — Compaction trigger integration
 - depends: ctx-001
 
 ### [PLANNED] ctx-004 — Compaction procedure (pinned facts + round summaries)

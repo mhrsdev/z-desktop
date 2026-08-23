@@ -6,6 +6,23 @@
 
 Last updated: 2026-08-23
 
+## ctx-003 Budget Gate + ADR-0020 — 2026-08-23 COMPLETE
+
+1. ✅ **ctx-003**: `enforce_budget(msgs, budget)` in runtime.rs — second
+   compaction gate at the end of build_request: byte-identical passthrough
+   when under budget; otherwise maps messages to context layers (tool
+   bodies → Ephemeral, final user → pinned Session, system → Prefix) and
+   runs context::assemble, then maps back. trim_history stays primary.
+2. ✅ **ADR-0020** (`docs/adr/0020-local-model-support.md`): local model
+   runtime decision for prov-020..025.
+
+Verification: full workspace suite green — **366 tests, 0 failed**
+(362 → 366). Ledger: 58 IMPLEMENTED.
+
+Next work continues → idx-004 tree-sitter Rust grammar pack (first dep add
+per ADR-0007), or ui-001 ShellFrame/render_panel seam per ADR-0019, or
+sup-006 claim linking.
+
 ## Context Engine Core + ADR-0019 — 2026-08-23 COMPLETE
 
 1. ✅ **ctx-001/002**: `z-core/src/context.rs` — Layer enum

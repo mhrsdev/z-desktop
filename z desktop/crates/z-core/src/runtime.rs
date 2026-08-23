@@ -976,6 +976,94 @@ fn trim_history(msgs: &[StoredMessage], budget: usize) -> Vec<StoredMessage> {
     }
 }
 
+/// ctx-003 (ADR-0013): second compaction gate, after trim_history exhausted
+/// whole-turn cuts and we are STILL over budget. Maps history onto context
+/// layers and lets the pure allocator (`context::assemble`) drop by priority:
+/// tool-result bodies first, then oldest current-turn output, then oldest
+/// session history — never the live user message. The system prompt is not a
+/// StoredMessage (it is build_request's Prefix), so no Prefix item exists here.
+///
+/// After assembly the call↔result pairing is repaired atomically: an agent
+/// tool_call and its result carrier are dropped together if allocation ever
+/// separated them, so the request stays provider-valid.
+fn enforce_budget(msgs: Vec<StoredMessage>, budget: usize) -> Vec<StoredMessage> {
+    let total: usize = msgs.iter().map(stored_message_tokens).sum();
+    if msgs.is_empty() || total <= budget {
+        return msgs; // under budget: byte-for-byte unchanged (stability guard)
+    }
+    let last_user = msgs
+        .iter()
+        .rposition(|m| m.role == z_protocol::Role::User && m.tool_calls.is_empty());
+    let items = msgs
+        .iter()
+        .enumerate()
+        .map(|(i, m)| crate::context::ContextItem {
+            layer: if !m.tool_calls.is_empty() {
+                // Tool plumbing — an agent's tool_call message AND its result
+                // carrier — leaves as one Ephemeral unit before any history.
+                crate::context::Layer::Ephemeral
+            } else if last_user.map_or(false, |lu| i > lu) {
+                crate::context::Layer::Turn // current-turn agent output
+            } else {
+                // Older history AND the final user message — which is the
+                // LAST Session item, i.e. assemble's pinned survivor.
+                crate::context::Layer::Session
+            },
+            // ponytail: ContextItem has no index field; the original index as
+            // text maps survivors back unambiguously (est_tokens drives the
+            // allocator, text is only carried through).
+            text: i.to_string(),
+            est_tokens: stored_message_tokens(m),
+        })
+        .collect::<Vec<_>>();
+    let mut keep: Vec<usize> = crate::context::assemble(items, budget)
+        .into_iter()
+        .filter_map(|it| it.text.parse::<usize>().ok())
+        .collect();
+    keep.sort_unstable();
+
+    // Repair pass (until stable): drop a result carrier whose agent call did
+    // not survive directly before it, or an agent call whose carrier did not
+    // survive directly after it. Never touches plain texts or the final user
+    // message (empty tool_calls ⇒ never orphaned).
+    loop {
+        let mut changed = false;
+        let mut next_keep = Vec::with_capacity(keep.len());
+        for (pos, &i) in keep.iter().enumerate() {
+            let prev = pos.checked_sub(1).map(|p| keep[p]);
+            let next = keep.get(pos + 1).copied();
+            let m = &msgs[i];
+            let orphan = if m.role == z_protocol::Role::Agent && !m.tool_calls.is_empty() {
+                !next.map_or(false, |n| {
+                    msgs[n].role == z_protocol::Role::User
+                        && m.tool_calls
+                            .iter()
+                            .all(|k| msgs[n].tool_calls.iter().any(|r| r.id == k.id))
+                })
+            } else if m.role == z_protocol::Role::User && !m.tool_calls.is_empty() {
+                !prev.map_or(false, |p| {
+                    msgs[p].role == z_protocol::Role::Agent
+                        && m.tool_calls
+                            .iter()
+                            .all(|r| msgs[p].tool_calls.iter().any(|k| k.id == r.id))
+                })
+            } else {
+                false
+            };
+            if orphan {
+                changed = true;
+            } else {
+                next_keep.push(i);
+            }
+        }
+        keep = next_keep;
+        if !changed {
+            break;
+        }
+    }
+    keep.into_iter().map(|i| msgs[i].clone()).collect()
+}
+
 /// Assemble the chat request. The system prompt + repo map form a stable
 /// prefix (provider prompt-cache friendly); only the tail changes per turn.
 /// History is budget-checked locally before send and trimmed at clean turn
@@ -1023,6 +1111,9 @@ Active model: {label}",
     let soft_target = CONTEXT_HARD_LIMIT.saturating_sub(COMPLETION_RESERVE);
     let history_budget = soft_target.saturating_sub(fixed);
     let history = trim_history(&thread.messages, history_budget);
+    // ctx-003 (ADR-0013): second gate — when whole-turn trimming alone still
+    // leaves us over budget, compact via the context allocator.
+    let history = enforce_budget(history, history_budget);
     if history.len() != thread.messages.len() {
         log::info!(
             "context budget: trimmed {} -> {} history messages (~{} tokens fixed)",
@@ -1233,6 +1324,98 @@ mod budget_tests {
             items.len(),
             "assemble dropped something from a freshly built request"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // ctx-003: enforce_budget (second compaction gate)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn enforce_budget_tiny_budget_keeps_the_live_user_message() {
+        // The system prompt is build_request's Prefix, not a StoredMessage
+        // (z_protocol::Role has no System), so the never-dropped survivor here
+        // is assemble's pinned item: the final real user message.
+        let big = "word ".repeat(400);
+        let msgs = vec![user(&big), user(&big), user(&big), user("live question")];
+        let out = enforce_budget(msgs, 10);
+        assert_eq!(out.last().unwrap().text, "live question");
+        assert_eq!(out.last().unwrap().role, z_protocol::Role::User);
+    }
+
+    #[test]
+    fn enforce_budget_drops_tool_bodies_before_session_history() {
+        // One full tool round whose bodies dwarf everything else.
+        let mut call = agent_with_call("a");
+        call.tool_calls[0].summary = "z".repeat(4000);
+        let mut carrier = results(&["a"]);
+        carrier.tool_calls[0].summary = "y".repeat(4000);
+        let msgs = vec![
+            user("first question"),
+            call,
+            carrier,
+            user("second question"),
+        ];
+        // Budget fits only the two session texts (+margin): both Ephemeral
+        // bodies must go, and their agent-call partner must go with them.
+        let budget = stored_message_tokens(&user("first question"))
+            + stored_message_tokens(&user("second question"))
+            + 4;
+        let out = enforce_budget(msgs, budget);
+        assert!(
+            out.iter().all(|m| m.tool_calls.is_empty()),
+            "call/result pair must be dropped atomically"
+        );
+        assert!(out.iter().any(|m| m.text == "first question"));
+        assert!(out.iter().any(|m| m.text == "second question"));
+    }
+
+    #[test]
+    fn enforce_budget_never_orphans_calls_or_results() {
+        let big = "word ".repeat(400); // heavy tail forces deep compaction
+        let msgs = vec![
+            user("first question"),
+            agent_with_call("a"),
+            results(&["a"]),
+            user("second question"),
+            agent_with_call("b"),
+            results(&["b"]),
+            user(&big),
+        ];
+        let out = enforce_budget(msgs, 40);
+        // The live user message always survives.
+        assert_eq!(out.last().unwrap().role, z_protocol::Role::User);
+        assert!(out.last().unwrap().tool_calls.is_empty());
+        // Whatever survived is provider-valid: every kept agent call still
+        // has its result carrier directly after it, and vice versa.
+        for (i, m) in out.iter().enumerate() {
+            if m.role == z_protocol::Role::Agent && !m.tool_calls.is_empty() {
+                assert!(
+                    out.get(i + 1).map_or(false, |n| n.role == z_protocol::Role::User
+                        && m.tool_calls.iter().all(|k| n.tool_calls.iter().any(|r| r.id == k.id))),
+                    "agent call {} lost its result",
+                    m.tool_calls[0].id
+                );
+            }
+            if m.role == z_protocol::Role::User && !m.tool_calls.is_empty() {
+                assert!(
+                    i > 0
+                        && out[i - 1].role == z_protocol::Role::Agent
+                        && m.tool_calls
+                            .iter()
+                            .all(|r| out[i - 1].tool_calls.iter().any(|k| k.id == r.id)),
+                    "result carrier orphaned from its agent call"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enforce_budget_under_budget_is_byte_identical() {
+        let msgs = vec![user("hello"), user("world")];
+        let snapshot = msgs.clone();
+        let out = enforce_budget(msgs, 10_000);
+        assert_eq!(out.len(), snapshot.len());
+        assert!(out.iter().zip(snapshot.iter()).all(|(a, b)| a.text == b.text));
     }
 }
 

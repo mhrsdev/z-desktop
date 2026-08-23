@@ -271,7 +271,7 @@ DOMAINS = [
     ("ctx", "Context Engine", [
         ("001", "Layered context model (prefix/session/turn/ephemeral)", [], "IMPLEMENTED"),
         ("002", "Priority allocation weights", ["001"], "IMPLEMENTED"),
-        ("003", "Compaction trigger integration", ["001"], "PLANNED"),
+        ("003", "Compaction trigger integration", ["001"], "IMPLEMENTED"),
         ("004", "Compaction procedure (pinned facts + round summaries)", ["003"], "PLANNED"),
         ("005", "Idempotent compaction per span", ["004"], "PLANNED"),
         ("006", "Freshness metadata on context items", ["001"], "PLANNED"),

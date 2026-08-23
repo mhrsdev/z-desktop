@@ -6,6 +6,22 @@
 
 Last updated: 2026-08-23
 
+## mem-006/007 Consolidation — 2026-08-23 COMPLETE
+
+1. ✅ **mem-006**: consolidate(journal, store) — promotes Provisional
+   records with confidence >= 0.75 via same-id Promoted follow-up events
+   (last-line-wins fold), dedups by (layer, normalized content) keeping
+   highest confidence and superseding the rest, caps at 100 promotions per
+   pass, then rebuilds all three layer views from journal truth.
+2. ✅ **mem-007**: Provisional→Promoted lifecycle exercised through the
+   same pass (status transitions are journal events, never in-place edits).
+
+Verification: full workspace suite green — **415 tests, 0 failed**
+(412 → 415). Ledger: 79 IMPLEMENTED.
+
+Next work continues → mem-008 retrieval API, sup-012..015 detectors, or
+prov-005 capability registry.
+
 ## sup-009/010/011 Detectors — 2026-08-23 COMPLETE
 
 1. ✅ **sup-009/010**: detect_unexecuted_tests/build — a success claim of

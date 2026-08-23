@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 75 |
+| IMPLEMENTED | 77 |
 | PARTIAL | 2 |
-| PLANNED | 646 |
+| PLANNED | 644 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -707,10 +707,10 @@
 ### [IMPLEMENTED] mem-005 — Candidate extraction from journaled turns
 - depends: mem-001, jour-005
 
-### [PLANNED] mem-006 — Consolidation pass (batched, capped)
+### [IMPLEMENTED] mem-006 — Consolidation pass (batched, capped)
 - depends: mem-005
 
-### [PLANNED] mem-007 — Provisional→promoted lifecycle
+### [IMPLEMENTED] mem-007 — Provisional→promoted lifecycle
 - depends: mem-006
 
 ### [PLANNED] mem-008 — Retrieval API (ranked candidates)

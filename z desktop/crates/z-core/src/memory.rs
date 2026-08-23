@@ -8,7 +8,7 @@
 
 use crate::journal::{Journal, JournalKind, RecordDraft};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -30,7 +30,7 @@ pub struct Provenance {
 /// The three persistent layers. Working/session are not stored here:
 /// working dies with the turn, session lives in threads + the context
 /// engine (ADR-0014 D1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Layer {
     Project,
@@ -350,6 +350,89 @@ pub fn promote_candidates(
     Ok(written)
 }
 
+/// Confidence at which a Provisional record self-promotes during a
+/// consolidation pass (mem-006; mem-007 adds user/N-source promotion).
+const CONSOLIDATION_PROMOTE_CONFIDENCE: f32 = 0.75;
+
+/// Hard bound on promotions per consolidation pass (ADR-0014 caps ≤100/pass).
+const MAX_PROMOTIONS_PER_PASS: usize = 100;
+
+/// One consolidation pass (mem-006, ADR-0014): folds the journal, promotes
+/// Provisional records at [`CONSOLIDATION_PROMOTE_CONFIDENCE`] or higher, and
+/// supersedes duplicate contents within a layer (keeping the highest-confidence
+/// live record). Corrections are follow-up `memory_recorded` events with the
+/// same id — last-line-wins fold makes that the whole mechanism. Rebuilds the
+/// per-layer views from the re-folded journal; returns (promoted, superseded).
+pub fn consolidate(
+    journal: &Mutex<Journal>,
+    store: &MemoryStore,
+) -> Result<(usize, usize), String> {
+    let path = journal.lock().unwrap().path().to_path_buf();
+    let mut view = MemoryView::fold(&path)?;
+    let mut promoted = 0usize;
+    let mut superseded = 0usize;
+    let mut changed_ids: HashSet<String> = HashSet::new();
+
+    // Promotion: insertion order, capped per pass.
+    for r in view.records.iter_mut() {
+        if promoted >= MAX_PROMOTIONS_PER_PASS {
+            break;
+        }
+        if r.status == Status::Provisional && r.confidence >= CONSOLIDATION_PROMOTE_CONFIDENCE {
+            r.status = Status::Promoted;
+            changed_ids.insert(r.id.clone());
+            promoted += 1;
+        }
+    }
+
+    // Dedup: per (layer, normalized content), keep the first-highest-confidence
+    // live record; every other live duplicate points at it via superseded_by.
+    let mut groups: HashMap<(Layer, String), Vec<usize>> = HashMap::new();
+    for (i, r) in view.records.iter().enumerate() {
+        if r.status == Status::Promoted && r.superseded_by.is_none() {
+            groups
+                .entry((r.layer, r.content.trim().to_lowercase()))
+                .or_default()
+                .push(i);
+        }
+    }
+    for (_, idxs) in groups {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let mut keep = idxs[0];
+        for &i in &idxs[1..] {
+            if view.records[i].confidence > view.records[keep].confidence {
+                keep = i;
+            }
+        }
+        for &i in idxs.iter().filter(|&&i| i != keep) {
+            view.records[i].superseded_by = Some(view.records[keep].id.clone());
+            changed_ids.insert(view.records[i].id.clone());
+            superseded += 1;
+        }
+    }
+
+    // Journal is truth: append the follow-up lines, then rebuild the views
+    // from the re-folded journal so the caches can never drift from it.
+    for r in view.records.iter() {
+        if changed_ids.contains(&r.id) {
+            record(journal, r);
+        }
+    }
+    let fresh = MemoryView::fold(&path)?;
+    for layer in [Layer::Project, Layer::Semantic, Layer::Episodic] {
+        let records: Vec<MemoryRecord> = fresh
+            .records
+            .iter()
+            .filter(|r| r.layer == layer)
+            .cloned()
+            .collect();
+        store.write_layer_view(layer, &records)?;
+    }
+    Ok((promoted, superseded))
+}
+
 #[cfg(test)]
 mod memory_tests {
     use super::*;
@@ -666,6 +749,137 @@ mod memory_tests {
         assert_eq!(view.records[1].layer, Layer::Semantic);
         // Provisional records are never live (D4 predicate holds).
         assert!(view.live().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn rec_conf(id: &str, content: &str, confidence: f32, status: Status) -> MemoryRecord {
+        MemoryRecord::new(
+            id,
+            Layer::Project,
+            content,
+            prov("msg-1"),
+            confidence,
+            status,
+        )
+        .expect("valid record")
+    }
+
+    #[test]
+    fn consolidate_promotes_high_confidence_and_leaves_low_provisional() {
+        let dir = temp_dir("consolidate-promote");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let store = MemoryStore::open(&dir);
+        record(
+            &journal,
+            &rec_conf(
+                "mem-hi",
+                "the deploy target is staging",
+                0.8,
+                Status::Provisional,
+            ),
+        );
+        record(
+            &journal,
+            &rec_conf(
+                "mem-lo",
+                "the cache is cold today",
+                0.5,
+                Status::Provisional,
+            ),
+        );
+
+        let (promoted, superseded) = consolidate(&journal, &store).expect("pass");
+        assert_eq!((promoted, superseded), (1, 0));
+
+        let view = MemoryView::fold(&path).expect("fold");
+        assert_eq!(view.live().len(), 1, "only the promoted record is live");
+        assert_eq!(view.records[0].id, "mem-hi");
+        assert_eq!(view.records[0].status, Status::Promoted);
+        assert_eq!(view.records[1].id, "mem-lo");
+        assert_eq!(
+            view.records[1].status,
+            Status::Provisional,
+            "low-confidence stays provisional"
+        );
+        // Layer view was rebuilt from the folded journal.
+        let project = store.read_layer(Layer::Project).expect("read project");
+        assert_eq!(
+            project
+                .iter()
+                .filter(|r| r.status == Status::Promoted)
+                .count(),
+            1,
+            "{project:?}"
+        );
+        drop(journal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn consolidate_supersedes_duplicate_contents_keeping_highest_confidence() {
+        let dir = temp_dir("consolidate-dedup");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let store = MemoryStore::open(&dir);
+        record(
+            &journal,
+            &rec_conf("mem-a", "deploys happen on Tuesday", 0.6, Status::Promoted),
+        );
+        record(
+            &journal,
+            &rec_conf("mem-b", "Deploys happen on Tuesday ", 0.9, Status::Promoted),
+        );
+        record(
+            &journal,
+            &rec_conf("mem-c", "unique fact", 0.9, Status::Promoted),
+        );
+        // Same content in another layer must NOT be treated as a duplicate.
+        record(
+            &journal,
+            &MemoryRecord::new(
+                "mem-d",
+                Layer::Semantic,
+                "deploys happen on Tuesday",
+                prov("msg-2"),
+                0.9,
+                Status::Promoted,
+            )
+            .expect("valid"),
+        );
+
+        let (promoted, superseded) = consolidate(&journal, &store).expect("pass");
+        assert_eq!((promoted, superseded), (0, 1));
+
+        let view = MemoryView::fold(&dir.join("runtime.jsonl")).expect("fold");
+        let live_ids: Vec<&str> = view.live().iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(live_ids, vec!["mem-b", "mem-c", "mem-d"]);
+        drop(journal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn consolidate_caps_promotions_at_one_hundred_per_pass() {
+        let dir = temp_dir("consolidate-cap");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let store = MemoryStore::open(&dir);
+        for i in 0..150 {
+            record(
+                &journal,
+                &rec_conf(
+                    &format!("mem-{i}"),
+                    &format!("fact number {i}"),
+                    0.9,
+                    Status::Provisional,
+                ),
+            );
+        }
+
+        let (promoted, superseded) = consolidate(&journal, &store).expect("pass");
+        assert_eq!((promoted, superseded), (100, 0));
+
+        let view = MemoryView::fold(&dir.join("runtime.jsonl")).expect("fold");
+        assert_eq!(view.live().len(), 100, "cap enforced exactly");
+        drop(journal);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

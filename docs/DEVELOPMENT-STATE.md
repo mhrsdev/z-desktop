@@ -6,6 +6,28 @@
 
 Last updated: 2026-08-23
 
+## Token Cache + ADR-0016 (2026-08-23) — COMPLETE
+
+1. ✅ **tok-003/004/005**: fs_read result cache — static map keyed by
+   ("fs_read", root+NUL+raw-path, fingerprint), 128-entry cap, outputs
+   bound to ≤12k chars; hits re-fingerprint at call time so changed bytes
+   can never serve stale content; only fs_read cached (multi-file
+   invalidation for search/list deferred with a ponytail note).
+2. ✅ **tok-020**: peek_fingerprint added to the registry; unchanged
+   re-reads append "(duplicate read of unchanged file)" so the model sees
+   it is wasting tokens.
+3. ✅ **ADR-0016** (`docs/adr/0016-supervision-evidence.md`): five evidence
+   record types (Build/Tests/Diff/Bench/Regression) sharing one envelope
+   drawn from existing capture points, appended as EvidenceRecorded journal
+   events and folded into an EvidenceView reducer per ADR-0012's
+   journal-is-truth posture.
+
+Verification: full workspace suite green — **345 tests, 0 failed**
+(341 → 345). Ledger: 48 IMPLEMENTED.
+
+Next work continues → sup-002..004 capture hooks wiring evidence into
+sandbox/test-runner/write paths per ADR-0016.
+
 ## Orchestrator Skeleton + ADR-0015 (2026-08-23) — COMPLETE
 
 1. ✅ **orch-002**: TasksView::ready_set — Pending tasks whose deps are all

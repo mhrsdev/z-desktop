@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 42 |
+| IMPLEMENTED | 46 |
 | PARTIAL | 1 |
-| PLANNED | 680 |
+| PLANNED | 676 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -621,13 +621,13 @@
 ### [PLANNED] tok-002 — Prefix change impact documentation
 - depends: tok-001
 
-### [PLANNED] tok-003 — Tool-result cache structure (fingerprint keys)
+### [IMPLEMENTED] tok-003 — Tool-result cache structure (fingerprint keys)
 - depends: —
 
-### [PLANNED] tok-004 — Cache hit path end-to-end test
+### [IMPLEMENTED] tok-004 — Cache hit path end-to-end test
 - depends: tok-003
 
-### [PLANNED] tok-005 — Cache invalidation on input fingerprint mismatch
+### [IMPLEMENTED] tok-005 — Cache invalidation on input fingerprint mismatch
 - depends: tok-003
 
 ### [PLANNED] tok-006 — Lazy tool advertisement (categories)
@@ -672,7 +672,7 @@
 ### [PLANNED] tok-019 — Token-per-task accounting in orchestrator
 - depends: tok-012, orch-004
 
-### [PLANNED] tok-020 — Redundant-read detection (same file twice)
+### [IMPLEMENTED] tok-020 — Redundant-read detection (same file twice)
 - depends: tok-003
 
 ### [PLANNED] tok-021 — Repo-map cache keyed by input fingerprints

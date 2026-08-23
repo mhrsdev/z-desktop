@@ -30,6 +30,24 @@ fn bound(text: String) -> String {
 …[output truncated]")
 }
 
+// tok-003: process-wide tool-output cache. Cache ONLY fs_read — fs_search and
+// fs_list results depend on many files and stay uncached until per-directory
+// invalidation exists. Key is (tool, args-key, fingerprint-of-current-bytes):
+// because the fingerprint is recomputed on every call, a changed file lands on
+// a different key (tok-005's invalidation is structural — no watcher, no
+// delete logic, no stale serve possible).
+const TOOL_CACHE_CAP: usize = 128;
+
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
+type ToolCacheKey = (String, String, u64); // (tool, root+raw-path arg, fingerprint)
+
+fn tool_cache() -> &'static Mutex<HashMap<ToolCacheKey, String>> {
+    static CACHE: OnceLock<Mutex<HashMap<ToolCacheKey, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// A resolved tool execution request.
 pub struct ToolInvocation<'a> {
     pub name: &'a str,
@@ -286,23 +304,58 @@ pub fn execute(inv: ToolInvocation) -> ToolOutput {
 
 fn fs_read(inv: &ToolInvocation) -> ToolOutput {
     let result: Result<String, String> = (|| {
-        let path = scoped(inv.project_root, fmt_arg(&inv.args, "path").as_str())?;
+        let raw = fmt_arg(&inv.args, "path");
+        let path = scoped(inv.project_root, raw.as_str())?;
         let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
         if meta.len() > 512 * 1024 {
             return Err("file larger than 512 KiB; read it in parts via terminal_exec".into());
         }
-        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        // edit-002: remember what this thread last saw, keyed by the raw
-        // requested path so fs_write's later lookup resolves identically.
-        if !inv.thread_id.is_empty() {
-            if let Ok(fp) = crate::fingerprint::file_fingerprint(&path) {
-                crate::fingerprint::record_fingerprint(inv.thread_id, &fmt_arg(&inv.args, "path"), fp);
+        // tok-003/005: the fingerprint of the CURRENT bytes is recomputed on
+        // every call and is part of the cache key — a changed file simply
+        // lands on a different key, so a stale serve is structurally
+        // impossible (the fingerprint check IS the invalidation).
+        let fp = crate::fingerprint::file_fingerprint(&path)?;
+        // tok-020: the registry already holding this thread's identical
+        // fingerprint means the model has seen exactly these bytes before.
+        let duplicate = !inv.thread_id.is_empty()
+            && crate::fingerprint::peek_fingerprint(inv.thread_id, &raw) == Some(fp);
+        let key = (
+            "fs_read".to_string(),
+            format!("{}\u{0}{}", inv.project_root.display(), raw),
+            fp,
+        );
+        // Bind first: a match scrutinee's temporaries (the lock guard here)
+        // would otherwise live to the end of the match and deadlock the
+        // miss path's re-lock below.
+        let cached = tool_cache().lock().unwrap().get(&key).cloned();
+        let mut text = match cached {
+            Some(cached) => format!("[cached] {cached}"),
+            None => {
+                let content =
+                    bound(std::fs::read_to_string(&path).map_err(|e| e.to_string())?);
+                let mut cache = tool_cache().lock().unwrap();
+                // ponytail: clear-all on overflow instead of oldest-entry
+                // eviction — simplest correct cap; upgrade if churn ever
+                // measurably hurts hit rate at personal scale.
+                if cache.len() >= TOOL_CACHE_CAP && !cache.contains_key(&key) {
+                    cache.clear();
+                }
+                cache.insert(key, content.clone());
+                content
             }
+        };
+        // edit-002 recording preserved verbatim on both paths so the
+        // write-refusal pipeline is untouched.
+        if !inv.thread_id.is_empty() {
+            crate::fingerprint::record_fingerprint(inv.thread_id, &raw, fp);
         }
-        Ok(content)
+        if duplicate {
+            text.push_str(" (duplicate read of unchanged file)");
+        }
+        Ok(text)
     })();
     match result {
-        Ok(content) => ToolOutput { ok: true, text: bound(content) },
+        Ok(content) => ToolOutput { ok: true, text: content },
         Err(e) => ToolOutput { ok: false, text: format!("fs_read failed: {e}") },
     }
 }
@@ -1277,5 +1330,93 @@ mod tests {
         });
         assert!(out.ok, "{}", out.text);
         assert!(out.text.lines().count() <= 100);
+    }
+
+    // ---- tok-003/004/005/020: fs_read result cache & redundant-read marker ----
+
+    /// The tool cache is process-global; serialize the cache-behaviour tests
+    /// so cargo's parallel test threads cannot evict each other's entries.
+    fn cache_test_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    fn read_inv<'a>(root: &'a PathBuf, path: &str, thread: &'a str) -> ToolInvocation<'a> {
+        ToolInvocation {
+            name: "fs_read",
+            args: json!({ "path": path }),
+            project_root: root,
+            thread_id: thread,
+        }
+    }
+
+    #[test]
+    fn second_identical_fs_read_is_served_from_cache() {
+        let _g = cache_test_lock().lock().unwrap();
+        let root = temp_root("tok-hit");
+        std::fs::write(root.join("c.txt"), "cache me").unwrap();
+
+        let first = execute(read_inv(&root, "c.txt", ""));
+        assert_eq!(first.text, "cache me");
+        // tok-004 hit path: same path + unchanged fingerprint => served with
+        // the visible [cached] prefix instead of a fresh disk read.
+        let second = execute(read_inv(&root, "c.txt", ""));
+        assert!(second.ok);
+        assert_eq!(second.text, "[cached] cache me", "{}", second.text);
+    }
+
+    #[test]
+    fn changed_content_misses_the_cache_and_refreshes_it() {
+        let _g = cache_test_lock().lock().unwrap();
+        let root = temp_root("tok-miss");
+        std::fs::write(root.join("m.txt"), "v1").unwrap();
+
+        assert_eq!(execute(read_inv(&root, "m.txt", "t-tok-miss")).text, "v1");
+        std::fs::write(root.join("m.txt"), "v2").unwrap();
+
+        // tok-005: changed bytes land on a different key — fresh content is
+        // served (no stale hit) and the duplicate marker must NOT appear
+        // because the thread has never seen these bytes.
+        let second = execute(read_inv(&root, "m.txt", "t-tok-miss"));
+        assert_eq!(second.text, "v2", "{}", second.text);
+        assert!(!second.text.contains("[cached]"));
+        assert!(!second.text.contains("duplicate read"));
+        // The cache now serves the new version.
+        assert_eq!(execute(read_inv(&root, "m.txt", "")).text, "[cached] v2");
+    }
+
+    #[test]
+    fn duplicate_unchanged_reread_is_marked_and_coexists_with_cached() {
+        let _g = cache_test_lock().lock().unwrap();
+        let root = temp_root("tok-dup");
+        std::fs::write(root.join("d.txt"), "body").unwrap();
+
+        let first = execute(read_inv(&root, "d.txt", "t-tok-dup"));
+        assert_eq!(first.text, "body", "first sight: no marker");
+        // tok-020: same thread re-reads unchanged bytes => observable marker,
+        // and it coexists with the tok-004 [cached] prefix.
+        let second = execute(read_inv(&root, "d.txt", "t-tok-dup"));
+        assert!(second.text.starts_with("[cached] body"), "{}", second.text);
+        assert!(second.text.contains("(duplicate read of unchanged file)"));
+        // A different thread reading the same file gets the hit, no marker.
+        let other = execute(read_inv(&root, "d.txt", "t-tok-other"));
+        assert_eq!(other.text, "[cached] body");
+    }
+
+    #[test]
+    fn cache_cap_churn_evicts_old_entries_without_panicking() {
+        let _g = cache_test_lock().lock().unwrap();
+        let root = temp_root("tok-cap");
+        let n = TOOL_CACHE_CAP + 10;
+        for i in 0..n {
+            std::fs::write(root.join(format!("f{i}.txt")), format!("content-{i}")).unwrap();
+        }
+        for i in 0..n {
+            let out = execute(read_inv(&root, &format!("f{i}.txt"), ""));
+            assert_eq!(out.text, format!("content-{i}"), "iteration {i}: first pass must miss");
+        }
+        // The early entry did not survive the cap churn: it is re-read fresh.
+        let again = execute(read_inv(&root, "f0.txt", ""));
+        assert_eq!(again.text, "content-0", "{}", again.text);
     }
 }

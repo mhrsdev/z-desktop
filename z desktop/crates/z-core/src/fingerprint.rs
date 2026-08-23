@@ -67,6 +67,12 @@ pub fn take_fingerprint(thread_id: &str, path: &str) -> Option<u64> {
     registry().lock().unwrap().remove(&(thread_id.into(), path.into()))
 }
 
+/// Peek (without removing) the recorded fingerprint for this thread+path.
+/// tok-020 uses this to notice redundant unchanged re-reads.
+pub fn peek_fingerprint(thread_id: &str, path: &str) -> Option<u64> {
+    registry().lock().unwrap().get(&(thread_id.into(), path.into())).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

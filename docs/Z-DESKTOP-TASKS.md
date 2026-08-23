@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 71 |
+| IMPLEMENTED | 72 |
 | PARTIAL | 2 |
-| PLANNED | 650 |
+| PLANNED | 649 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -530,7 +530,7 @@
 ### [PLANNED] orch-023 — Parent-evaluated result contract tests
 - depends: orch-010
 
-### [PLANNED] orch-024 — Orchestrator crash recovery (resume ready tasks)
+### [IMPLEMENTED] orch-024 — Orchestrator crash recovery (resume ready tasks)
 - depends: orch-003, jour-005
 
 ### [PLANNED] orch-025 — Best-of-N budget cap enforcement test

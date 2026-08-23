@@ -104,8 +104,8 @@ pub struct TasksView {
     pub tasks: HashMap<String, TaskRecord>,
 }
 
-/// Segment name used by [`TaskStore`].
-const TASKS_SEGMENT: &str = "tasks";
+/// Segment name used by [`TaskStore`] and orch-024 recovery (`runtime.rs`).
+pub(crate) const TASKS_SEGMENT: &str = "tasks";
 
 impl TasksView {
     /// Folds `task_state_changed` events into current task states. A corrupt

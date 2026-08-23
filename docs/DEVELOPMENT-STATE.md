@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-23
 
+## orch-024 Crash Recovery — 2026-08-23 COMPLETE
+
+1. ✅ **orch-024**: recover_orphans(tasks_dir) folds the task journal;
+   orphaned Running tasks transition to Failed ("orphaned by restart"),
+   pending-ready count returned for external re-submission (bodies are
+   closures and die with the process — honest recovery). Wired into
+   Orchestrator::spawn best-effort; missing journal = (0,0).
+
+Verification: full workspace suite green — **409 tests, 0 failed**
+(406 → 409). Ledger: 74 IMPLEMENTED.
+
+Next work continues → sup-009..015 detectors, mem-006 consolidation, or
+prov-005 capability registry.
+
 ## sup-008 Verdict on TurnFinished — 2026-08-23 COMPLETE
 
 1. ✅ **sup-008**: z-protocol gains SupervisionVerdictInfo; TurnFinished

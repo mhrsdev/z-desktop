@@ -5,7 +5,7 @@
 //! responsive to cancellation and approvals while a turn streams.
 
 use crate::journal::{Journal, JournalKind, Record, RecordDraft};
-use crate::reducer::{TaskStatus, TaskStore};
+use crate::reducer::{TaskStatus, TaskStore, TasksView, TASKS_SEGMENT};
 use crate::{provider, repo::RepoIndex, tools};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -2752,6 +2752,15 @@ pub struct Orchestrator {
 impl Orchestrator {
     /// Spawns the orchestrator thread over `<tasks_dir>/tasks.jsonl`.
     pub fn spawn(tasks_dir: PathBuf) -> Self {
+        // orch-024 (ADR-0012): recover before admitting new work. Best-effort —
+        // recovery failure must never prevent startup (same policy as journaling).
+        match recover_orphans(&tasks_dir) {
+            Ok((failed, pending_ready)) => log::info!(
+                "orchestrator: crash recovery: {failed} orphaned task(s) failed, \
+                 {pending_ready} pending-ready task(s) await re-submission"
+            ),
+            Err(e) => log::warn!("orchestrator: crash recovery skipped: {e}"),
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
             .name("z-orchestrator".into())
@@ -2873,6 +2882,41 @@ fn orchestrator_loop(tasks_dir: PathBuf, inbox: Receiver<OrchCommand>) {
     for (_, handle) in running.drain() {
         let _ = handle.join();
     }
+}
+
+/// orch-024 crash recovery (ADR-0012): after a restart, task bodies are gone —
+/// closures die with the process — so a folded Running task can never complete
+/// and cannot be re-run here. Lazy-honest recovery: mark every orphaned Running
+/// task Failed ("orphaned by restart") and report how many Pending tasks are
+/// ready (deps all Done) so an external caller — app startup or a test — can
+/// re-submit them with fresh bodies. Returns `(failed, pending_ready)`.
+pub fn recover_orphans(tasks_dir: &Path) -> Result<(usize, usize), String> {
+    let path = tasks_dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+    if !path.exists() {
+        return Ok((0, 0)); // fresh workspace: nothing to recover
+    }
+    let view = TasksView::fold(&path)?;
+    let orphaned: Vec<String> = view
+        .tasks
+        .values()
+        .filter(|t| t.status == TaskStatus::Running)
+        .map(|t| t.id.clone())
+        .collect();
+    let mut failed = 0;
+    for id in &orphaned {
+        log::warn!("orchestrator: task {id} orphaned by restart; failing");
+        match TaskStore::transition(tasks_dir, id, TaskStatus::Failed) {
+            Ok(()) => failed += 1,
+            Err(e) => log::warn!("orchestrator: could not fail orphan {id}: {e}"),
+        }
+    }
+    let pending_ready = view.ready_set();
+    if !pending_ready.is_empty() {
+        log::info!(
+            "orchestrator: pending-ready task(s) need re-submission: {pending_ready:?}"
+        );
+    }
+    Ok((failed, pending_ready.len()))
 }
 
 /// orch-004 backstop sweep (ADR-0012 §5c/§6): on the 1s tick, fail any RUNNING
@@ -3091,6 +3135,54 @@ mod orchestrator_tests {
         assert_eq!(ORCH_MAX_CONCURRENT, 2, "ADR-0012 §4 global default");
         assert_eq!(ORCH_CEILING, 4, "ADR-0012 §4 hard ceiling");
         assert!(ORCH_MAX_CONCURRENT <= ORCH_CEILING);
+    }
+
+    // orch-024 ---------------------------------------------------------------
+
+    #[test]
+    fn recover_orphans_fails_running_and_counts_pending_ready() {
+        let dir = temp_tasks_dir("recover");
+        TaskStore::create(&dir, "orphan").expect("create orphan");
+        TaskStore::transition(&dir, "orphan", TaskStatus::Running).expect("orphan running");
+        TaskStore::create(&dir, "ready").expect("create ready");
+        TaskStore::create(&dir, "finished").expect("create finished");
+        TaskStore::transition(&dir, "finished", TaskStatus::Done).expect("finished done");
+
+        assert_eq!(
+            recover_orphans(&dir).expect("recover"),
+            (1, 1),
+            "one Running orphan failed; one dep-less Pending counted ready"
+        );
+
+        let view = TasksView::fold(&tasks_path(&dir)).expect("refold");
+        assert_eq!(view.tasks["orphan"].status, TaskStatus::Failed, "orphan failed");
+        assert_eq!(view.tasks["ready"].status, TaskStatus::Pending);
+        assert_eq!(view.tasks["finished"].status, TaskStatus::Done, "Done untouched");
+    }
+
+    #[test]
+    fn recover_orphans_on_empty_journal_is_noop() {
+        let dir = temp_tasks_dir("recover-empty");
+        std::fs::write(tasks_path(&dir), "").expect("empty tasks journal");
+        assert_eq!(recover_orphans(&dir).expect("recover"), (0, 0));
+    }
+
+    #[test]
+    fn recover_orphans_does_not_count_blocked_pending_nor_touch_done() {
+        let dir = temp_tasks_dir("recover-blocked");
+        // Unknown dep id blocks forever (orch-002 safe default).
+        TaskStore::create_with_deps(&dir, "blocked", &["ghost".into()]).expect("create blocked");
+        TaskStore::create(&dir, "finished").expect("create finished");
+        TaskStore::transition(&dir, "finished", TaskStatus::Done).expect("finished done");
+
+        assert_eq!(
+            recover_orphans(&dir).expect("recover"),
+            (0, 0),
+            "blocked Pending is in the fold but not ready"
+        );
+        let view = TasksView::fold(&tasks_path(&dir)).expect("refold");
+        assert_eq!(view.tasks["blocked"].status, TaskStatus::Pending);
+        assert_eq!(view.tasks["finished"].status, TaskStatus::Done);
     }
 }
 

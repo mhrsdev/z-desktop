@@ -189,7 +189,7 @@ DOMAINS = [
         ("021", "Spawn policy settings (dev mode)", ["005", "set-002"], "PLANNED"),
         ("022", "Reference-passed shared context (no duplication)", ["005"], "PLANNED"),
         ("023", "Parent-evaluated result contract tests", ["010"], "PLANNED"),
-        ("024", "Orchestrator crash recovery (resume ready tasks)", ["003", "jour-005"], "PLANNED"),
+        ("024", "Orchestrator crash recovery (resume ready tasks)", ["003", "jour-005"], "IMPLEMENTED"),
         ("025", "Best-of-N budget cap enforcement test", ["013"], "PLANNED"),
     ]),
     ("sup", "Supervision & Evidence", [

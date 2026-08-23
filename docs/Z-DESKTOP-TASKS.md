@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 69 |
+| IMPLEMENTED | 70 |
 | PARTIAL | 2 |
-| PLANNED | 652 |
+| PLANNED | 651 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -556,7 +556,7 @@
 ### [IMPLEMENTED] sup-006 — Claim-to-evidence linker
 - depends: sup-005, sup-002
 
-### [PLANNED] sup-007 — Supervision verdict type (pass/fail/needs-review)
+### [IMPLEMENTED] sup-007 — Supervision verdict type (pass/fail/needs-review)
 - depends: sup-006
 
 ### [PLANNED] sup-008 — Verdict attached to TurnFinished

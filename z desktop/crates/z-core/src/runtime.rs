@@ -673,6 +673,9 @@ fn run_turn(
     // breaker. Turn-local lifetime — no Shared field, no reset logic.
     let mut call_counts: HashMap<u64, usize> = HashMap::new();
     let doom_threshold = settings.doom_threshold;
+    // sup-007: did this turn execute ANY tool call? A final text claiming
+    // success after real execution should have left ok evidence behind.
+    let mut turn_had_tool_call = false;
 
     for round in 0..max_tool_rounds {
         if is_cancelled(&shared, &thread_id) {
@@ -746,11 +749,12 @@ fn run_turn(
         }
 
         if outcome.tool_calls.is_empty() {
-            let _ = event_tx.send(Event::TextDone { thread_id: thread_id.clone(), turn_id: turn_id.clone() });
-            // sup-005/006 (ADR-0016): success claims in the final text are
-            // linked to same-turn ok evidence — observability only, never a
-            // turn failure (verdict gating is sup-007+). Same-turn window:
-            // an earlier turn's green build does not whitewash this claim.
+            // sup-005/006/007 (ADR-0016): success claims in the final text are
+            // linked to same-turn ok evidence. Same-turn window: an earlier
+            // turn's green build does not whitewash this claim. sup-007 gates:
+            // a fully-unlinked claim set with zero ok same-turn evidence fails
+            // the turn when evidence capture was demonstrably operational.
+            let mut blocked_reason: Option<String> = None;
             if !outcome.text.trim().is_empty() && !crate::evidence::extract_claims(&outcome.text).is_empty() {
                 let claims = crate::evidence::extract_claims(&outcome.text);
                 match crate::evidence::EvidenceView::fold(&data_dir.join("journal").join("runtime.jsonl")) {
@@ -761,7 +765,20 @@ fn run_turn(
                             .filter(|e| e.turn_id == turn_id)
                             .collect();
                         let report = crate::evidence::link_claims(&claims, &turn_evidence);
-                        if !report.unlinked.is_empty() {
+                        let verdict = crate::evidence::evaluate_claims(
+                            &report,
+                            turn_evidence.iter().filter(|e| e.ok).count(),
+                        );
+                        // sup-007 gate: fail ONLY when the pipeline was fully
+                        // operational — journal handle present, fold succeeded,
+                        // and this turn ran at least one tool call (so ok
+                        // evidence SHOULD have been captured) — yet every claim
+                        // is unlinked with zero ok evidence of any kind. Any
+                        // ambiguity (capture path broken, tool-less turn, some
+                        // claim linked or some ok evidence) stays warn-only.
+                        if verdict.blocked && journal.is_some() && turn_had_tool_call {
+                            blocked_reason = verdict.reason;
+                        } else if !report.unlinked.is_empty() {
                             log::warn!(
                                 "supervision: {}/{} claim(s) unlinked in turn {turn_id} (kinds: {:?})",
                                 report.unlinked.len(),
@@ -773,6 +790,15 @@ fn run_turn(
                     Err(err) => log::warn!("supervision: evidence fold failed: {err}"),
                 }
             }
+            if let Some(reason) = blocked_reason {
+                // §8.4: supervision may fail a turn but never edits its output
+                // — persist the claimed text verbatim, then fail via the
+                // normal TurnFinished(false) path (no TextDone).
+                persist(&thread);
+                finish(false, Some(reason));
+                return;
+            }
+            let _ = event_tx.send(Event::TextDone { thread_id: thread_id.clone(), turn_id: turn_id.clone() });
             // mem-005 (ADR-0014 D5): best-effort candidate extraction from the
             // final text — provisional-only records, never a turn failure.
             let candidates = crate::memory::extract_candidates(&outcome.text);
@@ -799,6 +825,7 @@ fn run_turn(
         }
 
         // Assistant message carrying its tool calls, then results.
+        turn_had_tool_call = true;
         let stored_calls: Vec<StoredToolCall> = outcome            .tool_calls
             .iter()
             .map(|c| StoredToolCall {

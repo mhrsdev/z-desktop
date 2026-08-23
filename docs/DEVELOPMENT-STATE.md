@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-23
 
+## sup-007 Supervision Verdict — 2026-08-23 COMPLETE
+
+1. ✅ **sup-007**: SupervisionVerdict + evaluate_claims — blocks only when
+   claims exist, ALL are unlinked, zero ok evidence in the turn, journal
+   folded fine, and the turn had tool calls (evidence should have existed).
+   Otherwise warn-only. run_turn converts a blocked verdict into
+   finish(false) with the reason.
+
+Verification: full workspace suite green — **403 tests, 0 failed**
+(402 → 403). Ledger: 72 IMPLEMENTED.
+
+Next work continues → sup-008 verdict on TurnFinished event, mem-006
+consolidation, or prov-005 provider capability registry.
+
 ## ctx-007 Stale Rehydration — 2026-08-23 COMPLETE
 
 1. ✅ **ctx-007**: fingerprint.rs gains stale_reads(thread_id, root) —

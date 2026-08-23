@@ -173,6 +173,38 @@ pub fn link_claims(claims: &[ClaimSpan], evidence: &[Evidence]) -> LinkReport {
     report
 }
 
+/// sup-007 verdict (ADR-0016): unlinked claims with ZERO ok evidence of any
+/// kind this turn are the fake-completion signature. Ambiguous cases (some
+/// claim linked, or some ok evidence exists) pass — strictness comes later.
+#[derive(Debug, PartialEq)]
+pub struct SupervisionVerdict {
+    pub blocked: bool,
+    pub reason: Option<String>,
+}
+
+pub fn evaluate_claims(report: &LinkReport, evidence_count_ok: usize) -> SupervisionVerdict {
+    if report.unlinked.is_empty() || report.linked > 0 || evidence_count_ok > 0 {
+        return SupervisionVerdict {
+            blocked: false,
+            reason: None,
+        };
+    }
+    let mut kinds: Vec<String> = Vec::new();
+    for claim in &report.unlinked {
+        let k = format!("{:?}", claim.kind);
+        if !kinds.contains(&k) {
+            kinds.push(k);
+        }
+    }
+    SupervisionVerdict {
+        blocked: true,
+        reason: Some(format!(
+            "claimed {} success without recorded evidence",
+            kinds.join("/")
+        )),
+    }
+}
+
 /// Best-effort append of one evidence record. Journal failures are warned
 /// and dropped (same policy as every other lifecycle append).
 pub fn record(journal: &Mutex<Journal>, e: &Evidence) {
@@ -372,6 +404,41 @@ mod evidence_tests {
         let report = link_claims(&claims[..2], &ok_evidence);
         assert_eq!(report.linked, 2);
         assert!(report.unlinked.is_empty());
+    }
+
+    #[test]
+    fn evaluate_claims_gates_only_total_unlink_with_zero_ok_evidence() {
+        let claims = vec![
+            ClaimSpan {
+                text: "tests pass".into(),
+                kind: EvidenceKind::Tests,
+            },
+            ClaimSpan {
+                text: "build succeeds".into(),
+                kind: EvidenceKind::Build,
+            },
+        ];
+        // No claims at all -> pass.
+        let empty = link_claims(&[], &[]);
+        assert!(!evaluate_claims(&empty, 0).blocked);
+
+        // Some claim linked -> pass (even with zero ok evidence counted).
+        let linked = link_claims(&claims[..1], &[Evidence::tests("t", "u1", 3, 0, "cargo test")]);
+        assert!(!evaluate_claims(&linked, 0).blocked);
+
+        // Everything unlinked, zero ok evidence of any kind -> blocked, with
+        // a reason naming every unlinked claim kind exactly once.
+        let unlinked = link_claims(&claims, &[Evidence::build("t", "u1", Some(1), "make")]);
+        let verdict = evaluate_claims(&unlinked, 0);
+        assert!(verdict.blocked);
+        let reason = verdict.reason.expect("blocked carries a reason");
+        assert!(reason.contains("Tests"), "{reason}");
+        assert!(reason.contains("Build"), "{reason}");
+        assert!(reason.contains("without recorded evidence"), "{reason}");
+        assert_eq!(reason.matches("Tests").count(), 1, "{reason}");
+
+        // Unlinked but SOME ok evidence exists this turn -> ambiguous, passes.
+        assert!(!evaluate_claims(&unlinked, 1).blocked);
     }
 
     #[test]

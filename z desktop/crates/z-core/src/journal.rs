@@ -42,6 +42,8 @@ pub enum JournalKind {
     TurnFinished,
     /// An assistant/user message was persisted to its thread snapshot.
     MessagePersisted,
+    /// A task record changed status (orch-001; folded by the TasksView reducer).
+    TaskStateChanged,
     /// Escape hatch for kinds this build does not know yet.
     Other(String),
 }
@@ -53,6 +55,7 @@ impl JournalKind {
             JournalKind::TurnStarted => "turn_started",
             JournalKind::TurnFinished => "turn_finished",
             JournalKind::MessagePersisted => "message_persisted",
+            JournalKind::TaskStateChanged => "task_state_changed",
             JournalKind::Other(s) => s.as_str(),
         }
     }
@@ -63,6 +66,7 @@ impl JournalKind {
             "turn_started" => JournalKind::TurnStarted,
             "turn_finished" => JournalKind::TurnFinished,
             "message_persisted" => JournalKind::MessagePersisted,
+            "task_state_changed" => JournalKind::TaskStateChanged,
             _ => JournalKind::Other(s),
         }
     }
@@ -331,9 +335,9 @@ mod journal_tests {
                 json!({"ok": true, "rounds": 3}),
             ),
             RecordDraft::new(
-                JournalKind::Other("task_state_changed".into()),
+                JournalKind::TaskStateChanged,
                 None,
-                json!({"task": "t-9", "from": "running", "to": "done"}),
+                json!({"id": "t-9", "status": "done"}),
             ),
         ]
     }

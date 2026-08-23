@@ -6,6 +6,31 @@
 
 Last updated: 2026-08-23
 
+## Reducer API + Task Store + ADR-0014 (2026-08-23) — COMPLETE
+
+1. ✅ **jour-006**: `z-core/src/reducer.rs` — free `fold(path, init, f)`
+   replaying a journal in order (no Reducer trait; two concrete views are
+   the smaller design).
+2. ✅ **jour-007**: ThreadsView — per-thread summary (title from first
+   message, message count, last kind) folded from MessagePersisted/
+   TurnStarted records.
+3. ✅ **jour-008 + orch-001**: TasksView over additive JournalKind::
+   TaskStateChanged records; TaskStore appends create/transition events
+   with seq continuity; unknown kinds (Other) never break folds.
+
+Verification: full workspace suite green — **337 tests, 0 failed**
+(332 → 337). Ledger: 42 IMPLEMENTED.
+
+Also this session:
+- ✅ **ADR-0014** (`docs/adr/0014-memory-architecture.md`): memory records
+  {id, layer, content, provenance, confidence, ttl, superseded_by} in
+  JSONL layer stores under data/memory/ (journal pattern reused),
+  provenance enforced at write time, linear supersede chains with
+  retrieval picking live records; embeddings stay RESEARCH.
+
+Next work continues → mem-006..009 on the ADR-0014 stores, or orch-002
+ready-set computation on TasksView.
+
 ## Rollback + Write Grants + ADR-0013 (2026-08-23) — COMPLETE
 
 1. ✅ **edit-014**: checked_write stages the target's current bytes to a

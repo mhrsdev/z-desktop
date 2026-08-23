@@ -8,6 +8,7 @@
 pub mod journal;
 pub mod provider;
 pub mod redact;
+pub mod reducer;
 pub mod sandbox;
 pub mod tokens;
 pub mod repo;

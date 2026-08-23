@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 36 |
+| IMPLEMENTED | 40 |
 | PARTIAL | 1 |
-| PLANNED | 686 |
+| PLANNED | 682 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -170,13 +170,13 @@
 ### [IMPLEMENTED] jour-005 — Replay engine core (ordered segment read)
 - depends: jour-001
 
-### [PLANNED] jour-006 — Reducer registration API
+### [IMPLEMENTED] jour-006 — Reducer registration API
 - depends: jour-005
 
-### [PLANNED] jour-007 — Threads view reducer
+### [IMPLEMENTED] jour-007 — Threads view reducer
 - depends: jour-006
 
-### [PLANNED] jour-008 — Task view reducer
+### [IMPLEMENTED] jour-008 — Task view reducer
 - depends: jour-006
 
 ### [PLANNED] jour-009 — Usage stats reducer
@@ -461,7 +461,7 @@
 
 ## Orchestration & Sub-Agents (`orch-*`)
 
-### [PLANNED] orch-001 — Task record store (create/transition/query)
+### [IMPLEMENTED] orch-001 — Task record store (create/transition/query)
 - depends: jour-008
 
 ### [PLANNED] orch-002 — Task dependency resolution (ready-set computation)

@@ -6,6 +6,42 @@
 
 Last updated: 2026-08-23
 
+## Journal Slice + ADR-0008 (2026-08-23) — COMPLETE
+
+Vertical slice "Exact Next Tasks #2" (JSONL task journal) shipped and verified:
+
+1. ✅ **jour-001**: `z-core/src/journal.rs` — `Record { seq, ts_ms, kind,
+   thread_id, payload }`, `JournalKind` enum (snake_case kinds + `Other(String)`
+   escape hatch so additive evolution never breaks replay), `Journal::open`.
+   Verified empirically that pinned serde_json 1.0.151 round-trips u128.
+2. ✅ **jour-002**: O_APPEND writer (`OpenOptions::append(true)`); flush per
+   record; `sync_all()` every N records (configurable, default 32) + explicit
+   `flush_and_sync()`; crash window bounded by N; `records_since_sync`
+   observable; `open_resuming(dir, name, last_seq)` for reopen continuity.
+3. ✅ **jour-005**: `Journal::replay(path)` — ordered line parse, empty-line
+   skip, malformed line fails loud with line number (repair = jour-011 later);
+   `first_seq_gap(records)` helper ready for jour-010.
+
+Verification: full workspace suite green — **298 tests, 0 failed**
+(288 → 298; z-core now 50 with 10 journal tests incl. 500-record burst
+round-trip and fsync-policy observability). No new dependencies.
+
+Also this session:
+- ✅ **edit-025** (ADR): `docs/adr/0008-git-access.md` — git access via a
+  single internal facade over the user's installed git CLI: direct argv
+  (never shell strings), one serialized worker thread (avoids index.lock
+  contention), machine-readable output only (`--porcelain=v2 --branch -z`,
+  `-z` numstat/raw, `%x00` log format), `GIT_OPTIONAL_LOCKS=0` for reads,
+  approved writes run without identity overrides (they are the user's
+  writes), version gate ≥2.20 at project open. Rejected: git2-rs now
+  (C dep chain + libssh2 CVE-2026-5917 CVSS 9.6 in ssh-backend builds),
+  gix now (maturity revisit trigger). Unblocks edit-026..028, orch-007..009.
+- Ledger statuses updated through `tools/gen_tasks.py`: 13 IMPLEMENTED.
+
+Next work continues per "Exact Next Tasks" below → item 3: wire journal into
+runtime lifecycle (command_received/turn_started/turn_finished/message_
+persisted records — jour-024/029 family), then idx-001 index actor.
+
 ## Steering Slice (2026-08-23) — COMPLETE
 
 Vertical slice "Exact Next Tasks #1" (steering queue) shipped and verified:

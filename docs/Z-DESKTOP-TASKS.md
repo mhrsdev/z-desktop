@@ -8,11 +8,11 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 7 |
+| IMPLEMENTED | 11 |
 | PARTIAL | 1 |
-| PLANNED | 714 |
+| PLANNED | 711 |
 | EXPERIMENTAL | 0 |
-| RESEARCH | 15 |
+| RESEARCH | 14 |
 
 ---
 
@@ -155,10 +155,10 @@
 
 ## Journal & Durable Execution (`jour-*`)
 
-### [PLANNED] jour-001 — Journal record schema + writer skeleton
+### [IMPLEMENTED] jour-001 — Journal record schema + writer skeleton
 - depends: —
 
-### [PLANNED] jour-002 — O_APPEND append + fsync policy (every N records)
+### [IMPLEMENTED] jour-002 — O_APPEND append + fsync policy (every N records)
 - depends: jour-001
 
 ### [PLANNED] jour-003 — Segment rotation at 16 MiB + CURRENT pointer
@@ -167,7 +167,7 @@
 ### [PLANNED] jour-004 — Segment checksum trailer (fnv1a64)
 - depends: jour-003
 
-### [PLANNED] jour-005 — Replay engine core (ordered segment read)
+### [IMPLEMENTED] jour-005 — Replay engine core (ordered segment read)
 - depends: jour-001
 
 ### [PLANNED] jour-006 — Reducer registration API
@@ -441,7 +441,7 @@
 ### [PLANNED] edit-024 — git_log read tool
 - depends: edit-022
 
-### [RESEARCH] edit-025 — git library vs shell-out decision ADR
+### [IMPLEMENTED] edit-025 — git library vs shell-out decision ADR
 - depends: —
 
 ### [PLANNED] edit-026 — git_add/git_commit write tools (approved)

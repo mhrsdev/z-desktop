@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-23
 
+## sup-008 Verdict on TurnFinished — 2026-08-23 COMPLETE
+
+1. ✅ **sup-008**: z-protocol gains SupervisionVerdictInfo; TurnFinished
+   carries verdict: Option<...> with #[serde(default)] (legacy payloads
+   deserialize to None — tested). run_turn stores the last evaluation in
+   turn-local state and the shared finish closure attaches it on every
+   exit path; turns that never evaluate keep None.
+
+Verification: full workspace suite green — **406 tests, 0 failed**
+(403 → 406). Ledger: 73 IMPLEMENTED.
+
+Next work continues → prov-005 capability registry, mem-006 consolidation,
+or ui-040 evidence badges.
+
 ## sup-007 Supervision Verdict — 2026-08-23 COMPLETE
 
 1. ✅ **sup-007**: SupervisionVerdict + evaluate_claims — blocks only when

@@ -96,6 +96,15 @@ pub enum ProviderKind {
     Anthropic,
 }
 
+/// sup-008 (ADR-0016): supervision verdict summary riding on
+/// [`Event::TurnFinished`]. Mirrors z-core's `SupervisionVerdict` without a
+/// cross-crate type dependency.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupervisionVerdictInfo {
+    pub blocked: bool,
+    pub reason: Option<String>,
+}
+
 /// An event from the Agent Runtime to the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -120,7 +129,17 @@ pub enum Event {
     },
     /// A tool call needs explicit approval before it runs.
     ApprovalRequested { thread_id: Id, call_id: Id, tool: String, detail: String, risk: Risk },
-    TurnFinished { thread_id: Id, turn_id: Id, ok: bool, error: Option<String> },
+    TurnFinished {
+        thread_id: Id,
+        turn_id: Id,
+        ok: bool,
+        error: Option<String>,
+        /// sup-008 (ADR-0016): supervision outcome for this turn. Present only
+        /// when a supervision evaluation actually ran during the turn; absent
+        /// (never renamed) otherwise.
+        #[serde(default)]
+        verdict: Option<SupervisionVerdictInfo>,
+    },
     /// Project indexing progress/completion.
     ProjectIndexed { path: String, files: u64, symbols: u64 },
     /// Provider configuration accepted/rejected with reason.
@@ -170,5 +189,49 @@ mod tests {
         assert!(json.contains(r#""type":"steering_queued""#), "{json}");
         let back: Event = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, Event::SteeringQueued { depth: 3, .. }));
+    }
+
+    // sup-008: TurnFinished round-trips its verdict; payloads from before the
+    // field existed (no "verdict" key) still deserialize to None.
+    #[test]
+    fn turn_finished_round_trips_with_and_without_verdict() {
+        let blocked = Event::TurnFinished {
+            thread_id: "t1".into(),
+            turn_id: "u1".into(),
+            ok: false,
+            error: Some("claimed Tests success without recorded evidence".into()),
+            verdict: Some(SupervisionVerdictInfo {
+                blocked: true,
+                reason: Some("claimed Tests success without recorded evidence".into()),
+            }),
+        };
+        let back: Event =
+            serde_json::from_str(&serde_json::to_string(&blocked).unwrap()).unwrap();
+        match back {
+            Event::TurnFinished { ok: false, verdict: Some(v), .. } => {
+                assert!(v.blocked);
+                assert_eq!(
+                    v.reason.as_deref(),
+                    Some("claimed Tests success without recorded evidence")
+                );
+            }
+            other => panic!("wrong event: {other:?}"),
+        }
+
+        let plain = Event::TurnFinished {
+            thread_id: "t1".into(),
+            turn_id: "u2".into(),
+            ok: true,
+            error: None,
+            verdict: None,
+        };
+        let back: Event =
+            serde_json::from_str(&serde_json::to_string(&plain).unwrap()).unwrap();
+        assert!(matches!(back, Event::TurnFinished { ok: true, verdict: None, .. }));
+
+        // Additive evolution (ADR-0018): old payload without the field.
+        let legacy = r#"{"type":"turn_finished","thread_id":"t1","turn_id":"u3","ok":true,"error":null}"#;
+        let back: Event = serde_json::from_str(legacy).unwrap();
+        assert!(matches!(back, Event::TurnFinished { verdict: None, .. }));
     }
 }

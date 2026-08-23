@@ -623,12 +623,18 @@ fn run_turn(
     turn_id: Id,
 ) {
     let thread_id = thread.id.clone();
+    // sup-008 (ADR-0016): last supervision verdict computed this turn, if any.
+    // RefCell because `finish` is called from many exit paths after evaluation
+    // may have happened; default stays None for turns that never evaluated.
+    let last_verdict =
+        std::cell::RefCell::new(None::<z_protocol::SupervisionVerdictInfo>);
     let finish = |ok: bool, error: Option<String>| {
         let _ = event_tx.send(Event::TurnFinished {
             thread_id: thread_id.clone(),
             turn_id: turn_id.clone(),
             ok,
             error,
+            verdict: last_verdict.borrow().clone(),
         });
     };
 
@@ -769,6 +775,14 @@ fn run_turn(
                             &report,
                             turn_evidence.iter().filter(|e| e.ok).count(),
                         );
+                        // sup-008: an evaluation happened this turn — record
+                        // its outcome on TurnFinished regardless of whether
+                        // the sup-007 gate promotes it to a turn failure.
+                        *last_verdict.borrow_mut() =
+                            Some(z_protocol::SupervisionVerdictInfo {
+                                blocked: verdict.blocked,
+                                reason: verdict.reason.clone(),
+                            });
                         // sup-007 gate: fail ONLY when the pipeline was fully
                         // operational — journal handle present, fold succeeded,
                         // and this turn ran at least one tool call (so ok
@@ -2413,6 +2427,155 @@ mod doom_loop_retry_tests {
 // ---------------------------------------------------------------------------
 // edit-016/017: write grants (ADR-0010 §(5c))
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod supervision_verdict_tests {
+    //! sup-008 (ADR-0016): the last supervision verdict rides on TurnFinished.
+
+    use super::*;
+    use super::steering_tests::{make_runtime_at, ScriptedProvider};
+
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn unique_data_dir(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("zdt-verdict-{tag}-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("threads")).expect("create temp data dir");
+        dir
+    }
+
+    /// One read-only tool call (captures NO evidence), then a final text
+    /// claiming success — the fake-completion signature of sup-005/007.
+    #[test]
+    fn blocked_turn_carries_blocked_verdict_on_turn_finished() {
+        let data_dir = unique_data_dir("blocked");
+        let shared = Shared {
+            provider: Mutex::new(Some(Arc::new(ScriptedProvider {
+                outcomes: std::sync::Mutex::new(vec![
+                    provider::StreamOutcome {
+                        text: String::new(),
+                        tool_calls: vec![provider::ToolCallSpec {
+                            id: "call-1".into(),
+                            name: "fs_read".into(),
+                            arguments_json: r#"{"path":"README.md"}"#.into(),
+                        }],
+                    },
+                    provider::StreamOutcome {
+                        text: "All done, the tests pass.".into(),
+                        tool_calls: Vec::new(),
+                    },
+                ]),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }) as Arc<dyn provider::Provider>)),
+            provider_label: Mutex::new("scripted".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+        };
+        let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
+        assert!(rt.journal.is_some(), "sup-007 gate requires a live journal");
+
+        let thread = Thread {
+            id: "verdict-thread".into(),
+            title: "verdict".into(),
+            messages: vec![StoredMessage {
+                role: z_protocol::Role::User,
+                text: "do work".into(),
+                tool_calls: Vec::new(),
+            }],
+            updated_ms: 0,
+        };
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        run_turn(
+            Arc::clone(&rt.shared),
+            event_tx,
+            Arc::new(Mutex::new(())),
+            data_dir.clone(),
+            rt.journal.clone(),
+            thread,
+            "turn-verdict".into(),
+        );
+
+        let mut finished = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let Event::TurnFinished { ok, verdict, .. } = event {
+                finished = true;
+                assert!(!ok, "unlinked success claim must fail the turn");
+                let v = verdict.expect("evaluation happened, so a verdict must ride along");
+                assert!(v.blocked, "verdict must be blocked");
+                assert!(
+                    v.reason.unwrap_or_default().contains("without recorded evidence"),
+                    "reason names the missing-evidence failure"
+                );
+            }
+        }
+        assert!(finished, "turn never emitted TurnFinished");
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// A turn whose final text carries no success claim never evaluates —
+    /// TurnFinished goes out with verdict: None even on the happy path.
+    #[test]
+    fn unevaluated_turn_finishes_with_no_verdict() {
+        let data_dir = unique_data_dir("plain");
+        let shared = Shared {
+            provider: Mutex::new(Some(Arc::new(ScriptedProvider {
+                outcomes: std::sync::Mutex::new(vec![provider::StreamOutcome {
+                    text: "Here is what you asked for.".into(),
+                    tool_calls: Vec::new(),
+                }]),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }) as Arc<dyn provider::Provider>)),
+            provider_label: Mutex::new("scripted".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+        };
+        let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
+
+        let thread = Thread {
+            id: "plain-thread".into(),
+            title: "plain".into(),
+            messages: vec![StoredMessage {
+                role: z_protocol::Role::User,
+                text: "hello".into(),
+                tool_calls: Vec::new(),
+            }],
+            updated_ms: 0,
+        };
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        run_turn(
+            Arc::clone(&rt.shared),
+            event_tx,
+            Arc::new(Mutex::new(())),
+            data_dir.clone(),
+            rt.journal.clone(),
+            thread,
+            "turn-plain".into(),
+        );
+
+        let mut finished = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let Event::TurnFinished { ok, verdict, .. } = event {
+                finished = true;
+                assert!(ok);
+                assert!(verdict.is_none(), "no evaluation this turn, no verdict");
+            }
+        }
+        assert!(finished, "turn never emitted TurnFinished");
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+}
 
 #[cfg(test)]
 mod write_grant_tests {

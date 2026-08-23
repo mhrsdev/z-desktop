@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 70 |
+| IMPLEMENTED | 71 |
 | PARTIAL | 2 |
-| PLANNED | 651 |
+| PLANNED | 650 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -559,7 +559,7 @@
 ### [IMPLEMENTED] sup-007 — Supervision verdict type (pass/fail/needs-review)
 - depends: sup-006
 
-### [PLANNED] sup-008 — Verdict attached to TurnFinished
+### [IMPLEMENTED] sup-008 — Verdict attached to TurnFinished
 - depends: sup-007
 
 ### [PLANNED] sup-009 — unexecuted-tests detector

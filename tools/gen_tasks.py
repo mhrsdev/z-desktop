@@ -200,7 +200,7 @@ DOMAINS = [
         ("005", "Claim regex set (conservative success phrases)", [], "IMPLEMENTED"),
         ("006", "Claim-to-evidence linker", ["005", "002"], "IMPLEMENTED"),
         ("007", "Supervision verdict type (pass/fail/needs-review)", ["006"], "IMPLEMENTED"),
-        ("008", "Verdict attached to TurnFinished", ["007"], "PLANNED"),
+        ("008", "Verdict attached to TurnFinished", ["007"], "IMPLEMENTED"),
         ("009", "unexecuted-tests detector", ["006"], "PLANNED"),
         ("010", "unexecuted-build detector", ["006"], "PLANNED"),
         ("011", "ignored-failure detector", ["006"], "PLANNED"),

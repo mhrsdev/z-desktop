@@ -2526,10 +2526,14 @@ mod write_grant_tests {
 // Orchestrator skeleton (orch-003, ADR-0012): cap-limited nested-task runner.
 // ---------------------------------------------------------------------------
 
-/// ADR-0012 caps (orch-012 fixes the numbers): global 2 concurrent children,
-/// per-parent 1 and hard ceiling 4 land with the full spawn policy. Constants
-/// until orch-021 wires dev-mode settings.
+/// ADR-0012 caps (orch-012): global default 2 concurrent children; per-parent
+/// 1 lands with the full spawn policy. Constants until orch-021 wires
+/// dev-mode settings.
 pub const ORCH_MAX_CONCURRENT: usize = 2;
+
+/// orch-012: hard max concurrent tasks across ALL parents once per-parent
+/// caps land (per-parent is later). Today's global cap must stay below it.
+pub const ORCH_CEILING: usize = 4;
 
 /// Nested task work for [`Orchestrator`]. Skeleton stand-in: orch-005 replaces
 /// this with a real ChildSpec driving one nested `run_turn` (ADR-0012 §3).
@@ -2537,7 +2541,9 @@ pub type TaskBody = Box<dyn FnOnce() -> Result<(), String> + Send>;
 
 /// Inbox command for the orchestrator thread.
 pub enum OrchCommand {
-    EnqueueTask { id: String, body: TaskBody },
+    /// `deadline_ms`: absolute wall-clock budget deadline (ms since the Unix
+    /// epoch, same clock as [`now_ms`]); None = no deadline (orch-004).
+    EnqueueTask { id: String, body: TaskBody, deadline_ms: Option<u128> },
     Shutdown,
 }
 
@@ -2563,7 +2569,19 @@ impl Orchestrator {
     }
 
     pub fn enqueue_task(&self, id: String, body: TaskBody) {
-        let _ = self.tx.send(OrchCommand::EnqueueTask { id, body });
+        self.enqueue_task_with_deadline(id, body, None);
+    }
+
+    /// orch-004: enqueue with a wall-clock budget deadline (absolute ms since
+    /// the Unix epoch). A task still running past it is swept to Failed by
+    /// the orchestrator loop's 1s tick.
+    pub fn enqueue_task_with_deadline(
+        &self,
+        id: String,
+        body: TaskBody,
+        deadline_ms: Option<u128>,
+    ) {
+        let _ = self.tx.send(OrchCommand::EnqueueTask { id, body, deadline_ms });
     }
 
     pub fn shutdown(&self) {
@@ -2574,17 +2592,22 @@ impl Orchestrator {
 fn orchestrator_loop(tasks_dir: PathBuf, inbox: Receiver<OrchCommand>) {
     // id -> its z-subagent worker; presence == currently Running.
     let mut running: HashMap<String, std::thread::JoinHandle<()>> = HashMap::new();
-    let mut queued: VecDeque<(String, TaskBody)> = VecDeque::new();
+    let mut queued: VecDeque<(String, TaskBody, Option<u128>)> = VecDeque::new();
+    // orch-004: deadlines of RUNNING tasks, shared with the workers. Presence
+    // here is the right-to-write a final transition: a worker removes its own
+    // id BEFORE its final TaskStore write, and the sweep only fails ids it can
+    // claim — so exactly one side appends the last event and a Done can never
+    // land after a budget-Failed in the journal fold.
+    let live: Arc<Mutex<HashMap<String, u128>>> = Arc::new(Mutex::new(HashMap::new()));
 
     loop {
         match inbox.recv_timeout(std::time::Duration::from_secs(1)) {
-            Ok(OrchCommand::EnqueueTask { id, body }) => queued.push_back((id, body)),
+            Ok(OrchCommand::EnqueueTask { id, body, deadline_ms }) => {
+                queued.push_back((id, body, deadline_ms))
+            }
             Ok(OrchCommand::Shutdown) => break,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // TODO(orch-004, ADR-0012 §5c): sweep tasks past their
-                // wall-clock budget deadline here — set cancelled (same path
-                // as CancelTurn) and wait for the worker to exit. No budgets
-                // exist yet, so nothing to sweep.
+                sweep_deadlines(&tasks_dir, &live);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -2601,19 +2624,41 @@ fn orchestrator_loop(tasks_dir: PathBuf, inbox: Receiver<OrchCommand>) {
             }
         }
         while running.len() < ORCH_MAX_CONCURRENT {
-            let Some((id, body)) = queued.pop_front() else { break };
+            // orch-012: admission stays under both the global cap and the
+            // hard ceiling (the ceiling bites once per-parent caps land).
+            assert!(
+                running.len() < ORCH_CEILING,
+                "running ({}) exceeded ORCH_CEILING ({ORCH_CEILING})",
+                running.len()
+            );
+            let Some((id, body, deadline_ms)) = queued.pop_front() else {
+                break;
+            };
             if let Err(e) = TaskStore::transition(&tasks_dir, &id, TaskStatus::Running) {
                 log::warn!("orchestrator: cannot mark {id} running: {e}");
                 continue;
             }
+            // Register the deadline BEFORE spawning: the worker may finish and
+            // look itself up immediately, so the entry must already exist.
+            // u128::MAX = no deadline (never expires).
+            live.lock()
+                .unwrap()
+                .insert(id.clone(), deadline_ms.unwrap_or(u128::MAX));
             let spawned = std::thread::Builder::new().name("z-subagent".into()).spawn({
                 let tasks_dir = tasks_dir.clone();
                 let id = id.clone();
+                let live = Arc::clone(&live);
                 move || {
                     let status = match body() {
                         Ok(()) => TaskStatus::Done,
                         Err(_) => TaskStatus::Failed,
                     };
+                    // Give up our right-to-write FIRST: if the sweep already
+                    // claimed us (budget-Failed appended), skip our transition
+                    // so Done can never follow Failed in the fold.
+                    if live.lock().unwrap().remove(&id).is_none() {
+                        return;
+                    }
                     if let Err(e) = TaskStore::transition(&tasks_dir, &id, status) {
                         log::warn!("orchestrator: task {id} final transition failed: {e}");
                     }
@@ -2624,6 +2669,7 @@ fn orchestrator_loop(tasks_dir: PathBuf, inbox: Receiver<OrchCommand>) {
                     running.insert(id, handle);
                 }
                 Err(e) => {
+                    live.lock().unwrap().remove(&id);
                     log::warn!("orchestrator: could not spawn worker for {id}: {e}");
                     let _ = TaskStore::transition(&tasks_dir, &id, TaskStatus::Failed);
                 }
@@ -2634,6 +2680,35 @@ fn orchestrator_loop(tasks_dir: PathBuf, inbox: Receiver<OrchCommand>) {
     // → join outstanding children → exit; journal records survive for resume.
     for (_, handle) in running.drain() {
         let _ = handle.join();
+    }
+}
+
+/// orch-004 backstop sweep (ADR-0012 §5c/§6): on the 1s tick, fail any RUNNING
+/// task past its wall-clock deadline. Claims overdue ids out of `live`
+/// atomically before appending Failed, so a worker finishing concurrently
+/// cannot append Done after the budget-Failed.
+/// ponytail: swept bodies are not cancelled mid-flight — a hung body's thread
+/// is only joined at shutdown. Acceptable at personal scale; wire
+/// Shared.cancelled into bodies when orch-005's ChildSpec lands.
+fn sweep_deadlines(tasks_dir: &Path, live: &Mutex<HashMap<String, u128>>) {
+    let now = now_ms() as u128;
+    let expired: Vec<String> = {
+        let mut live = live.lock().unwrap();
+        let expired: Vec<String> = live
+            .iter()
+            .filter(|(_, deadline)| **deadline <= now)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &expired {
+            live.remove(id);
+        }
+        expired
+    };
+    for id in expired {
+        log::warn!("orchestrator: task {id} exceeded its budget deadline; failing");
+        if let Err(e) = TaskStore::transition(tasks_dir, &id, TaskStatus::Failed) {
+            log::warn!("orchestrator: budget sweep could not fail {id}: {e}");
+        }
     }
 }
 
@@ -2748,6 +2823,82 @@ mod orchestrator_tests {
         );
         orch.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_past_deadline_sweeps_to_failed_and_done_cannot_follow() {
+        let dir = temp_tasks_dir("deadline");
+        TaskStore::create(&dir, "late").expect("create late");
+        let orch = Orchestrator::spawn(dir.clone());
+
+        let body_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&body_finished);
+        // Body must outlive the first 1s sweep tick, else the worker would
+        // legitimately win the race (it finished before any sweep ran).
+        orch.enqueue_task_with_deadline(
+            "late".into(),
+            Box::new(move || {
+                std::thread::sleep(std::time::Duration::from_millis(2500));
+                flag.store(true, Ordering::SeqCst);
+                Ok(())
+            }),
+            Some(1), // deadline in the past (epoch + 1ms)
+        );
+
+        let path = tasks_path(&dir);
+        assert!(
+            wait_until(10_000, || TasksView::fold(&path)
+                .ok()
+                .and_then(|v| v.tasks.get("late").map(|t| t.status == TaskStatus::Failed))
+                .unwrap_or(false)),
+            "overdue task must be swept to Failed"
+        );
+        // Journal evidence: the failed transition is durably on disk.
+        let raw = std::fs::read_to_string(&path).expect("tasks journal");
+        assert!(raw.contains("\"status\":\"failed\""), "journal carries failed");
+
+        // Once the body definitively finished AND another sweep tick passed,
+        // the task must STILL be Failed — no trailing Done in the fold.
+        assert!(wait_until(10_000, || body_finished.load(Ordering::SeqCst)));
+        std::thread::sleep(std::time::Duration::from_millis(1300));
+        let view = TasksView::fold(&path).expect("fold");
+        assert_eq!(view.tasks["late"].status, TaskStatus::Failed);
+        orch.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_finishing_before_deadline_stays_done() {
+        let dir = temp_tasks_dir("inbudget");
+        TaskStore::create(&dir, "quick").expect("create quick");
+        let orch = Orchestrator::spawn(dir.clone());
+        orch.enqueue_task_with_deadline(
+            "quick".into(),
+            Box::new(|| Ok(())),
+            Some(now_ms() as u128 + 60_000),
+        );
+
+        let path = tasks_path(&dir);
+        assert!(
+            wait_until(10_000, || TasksView::fold(&path)
+                .ok()
+                .and_then(|v| v.tasks.get("quick").map(|t| t.status == TaskStatus::Done))
+                .unwrap_or(false)),
+            "in-budget task must reach Done"
+        );
+        // A couple of sweep ticks later the sweeper has not touched it.
+        std::thread::sleep(std::time::Duration::from_millis(1300));
+        let view = TasksView::fold(&path).expect("fold");
+        assert_eq!(view.tasks["quick"].status, TaskStatus::Done);
+        orch.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn orch_cap_constants_match_adr_0012() {
+        assert_eq!(ORCH_MAX_CONCURRENT, 2, "ADR-0012 §4 global default");
+        assert_eq!(ORCH_CEILING, 4, "ADR-0012 §4 hard ceiling");
+        assert!(ORCH_MAX_CONCURRENT <= ORCH_CEILING);
     }
 }
 

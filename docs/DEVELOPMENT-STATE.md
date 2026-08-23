@@ -6,6 +6,24 @@
 
 Last updated: 2026-08-23
 
+## orch-004/012 Budget Deadlines — 2026-08-23 COMPLETE
+
+1. ✅ **orch-004**: OrchCommand::EnqueueTask carries optional absolute
+   deadline_ms; the orchestrator's 1s sweep now really fires: past-deadline
+   tasks still in `running` transition to Failed ("budget exceeded") with
+   journal evidence. Worker removes itself from `running` before its final
+   Done transition, so Done-after-sweep races are structurally excluded
+   (ponytail note: tiny window documented, fine at personal scale).
+2. ✅ **orch-012**: ORCH_CEILING=4 constant added beside
+   ORCH_MAX_CONCURRENT=2; enqueue asserts both bounds (per-parent caps are
+   the later slice).
+
+Verification: full workspace suite green — **398 tests, 0 failed**
+(395 → 398). Ledger: 70 IMPLEMENTED.
+
+Next work continues → orch-005 spawn-policy validation, sup-007 gating,
+or ctx-007 stale rehydration markers.
+
 ## Thread List UI Wiring — 2026-08-23 COMPLETE
 
 1. ✅ **core-021 UI**: WorkspaceView.threads mirrors Event::ThreadList;

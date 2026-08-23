@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 67 |
+| IMPLEMENTED | 68 |
 | PARTIAL | 2 |
-| PLANNED | 654 |
+| PLANNED | 653 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -470,7 +470,7 @@
 ### [IMPLEMENTED] orch-003 — Orchestrator loop thread
 - depends: orch-002
 
-### [PLANNED] orch-004 — Budget enforcer (tokens/time per task)
+### [IMPLEMENTED] orch-004 — Budget enforcer (tokens/time per task)
 - depends: orch-001
 
 ### [PLANNED] orch-005 — Sub-agent spawn policy validation

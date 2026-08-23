@@ -38,4 +38,5 @@ Desktop.ini
 .DS_Store
 .vscode/
 .idea/
-*.swp
+*.swp__pycache__/
+*.pyc

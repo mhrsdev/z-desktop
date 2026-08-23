@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 53 |
+| IMPLEMENTED | 55 |
 | PARTIAL | 1 |
-| PLANNED | 669 |
+| PLANNED | 667 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -754,10 +754,10 @@
 
 ## Context Engine (`ctx-*`)
 
-### [PLANNED] ctx-001 — Layered context model (prefix/session/turn/ephemeral)
+### [IMPLEMENTED] ctx-001 — Layered context model (prefix/session/turn/ephemeral)
 - depends: —
 
-### [PLANNED] ctx-002 — Priority allocation weights
+### [IMPLEMENTED] ctx-002 — Priority allocation weights
 - depends: ctx-001
 
 ### [PLANNED] ctx-003 — Compaction trigger integration

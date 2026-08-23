@@ -6,6 +6,25 @@
 
 Last updated: 2026-08-23
 
+## Context Engine Core + ADR-0019 — 2026-08-23 COMPLETE
+
+1. ✅ **ctx-001/002**: `z-core/src/context.rs` — Layer enum
+   (Prefix/Session/Turn/Ephemeral), ContextItem {layer, text, est_tokens},
+   and the pure `assemble(items, budget)` allocator per ADR-0013: drop
+   order Ephemeral → oldest Turn → oldest non-pinned Session; Prefix and
+   the last Session message always survive; under-budget passes through
+   unchanged. build_request rewiring deliberately deferred to a follow-up
+   slice (regression risk isolation).
+2. ✅ **ADR-0019** (`docs/adr/0019-ui-shell-architecture.md`): UI state
+   flow + panel seam decision for ui-001..020.
+
+Verification: full workspace suite green — **362 tests, 0 failed**
+(355 → 362). Ledger: 57 IMPLEMENTED.
+
+Next work continues → ctx-003 compaction trigger wiring into build_request,
+or idx-004 tree-sitter Rust grammar pack (needs dep add), or ui-001 panel
+seam per ADR-0019.
+
 ## Diff/Tests Evidence Hooks + ADR-0018 — 2026-08-23 COMPLETE
 
 1. ✅ **sup-004**: capture hook records Diff evidence for fs_write and

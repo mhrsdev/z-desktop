@@ -1164,6 +1164,76 @@ mod budget_tests {
     fn empty_history_is_safe() {
         assert!(trim_history(&[], 100).is_empty());
     }
+
+    /// ctx-001/002 core slice (ADR-0013): build_request is not rewired onto
+    /// the assembler yet — trim_history stays primary — but this gate proves
+    /// its output already fits the budget under assemble() semantics, i.e.
+    /// the second gate would be a no-op today. Wiring lands next slice.
+    #[test]
+    fn built_request_fits_budget_under_assemble_semantics() {
+        struct NullProvider;
+        impl provider::Provider for NullProvider {
+            fn describe(&self) -> String {
+                "null".into()
+            }
+            fn stream(
+                &self,
+                _req: &provider::ChatRequest,
+                _on_item: &mut dyn FnMut(provider::StreamItem),
+            ) -> Result<provider::StreamOutcome, String> {
+                Ok(provider::StreamOutcome::default())
+            }
+        }
+        let shared = Shared {
+            provider: Mutex::new(None),
+            provider_label: Mutex::new(String::new()),
+            project_root: Mutex::new(None),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+        };
+        let big = "word ".repeat(400); // ~100 tokens per message
+        let thread = Thread {
+            id: "t".into(),
+            title: "gate".into(),
+            messages: (0..40).map(|_| user(&big)).collect(),
+        };
+        let req = build_request(&NullProvider, &thread, &shared, std::path::Path::new("/"));
+
+        // Layer the rendered request per ADR-0013: system = Prefix, all
+        // history = Session (Turn/Ephemeral don't exist as distinct sites yet).
+        let items: Vec<crate::context::ContextItem> = req
+            .messages
+            .iter()
+            .map(|m| {
+                let (layer, text) = match m {
+                    provider::ChatMessage::System(s) => (crate::context::Layer::Prefix, s.clone()),
+                    provider::ChatMessage::User(t) => (crate::context::Layer::Session, t.clone()),
+                    provider::ChatMessage::Assistant { text, .. } => {
+                        (crate::context::Layer::Session, text.clone())
+                    }
+                    provider::ChatMessage::ToolResult { output, .. } => {
+                        (crate::context::Layer::Session, output.clone())
+                    }
+                };
+                crate::context::ContextItem {
+                    layer,
+                    est_tokens: crate::tokens::estimate(&text) + 4,
+                    text,
+                }
+            })
+            .collect();
+        let soft_target = CONTEXT_HARD_LIMIT - COMPLETION_RESERVE;
+        let kept = crate::context::assemble(items.clone(), soft_target);
+        assert_eq!(
+            kept.len(),
+            items.len(),
+            "assemble dropped something from a freshly built request"
+        );
+    }
 }
 
 #[cfg(test)]

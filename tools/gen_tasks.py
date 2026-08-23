@@ -269,8 +269,8 @@ DOMAINS = [
         ("020", "Consolidation bounds tests (caps honored)", ["006", "014"], "PLANNED"),
     ]),
     ("ctx", "Context Engine", [
-        ("001", "Layered context model (prefix/session/turn/ephemeral)", [], "PLANNED"),
-        ("002", "Priority allocation weights", ["001"], "PLANNED"),
+        ("001", "Layered context model (prefix/session/turn/ephemeral)", [], "IMPLEMENTED"),
+        ("002", "Priority allocation weights", ["001"], "IMPLEMENTED"),
         ("003", "Compaction trigger integration", ["001"], "PLANNED"),
         ("004", "Compaction procedure (pinned facts + round summaries)", ["003"], "PLANNED"),
         ("005", "Idempotent compaction per span", ["004"], "PLANNED"),

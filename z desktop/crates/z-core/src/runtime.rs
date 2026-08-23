@@ -9,7 +9,7 @@ use crate::{provider, repo::RepoIndex, tools};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use z_protocol::{Command, Event, Id, ProviderConfig, Risk};
@@ -104,6 +104,12 @@ struct Shared {
     // set-003 (ADR-0011): snapshot-cached settings. Readers clone the inner
     // Arc once per turn start and never hold this lock during the turn.
     settings: Mutex<Arc<crate::settings::Snapshot>>,
+    // edit-016/017 (ADR-0010 §(5c)): exclusive write grants, keyed by
+    // canonical path, valued by the owning thread id. Acquired before every
+    // Write-risk tool call; overlap by another thread is rejected at acquire
+    // time. ponytail: unbounded map OK at personal scale — entries live only
+    // for the duration of one call.
+    write_grants: Mutex<HashMap<String, String>>,
 }
 
 /// Upper bound on queued steering texts per thread. Beyond this, the oldest
@@ -204,6 +210,7 @@ impl Runtime {
                 cancelled: Mutex::new(std::collections::HashSet::new()),
                 steering: Mutex::new(HashMap::new()),
                 settings: Mutex::new(settings),
+                write_grants: Mutex::new(HashMap::new()),
             }),
             data_dir,
             threads: Mutex::new(threads),
@@ -630,6 +637,34 @@ fn run_turn(
                 detail: detail.clone(),
             });
 
+            // edit-016/017: Write-risk calls hold the per-file grant for this
+            // thread; a concurrent editor's claim rejects ours and nothing
+            // executes. The grant is released once the call completes, on
+            // success or failure alike.
+            let raw_path = args
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let holds_grant = if risk == Risk::Write {
+                match grant_write(&shared, &root, &thread_id, &raw_path) {
+                    Ok(()) => true,
+                    Err(_e) => {
+                        record_result(
+                            &mut thread,
+                            &event_tx,
+                            &turn_id,
+                            &call.id,
+                            false,
+                            "blocked by concurrent editor".into(),
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                false
+            };
+
             let output = tools::execute(tools::ToolInvocation {
                 name: &call.name,
                 args,
@@ -656,6 +691,9 @@ fn run_turn(
                     summary: output.text.clone(),
                 }],
             });
+            if holds_grant {
+                release_write(&shared, &root, &thread_id, &raw_path);
+            }
         }
     }
     persist(&thread);
@@ -689,6 +727,55 @@ fn record_result(
 
 fn is_cancelled(shared: &Shared, thread_id: &str) -> bool {
     shared.cancelled.lock().unwrap().contains(thread_id)
+}
+
+/// edit-016/017 (ADR-0010 §(5c)): acquire the exclusive write grant for one
+/// canonical path on behalf of `thread_id`. Another thread's live grant is
+/// rejected at acquire time; the owner re-enters freely.
+fn grant_write(
+    shared: &Shared,
+    root: &Path,
+    thread_id: &str,
+    raw_path: &str,
+) -> Result<(), String> {
+    let key = tools::canonical_key(root, raw_path)?.to_string_lossy().into_owned();
+    let mut grants = shared.write_grants.lock().unwrap();
+    match grants.get(&key) {
+        Some(owner) if owner != thread_id => {
+            Err(format!("File is being edited by another task. (held by {owner})"))
+        }
+        Some(_) => Ok(()), // reentrant for the owner
+        None => {
+            grants.insert(key, thread_id.to_string());
+            Ok(())
+        }
+    }
+}
+
+/// Release the write grant only when the caller owns it; stale releases
+/// (never granted, or ownership changed) are deliberate no-ops.
+fn release_write(shared: &Shared, root: &Path, thread_id: &str, raw_path: &str) {
+    if let Ok(key) = tools::canonical_key(root, raw_path) {
+        let key = key.to_string_lossy().into_owned();
+        let mut grants = shared.write_grants.lock().unwrap();
+        if grants.get(&key).map(String::as_str) == Some(thread_id) {
+            grants.remove(&key);
+        }
+    }
+}
+
+/// Test-visible view of the grant registry (edit-016).
+#[cfg(test)]
+fn debug_grants(shared: &Shared) -> Vec<(String, String)> {
+    let mut grants: Vec<(String, String)> = shared
+        .write_grants
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    grants.sort();
+    grants
 }
 
 fn save_thread(data_dir: &std::path::Path, thread: &Thread) {
@@ -1049,6 +1136,7 @@ mod steering_tests {
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
         };
         {
             let mut q = shared.steering.lock().unwrap();
@@ -1075,6 +1163,7 @@ mod steering_tests {
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
         for i in 0..(STEERING_QUEUE_CAP + 4) {
@@ -1098,6 +1187,7 @@ mod steering_tests {
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
         rt.enqueue_message("t".into(), "stale guidance".into());
@@ -1129,6 +1219,7 @@ mod steering_tests {
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
 
@@ -1256,6 +1347,7 @@ mod journal_wiring_tests {
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1269,6 +1361,7 @@ mod journal_wiring_tests {
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1541,6 +1634,7 @@ mod settings_wiring_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::new(
                 crate::settings::load(&data_dir),
             ))),
+            write_grants: Mutex::new(HashMap::new()),
         };
         let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
         assert_eq!(
@@ -1587,5 +1681,145 @@ mod settings_wiring_tests {
             "exactly max_tool_rounds provider rounds ran"
         );
         let _ = std::fs::remove_dir_all(&data_dir);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// edit-016/017: write grants (ADR-0010 §(5c))
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod write_grant_tests {
+    use super::*;
+    use super::steering_tests::ScriptedProvider;
+
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("zdt-grant-{tag}-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp root");
+        dir
+    }
+
+    fn empty_shared(root: PathBuf) -> Shared {
+        Shared {
+            provider: Mutex::new(None),
+            provider_label: Mutex::new(String::new()),
+            project_root: Mutex::new(Some(root)),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+        }
+    }
+
+    #[test]
+    fn grant_is_exclusive_across_threads_and_reentrant_for_owner() {
+        let root = temp_root("excl");
+        std::fs::write(root.join("x.txt"), "x").unwrap();
+        let shared = empty_shared(root.clone());
+
+        grant_write(&shared, &root, "A", "x.txt").expect("A acquires");
+        let err = grant_write(&shared, &root, "B", "x.txt").unwrap_err();
+        assert!(err.contains("another task"), "{err}");
+        // Reentrant for the owner.
+        grant_write(&shared, &root, "A", "x.txt").expect("A re-enters");
+        // B's release is a no-op against A's hold.
+        release_write(&shared, &root, "B", "x.txt");
+        assert!(grant_write(&shared, &root, "B", "x.txt").is_err(), "B still blocked");
+        // A releases; B succeeds.
+        release_write(&shared, &root, "A", "x.txt");
+        grant_write(&shared, &root, "B", "x.txt").expect("B succeeds after A releases");
+    }
+
+    #[test]
+    fn canonical_aliases_resolve_to_one_grant_key() {
+        let root = temp_root("alias");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.txt"), "x").unwrap();
+        let shared = empty_shared(root.clone());
+
+        // ADR-0010 acceptance: alias spellings collapse onto ONE grant key.
+        grant_write(&shared, &root, "A", "./sub/../a.txt").expect("aliased spelling acquires");
+        assert!(
+            grant_write(&shared, &root, "B", "a.txt").is_err(),
+            "plain spelling must collide with the aliased hold"
+        );
+    }
+
+    #[test]
+    fn fs_write_turn_acquires_and_releases_the_grant_around_each_call() {
+        // Two scripted fs_write calls as thread "tg": both must execute, and
+        // the registry must be EMPTY afterwards (per-call acquire→release).
+        let root = temp_root("turn");
+        let outcomes = vec![
+            provider::StreamOutcome {
+                text: String::new(),
+                tool_calls: vec![provider::ToolCallSpec {
+                    id: "w1".into(),
+                    name: "fs_write".into(),
+                    arguments_json: r#"{"path":"doc.txt","content":"one"}"#.into(),
+                }],
+            },
+            provider::StreamOutcome {
+                text: String::new(),
+                tool_calls: vec![provider::ToolCallSpec {
+                    id: "w2".into(),
+                    name: "fs_write".into(),
+                    arguments_json: r#"{"path":"doc.txt","content":"two"}"#.into(),
+                }],
+            },
+            provider::StreamOutcome { text: "done".into(), tool_calls: Vec::new() },
+        ];
+        let mut shared = empty_shared(root.clone());
+        shared.provider = Mutex::new(Some(Arc::new(ScriptedProvider {
+            outcomes: std::sync::Mutex::new(outcomes),
+            requests: std::sync::Mutex::new(Vec::new()),
+        })));
+        shared.provider_label = Mutex::new("scripted".into());
+        // Pre-resolve both approvals so the gate never blocks the worker.
+        shared.gate.resolve("w1", true);
+        shared.gate.resolve("w2", true);
+        let shared = Arc::new(shared);
+
+        let thread = Thread {
+            id: "tg".into(),
+            title: "grant turn".into(),
+            messages: vec![StoredMessage {
+                role: z_protocol::Role::User,
+                text: "write doc twice".into(),
+                tool_calls: Vec::new(),
+            }],
+        };
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        run_turn(
+            Arc::clone(&shared),
+            event_tx,
+            Arc::new(Mutex::new(())),
+            temp_root("data"),
+            None,
+            thread,
+            "turn-grant".into(),
+        );
+
+        let mut finished_ok = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let Event::TurnFinished { ok, .. } = event {
+                finished_ok = ok;
+            }
+        }
+        assert!(finished_ok, "turn did not finish cleanly");
+        assert_eq!(
+            std::fs::read_to_string(root.join("doc.txt")).unwrap(),
+            "two",
+            "both fs_write calls executed"
+        );
+        let leftovers = debug_grants(&shared);
+        assert!(leftovers.is_empty(), "no leftover grant after completion: {leftovers:?}");
     }
 }

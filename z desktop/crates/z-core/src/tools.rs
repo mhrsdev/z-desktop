@@ -237,6 +237,36 @@ fn strip_verbatim(path: &Path) -> PathBuf {
     }
 }
 
+/// Canonical registry key for a model-supplied path (edit-016): scope-checked
+/// first so escapes are refused, then canonicalised when the file exists so
+/// symlink aliases collide into one key. Not-yet-existing targets fall back
+/// to the lexical form, which is still traversal-free after `scoped`.
+pub(crate) fn canonical_key(root: &Path, raw: &str) -> Result<PathBuf, String> {
+    let path = scoped(root, raw)?;
+    Ok(path.canonicalize().unwrap_or(path))
+}
+
+/// Sibling staging file holding the pre-write bytes of `target` (edit-014).
+/// pid-suffixed like the atomic_write temps; one generation per target.
+fn rollback_temp_path(target: &Path) -> PathBuf {
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "target".into());
+    target.with_file_name(format!(".{name}.{}.rollback.tmp", std::process::id()))
+}
+
+/// edit-014: restore the staged old bytes over `target`, consuming the
+/// staging copy. Errors when nothing is staged (no prior write over an
+/// existing file in this process).
+pub fn rollback_last(target: &Path) -> Result<(), String> {
+    let tmp = rollback_temp_path(target);
+    if !tmp.exists() {
+        return Err(format!("no staged rollback for {}", target.display()));
+    }
+    std::fs::rename(&tmp, target).map_err(|e| e.to_string())
+}
+
 /// Execute an approved tool call. This is the only place the core touches the
 /// filesystem or spawns processes.
 pub fn execute(inv: ToolInvocation) -> ToolOutput {
@@ -362,6 +392,15 @@ fn checked_write(inv: &ToolInvocation, raw_path: &str, bytes: &[u8]) -> Result<(
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // edit-014: stage the current bytes BEFORE touching the target so a
+    // later rollback_last can restore them exactly. Rewriting the staging
+    // file through its own atomic write replaces any previous generation,
+    // so exactly one rollback copy stays alive per target. A read failure
+    // here refuses the write: unstageable data must not be destroyed.
+    if path.exists() {
+        let old = std::fs::read(&path).map_err(|e| e.to_string())?;
+        crate::atomic_write::atomic_write(&rollback_temp_path(&path), &old)?;
     }
     // edit-005: route through the atomic temp+rename helper (ADR-0010)
     // so a crash mid-write leaves old-or-new, never a truncated file.
@@ -1062,6 +1101,44 @@ mod tests {
             std::fs::read_to_string(root.join("guarded.txt")).unwrap(),
             "replaced\n// user note\n"
         );
+    }
+
+    // ---- edit-014: rollback staging via captured old bytes ----
+
+    #[test]
+    fn fs_write_over_existing_file_stages_old_bytes_for_rollback() {
+        let root = temp_root("rb-stage");
+        std::fs::write(root.join("doc.txt"), "v1").unwrap();
+        let out = execute(ToolInvocation {
+            name: "fs_write",
+            args: json!({"path": "doc.txt", "content": "v2-longer-content"}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert_eq!(std::fs::read_to_string(root.join("doc.txt")).unwrap(), "v2-longer-content");
+
+        // Rollback restores v1 byte-exactly and consumes the staging copy.
+        rollback_last(&root.join("doc.txt")).expect("staged rollback exists");
+        assert_eq!(std::fs::read_to_string(root.join("doc.txt")).unwrap(), "v1");
+        // One generation only: a second rollback has nothing to restore.
+        let err = rollback_last(&root.join("doc.txt")).unwrap_err();
+        assert!(err.contains("no staged rollback"), "{err}");
+    }
+
+    #[test]
+    fn fs_write_to_a_new_file_stages_nothing_to_roll_back() {
+        let root = temp_root("rb-fresh");
+        let out = execute(ToolInvocation {
+            name: "fs_write",
+            args: json!({"path": "fresh.txt", "content": "created"}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        // No prior bytes existed, so there is nothing to roll back to.
+        let err = rollback_last(&root.join("fresh.txt")).unwrap_err();
+        assert!(err.contains("no staged rollback"), "{err}");
     }
 
     // ---- edit-022..024: read-only git tools (real temp repos) ----

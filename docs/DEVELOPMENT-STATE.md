@@ -6,6 +6,27 @@
 
 Last updated: 2026-08-23
 
+## Rollback + Write Grants + ADR-0013 (2026-08-23) — COMPLETE
+
+1. ✅ **edit-014**: checked_write stages the target's current bytes to a
+   sibling `.{name}.{pid}.rollback.tmp` (written via atomic_write itself)
+   BEFORE the rename; one generation kept; `rollback_last(path)` restores
+   it exactly and clears it.
+2. ✅ **edit-016/017**: per-file write grants in Shared keyed by canonical
+   path with owner thread_id — overlap rejection at grant time ("File is
+   being edited by another task."), reentrant for the same thread,
+   acquired before every Write-risk tool call and released after.
+3. ✅ **ADR-0013** (`docs/adr/0013-context-engine.md`): context becomes a
+   typed ContextItem stream (Prefix/Session/Turn/Ephemeral layers with
+   priority + fnv1a64 freshness) assembled by one pure function that
+   build_request calls, allocated by strict priority order with caps.
+
+Verification: full workspace suite green — **332 tests, 0 failed**
+(327 → 332). Ledger: 38 IMPLEMENTED.
+
+Next work continues → jour-006..008 reducer API (feeds orch-001), then
+edit-018 blind-write flagging.
+
 ## Settings Module + core-011/012 + ADR-0012 (2026-08-23) — COMPLETE
 
 1. ✅ **set-001/003**: `z-core/src/settings.rs` — `Settings{max_tool_rounds,

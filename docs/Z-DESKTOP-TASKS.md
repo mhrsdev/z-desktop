@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 33 |
+| IMPLEMENTED | 36 |
 | PARTIAL | 1 |
-| PLANNED | 689 |
+| PLANNED | 686 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -408,16 +408,16 @@
 ### [IMPLEMENTED] edit-013 — Whole-patch abort on any failure
 - depends: edit-012
 
-### [PLANNED] edit-014 — Rollback staging (old bytes captured)
+### [IMPLEMENTED] edit-014 — Rollback staging (old bytes captured)
 - depends: edit-012
 
 ### [PLANNED] edit-015 — Rollback spill-to-temp for large ops
 - depends: edit-014
 
-### [PLANNED] edit-016 — Write grants registry (exclusive per file)
+### [IMPLEMENTED] edit-016 — Write grants registry (exclusive per file)
 - depends: —
 
-### [PLANNED] edit-017 — Grant overlap rejection at grant time
+### [IMPLEMENTED] edit-017 — Grant overlap rejection at grant time
 - depends: edit-016
 
 ### [PLANNED] edit-018 — No-fingerprint flag on blind writes

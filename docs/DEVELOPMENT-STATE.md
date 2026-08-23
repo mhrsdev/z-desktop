@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-23
 
+## ctx-007 Stale Rehydration — 2026-08-23 COMPLETE
+
+1. ✅ **ctx-007**: fingerprint.rs gains stale_reads(thread_id, root) —
+   diffs the registry against current disk, returning changed raw paths
+   (missing files skipped). context.rs: ContextItem.stale additive flag +
+   demote_if_stale(); assemble() now drops stale Ephemeral items FIRST.
+   runtime computes the stale set at turn start and marks items.
+
+Verification: full workspace suite green — **402 tests, 0 failed**
+(398 → 402). Ledger: 71 IMPLEMENTED.
+
+Next work continues → sup-007 fake-completion gating, mem-006 consolidation,
+or ui-040 evidence badges.
+
 ## orch-004/012 Budget Deadlines — 2026-08-23 COMPLETE
 
 1. ✅ **orch-004**: OrchCommand::EnqueueTask carries optional absolute

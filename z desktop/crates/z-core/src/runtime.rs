@@ -1187,6 +1187,7 @@ fn enforce_budget(msgs: Vec<StoredMessage>, budget: usize) -> Vec<StoredMessage>
             // allocator, text is only carried through).
             text: i.to_string(),
             est_tokens: stored_message_tokens(m),
+            stale: false,
         })
         .collect::<Vec<_>>();
     let mut keep: Vec<usize> = crate::context::assemble(items, budget)
@@ -1488,6 +1489,7 @@ mod budget_tests {
                     layer,
                     est_tokens: crate::tokens::estimate(&text) + 4,
                     text,
+                    stale: false,
                 }
             })
             .collect();

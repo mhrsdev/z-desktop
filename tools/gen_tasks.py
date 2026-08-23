@@ -275,7 +275,7 @@ DOMAINS = [
         ("004", "Compaction procedure (pinned facts + round summaries)", ["003"], "PLANNED"),
         ("005", "Idempotent compaction per span", ["004"], "PLANNED"),
         ("006", "Freshness metadata on context items", ["001"], "PLANNED"),
-        ("007", "Exact-source rehydration before edits", ["001", "edit-002"], "PLANNED"),
+        ("007", "Exact-source rehydration before edits", ["001", "edit-002"], "IMPLEMENTED"),
         ("008", "Context inspector panel data export", ["001", "ui-070"], "PLANNED"),
         ("009", "Priority weight settings (dev mode)", ["002", "set-002"], "PLANNED"),
         ("010", "Compaction journaling with token counts", ["004", "jour-001"], "PLANNED"),

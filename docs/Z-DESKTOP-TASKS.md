@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 68 |
+| IMPLEMENTED | 69 |
 | PARTIAL | 2 |
-| PLANNED | 653 |
+| PLANNED | 652 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -772,7 +772,7 @@
 ### [PLANNED] ctx-006 — Freshness metadata on context items
 - depends: ctx-001
 
-### [PLANNED] ctx-007 — Exact-source rehydration before edits
+### [IMPLEMENTED] ctx-007 — Exact-source rehydration before edits
 - depends: ctx-001, edit-002
 
 ### [PLANNED] ctx-008 — Context inspector panel data export

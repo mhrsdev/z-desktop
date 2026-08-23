@@ -73,6 +73,30 @@ pub fn peek_fingerprint(thread_id: &str, path: &str) -> Option<u64> {
     registry().lock().unwrap().get(&(thread_id.into(), path.into())).copied()
 }
 
+/// ctx-007: diff this thread's recorded reads against disk right now.
+/// Returns the raw registry paths under `root` whose CURRENT fingerprint
+/// differs from what `thread_id` last read (pass the same root shape the
+/// paths were recorded with). Unchanged files are skipped; files that
+/// vanished or fail to read are skipped too — a missing file is not
+/// "changed content" and the read tool surfaces ENOENT on its own.
+pub fn stale_reads(thread_id: &str, root: &Path) -> Vec<String> {
+    // Snapshot first, drop the guard before any file I/O (lock-order pitfall).
+    let snapshot: Vec<(String, u64)> = registry()
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|((t, p), _)| t == thread_id && Path::new(p).starts_with(root))
+        .map(|((_, p), fp)| (p.clone(), *fp))
+        .collect();
+    snapshot
+        .into_iter()
+        .filter_map(|(path, recorded)| match file_fingerprint(Path::new(&path)) {
+            Ok(current) if current != recorded => Some(path),
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +132,43 @@ mod tests {
         record_fingerprint("t2", "b.txt", 2);
         assert_eq!(take_fingerprint("t1", "b.txt"), Some(1));
         assert_eq!(take_fingerprint("t2", "b.txt"), Some(2));
+    }
+
+    #[test]
+    fn stale_reads_flags_changed_and_skips_unchanged_missing_and_out_of_root() {
+        let thread = format!("t-stale-{:x}", std::process::id());
+        let root = std::env::temp_dir().join(format!("zdt-stale-{:x}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        let changed = root.join("changed.txt");
+        let same = root.join("same.txt");
+        std::fs::write(&changed, b"v1").unwrap();
+        std::fs::write(&same, b"keep").unwrap();
+
+        // Real flow: record what the thread read, then disk moves on.
+        let changed_fp = file_fingerprint(&changed).unwrap();
+        record_fingerprint(&thread, &changed.to_string_lossy(), changed_fp);
+        std::fs::write(&changed, b"v2").unwrap();
+        let same_fp = file_fingerprint(&same).unwrap();
+        record_fingerprint(&thread, &same.to_string_lossy(), same_fp);
+        // Recorded but vanished since — skipped, not "stale".
+        record_fingerprint(&thread, &root.join("gone.txt").to_string_lossy(), 7);
+        // Wrong fingerprint OUTSIDE root — proves root scoping, not just luck.
+        let outside =
+            std::env::temp_dir().join(format!("zdt-stale-out-{:x}.txt", std::process::id()));
+        std::fs::write(&outside, b"outside").unwrap();
+        record_fingerprint(&thread, &outside.to_string_lossy(), 12345);
+
+        let stale = stale_reads(&thread, &root);
+        assert_eq!(
+            stale,
+            vec![changed.to_string_lossy().to_string()],
+            "only the genuinely changed in-root path is flagged"
+        );
+
+        // Another thread's view of the SAME changed file is independent.
+        assert!(stale_reads("no-such-thread", &root).is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(&outside);
     }
 }

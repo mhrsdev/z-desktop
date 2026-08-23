@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 23 |
+| IMPLEMENTED | 29 |
 | PARTIAL | 1 |
-| PLANNED | 699 |
+| PLANNED | 693 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -390,22 +390,22 @@
 ### [PLANNED] edit-007 — Concurrent-reader sees old-or-new test
 - depends: edit-004
 
-### [PLANNED] edit-008 — edit_patch tool definition + schema
+### [IMPLEMENTED] edit-008 — edit_patch tool definition + schema
 - depends: edit-003
 
-### [PLANNED] edit-009 — Patch block exact-match application
+### [IMPLEMENTED] edit-009 — Patch block exact-match application
 - depends: edit-008
 
-### [PLANNED] edit-010 — Whitespace-normalized fallback with warning
+### [IMPLEMENTED] edit-010 — Whitespace-normalized fallback with warning
 - depends: edit-009
 
-### [PLANNED] edit-011 — Missing-anchor clean failure (ZD-E-0061)
+### [IMPLEMENTED] edit-011 — Missing-anchor clean failure (ZD-E-0061)
 - depends: edit-009
 
-### [PLANNED] edit-012 — Multi-block sequential application
+### [IMPLEMENTED] edit-012 — Multi-block sequential application
 - depends: edit-009
 
-### [PLANNED] edit-013 — Whole-patch abort on any failure
+### [IMPLEMENTED] edit-013 — Whole-patch abort on any failure
 - depends: edit-012
 
 ### [PLANNED] edit-014 — Rollback staging (old bytes captured)

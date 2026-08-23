@@ -46,7 +46,7 @@ pub fn classify(name: &str, args: &Value) -> Risk {
         "fs_read" | "fs_list" | "fs_search" | "git_status" | "git_diff" | "git_log" => {
             Risk::ReadOnly
         }
-        "fs_write" => Risk::Write,
+        "fs_write" | "edit_patch" => Risk::Write,
         "terminal_exec" => Risk::Execute,
         _ => {
             // Unknown tools are treated as execute-risk: fail closed.
@@ -63,6 +63,10 @@ pub fn describe(name: &str, args: &Value) -> String {
         "fs_list" => fmt_arg(args, "path"),
         "fs_search" => format!("{} in {}", fmt_arg(args, "query"), fmt_arg(args, "path")),
         "fs_write" => fmt_arg(args, "path"),
+        "edit_patch" => {
+            let n = args.get("blocks").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0);
+            format!("{} block(s) in {}", n, fmt_arg(args, "path"))
+        }
         "terminal_exec" => fmt_arg(args, "command"),
         "git_status" | "git_diff" => fmt_arg(args, "path"),
         "git_log" => {
@@ -119,6 +123,26 @@ pub fn definitions() -> Vec<ToolDef> {
             parameters: obj(
                 json!({"path":{"type":"string"},"content":{"type":"string"}}),
                 &["path", "content"],
+            ),
+        },
+        ToolDef {
+            name: "edit_patch".into(),
+            description:
+                "Apply sequential search/replace blocks to a text file inside the project. \
+                 Each block's old text must match exactly (whitespace-tolerant fallback with a \
+                 note); if any block fails to match nothing is written."
+                    .into(),
+            parameters: obj(
+                json!({
+                    "path":{"type":"string"},
+                    "blocks":{"type":"array","items":{
+                        "type":"object",
+                        "properties":{"old":{"type":"string","description":"Exact existing text to find"},
+                                      "new":{"type":"string","description":"Replacement text"}},
+                        "required":["old","new"]}
+                    }
+                }),
+                &["path", "blocks"],
             ),
         },
         ToolDef {
@@ -221,6 +245,7 @@ pub fn execute(inv: ToolInvocation) -> ToolOutput {
         "fs_list" => fs_list(&inv),
         "fs_search" => fs_search(&inv),
         "fs_write" => fs_write(&inv),
+        "edit_patch" => edit_patch(&inv),
         "terminal_exec" => terminal_exec(&inv),
         "git_status" => git_status(&inv),
         "git_diff" => git_diff(&inv),
@@ -314,45 +339,168 @@ fn fs_search(inv: &ToolInvocation) -> ToolOutput {
     }
 }
 
+/// Shared safety path behind every content-writing tool (ADR-0010 #1/#2):
+/// scope check → fingerprint stale check (ZD-E-0060) → parent-dir creation →
+/// atomic temp+rename write (edit-004/005) → fingerprint re-arm. `raw_path`
+/// must be the model-supplied string so the registry lookup matches fs_read's.
+fn checked_write(inv: &ToolInvocation, raw_path: &str, bytes: &[u8]) -> Result<(), String> {
+    let path = scoped(inv.project_root, raw_path)?;
+    // edit-003 (ZD-E-0060): if this thread read the file before, the
+    // on-disk content must still match what it saw. Never-read files
+    // stay writable for now (blind writes; edit-018 flags them later).
+    if !inv.thread_id.is_empty() {
+        if let Some(expected) = crate::fingerprint::take_fingerprint(inv.thread_id, raw_path) {
+            match crate::fingerprint::file_fingerprint(&path) {
+                Ok(current) if current == expected => {}
+                _ => {
+                    return Err(
+                        "This file changed since it was read. Re-read it before editing.".into(),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // edit-005: route through the atomic temp+rename helper (ADR-0010)
+    // so a crash mid-write leaves old-or-new, never a truncated file.
+    crate::atomic_write::atomic_write(&path, bytes)?;
+    // Re-arm so consecutive agent writes don't trip against their own output.
+    if !inv.thread_id.is_empty() {
+        if let Ok(fp) = crate::fingerprint::file_fingerprint(&path) {
+            crate::fingerprint::record_fingerprint(inv.thread_id, raw_path, fp);
+        }
+    }
+    Ok(())
+}
+
 fn fs_write(inv: &ToolInvocation) -> ToolOutput {
     let result: Result<String, String> = (|| {
         let raw = fmt_arg(&inv.args, "path");
         let content = inv.args.get("content").and_then(Value::as_str).unwrap_or("");
-        let path = scoped(inv.project_root, &raw)?;
-        // edit-003 (ZD-E-0060): if this thread read the file before, the
-        // on-disk content must still match what it saw. Never-read files
-        // stay writable for now (blind writes; edit-018 flags them later).
-        if !inv.thread_id.is_empty() {
-            if let Some(expected) = crate::fingerprint::take_fingerprint(inv.thread_id, &raw) {
-                match crate::fingerprint::file_fingerprint(&path) {
-                    Ok(current) if current == expected => {}
-                    _ => {
-                        return Err(
-                            "This file changed since it was read. Re-read it before editing."
-                                .into(),
-                        );
-                    }
-                }
-            }
-        }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        // edit-005: route through the atomic temp+rename helper (ADR-0010)
-        // so a crash mid-write leaves old-or-new, never a truncated file.
-        crate::atomic_write::atomic_write(&path, content.as_bytes())?;
-        // Re-arm so consecutive agent writes don't trip against their own output.
-        if !inv.thread_id.is_empty() {
-            if let Ok(fp) = crate::fingerprint::file_fingerprint(&path) {
-                crate::fingerprint::record_fingerprint(inv.thread_id, &raw, fp);
-            }
-        }
+        checked_write(inv, &raw, content.as_bytes())?;
         Ok(format!("wrote {} bytes to {}", content.len(), raw))
     })();
     match result {
         Ok(text) => ToolOutput { ok: true, text },
         Err(e) => ToolOutput { ok: false, text: format!("fs_write failed: {e}") },
     }
+}
+
+/// edit_patch (edit-008..013, ADR-0010 #2): search/replace blocks applied
+/// sequentially against an IN-MEMORY copy of the file; any failed anchor
+/// aborts the whole patch before disk contact, so failure leaves zero
+/// partial state. Only after every block resolves does the buffer go
+/// through the same checked_write safety path as fs_write.
+fn edit_patch(inv: &ToolInvocation) -> ToolOutput {
+    let result: Result<String, String> = (|| {
+        let raw = fmt_arg(&inv.args, "path");
+        let arr = inv
+            .args
+            .get("blocks")
+            .and_then(Value::as_array)
+            .ok_or("missing blocks array")?;
+        let mut blocks: Vec<(&str, &str)> = Vec::with_capacity(arr.len());
+        for b in arr {
+            let old = b.get("old").and_then(Value::as_str).ok_or("each block needs \"old\"")?;
+            let new = b.get("new").and_then(Value::as_str).ok_or("each block needs \"new\"")?;
+            blocks.push((old, new));
+        }
+        let path = scoped(inv.project_root, &raw)?;
+        let mut content = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {raw}: {e}"))?;
+        let mut normalized_anywhere = false;
+        for (i, (old, new)) in blocks.iter().enumerate() {
+            match apply_block(&content, old, new) {
+                Some((next, used_normalization)) => {
+                    content = next;
+                    normalized_anywhere |= used_normalization;
+                }
+                None => {
+                    // ZD-E-0061: absent anchor fails the WHOLE patch; nothing
+                    // has touched disk because application was pure string work.
+                    return Err(format!(
+                        "Patch failed: block {} anchor not found — \
+                         The text to replace was not found in the file. No changes were applied.",
+                        i + 1
+                    ));
+                }
+            }
+        }
+        checked_write(inv, &raw, content.as_bytes())?;
+        let note = if normalized_anywhere { " (whitespace-normalized)" } else { "" };
+        Ok(format!("applied {} block(s){note} to {}", blocks.len(), raw))
+    })();
+    match result {
+        Ok(text) => ToolOutput { ok: true, text },
+        Err(e) => ToolOutput { ok: false, text: e },
+    }
+}
+
+/// Apply one search/replace block. Exact substring match first; otherwise a
+/// whitespace-normalised line match whose splice uses the ORIGINAL span
+/// boundaries, so untouched bytes keep their exact formatting. Returns
+/// `(new_content, used_normalization)` or `None` when the anchor is absent.
+fn apply_block(content: &str, old: &str, new: &str) -> Option<(String, bool)> {
+    if old.is_empty() {
+        // An empty anchor identifies nothing; refusing beats replacing at 0.
+        return None;
+    }
+    if let Some(pos) = content.find(old) {
+        let mut next = String::with_capacity(content.len());
+        next.push_str(&content[..pos]);
+        next.push_str(new);
+        next.push_str(&content[pos + old.len()..]);
+        return Some((next, false));
+    }
+    // Whitespace-normalised fallback: compare per line with runs of
+    // spaces/tabs collapsed and edges trimmed (ADR-0010 option 2c), then
+    // splice over the matched line window's original span.
+    let anchor: Vec<String> = old.lines().map(norm_line).collect();
+    let n = anchor.len();
+    if n == 0 {
+        return None;
+    }
+    let total_len = content.len();
+    let mut starts: Vec<usize> = vec![0];
+    for (i, b) in content.bytes().enumerate() {
+        if b == b'\n' {
+            starts.push(i + 1);
+        }
+    }
+    let line_count = starts.len();
+    // Byte end of line k, excluding its newline (or EOF).
+    let line_end = |k: usize| if k + 1 < line_count { starts[k + 1] - 1 } else { total_len };
+    for w in 0..line_count.saturating_sub(n - 1) {
+        if (0..n).all(|k| norm_line(&content[starts[w + k]..line_end(w + k)]) == anchor[k]) {
+            let s = starts[w];
+            let e = line_end(w + n - 1);
+            let mut next = String::with_capacity(content.len());
+            next.push_str(&content[..s]);
+            next.push_str(new);
+            next.push_str(&content[e..]);
+            return Some((next, true));
+        }
+    }
+    None
+}
+
+/// Collapse runs of spaces/tabs to one space and trim edges; other
+/// characters compare exactly.
+fn norm_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut sep = false;
+    for tok in line.split(|c| c == ' ' || c == '\t') {
+        if tok.is_empty() {
+            continue;
+        }
+        if sep {
+            out.push(' ');
+        }
+        out.push_str(tok);
+        sep = true;
+    }
+    out
 }
 
 fn terminal_exec(inv: &ToolInvocation) -> ToolOutput {
@@ -749,6 +897,171 @@ mod tests {
             thread_id: "t-other",
         });
         assert!(out.ok, "{}", out.text);
+    }
+
+    // ---- edit-008..013: edit_patch (ADR-0010 patch model) ----
+
+    #[test]
+    fn edit_patch_is_write_class_and_described_as_blocks_in_path() {
+        assert_eq!(classify("edit_patch", &json!({})), Risk::Write);
+        assert_eq!(
+            describe("edit_patch", &json!({"path": "a.rs", "blocks": [{"old": "x"}, {"old": "y"}]})),
+            "2 block(s) in a.rs"
+        );
+    }
+
+    #[test]
+    fn edit_patch_exact_single_block_replaces_in_place() {
+        let root = temp_root("ep-exact");
+        std::fs::write(root.join("code.rs"), "fn main() {\n    old_line();\n}\n").unwrap();
+        let out = execute(ToolInvocation {
+            name: "edit_patch",
+            args: json!({"path": "code.rs", "blocks": [
+                {"old": "old_line();", "new": "new_line();"}
+            ]}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert_eq!(
+            std::fs::read_to_string(root.join("code.rs")).unwrap(),
+            "fn main() {\n    new_line();\n}\n"
+        );
+        assert!(!out.text.contains("whitespace-normalized"), "{}", out.text);
+    }
+
+    #[test]
+    fn edit_patch_multi_block_applies_sequentially_in_memory() {
+        // Block 2's anchor only exists AFTER block 1's replacement, so this
+        // fails unless blocks apply in order against the evolving buffer.
+        let root = temp_root("ep-multi");
+        std::fs::write(root.join("seq.txt"), "one\ntwo\n").unwrap();
+        let out = execute(ToolInvocation {
+            name: "edit_patch",
+            args: json!({"path": "seq.txt", "blocks": [
+                {"old": "one", "new": "two"},
+                {"old": "two\ntwo", "new": "three"}
+            ]}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert_eq!(std::fs::read_to_string(root.join("seq.txt")).unwrap(), "three\n");
+    }
+
+    #[test]
+    fn edit_patch_whitespace_fallback_matches_on_indent_drift_and_says_so() {
+        let root = temp_root("ep-ws");
+        std::fs::write(root.join("indented.rs"), "fn main() {\n    let x = 1;\n}\n").unwrap();
+        // Anchor written with tab indentation and trailing spaces: no exact
+        // match exists, but the normalized lines do.
+        let out = execute(ToolInvocation {
+            name: "edit_patch",
+            args: json!({"path": "indented.rs", "blocks": [
+                {"old": "\tlet x = 1;   ", "new": "    let x = 2;"}
+            ]}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert!(out.text.contains("(whitespace-normalized)"), "{}", out.text);
+        assert_eq!(
+            std::fs::read_to_string(root.join("indented.rs")).unwrap(),
+            "fn main() {\n    let x = 2;\n}\n"
+        );
+    }
+
+    #[test]
+    fn edit_patch_missing_anchor_aborts_whole_patch_with_no_partial_state() {
+        let root = temp_root("ep-abort");
+        let original = "alpha\nbeta\n";
+        std::fs::write(root.join("f.txt"), original).unwrap();
+        let out = execute(ToolInvocation {
+            name: "edit_patch",
+            args: json!({"path": "f.txt", "blocks": [
+                {"old": "alpha", "new": "CHANGED"},
+                {"old": "this anchor is absent", "new": "whatever"}
+            ]}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(!out.ok);
+        assert!(
+            out.text.contains("Patch failed: block 2 anchor not found"),
+            "{}",
+            out.text
+        );
+        assert!(
+            out.text.contains("The text to replace was not found in the file."),
+            "{}",
+            out.text
+        );
+        assert!(out.text.contains("No changes were applied"), "{}", out.text);
+        // Block 1 must NOT have leaked to disk: all-or-nothing.
+        assert_eq!(std::fs::read_to_string(root.join("f.txt")).unwrap(), original);
+
+        // Empty block list is a clean no-op success.
+        let out = execute(ToolInvocation {
+            name: "edit_patch",
+            args: json!({"path": "f.txt", "blocks": []}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert_eq!(std::fs::read_to_string(root.join("f.txt")).unwrap(), original);
+    }
+
+    #[test]
+    fn edit_patch_stale_write_is_refused_through_the_shared_safety_path() {
+        // edit-003 rides along: read -> external modification -> patch refused.
+        // The external edit keeps the anchor text present, so application
+        // succeeds and the refusal comes from the fingerprint check itself.
+        let root = temp_root("ep-stale");
+        std::fs::write(root.join("guarded.txt"), "keep me\n").unwrap();
+        execute(ToolInvocation {
+            name: "fs_read",
+            args: json!({"path": "guarded.txt"}),
+            project_root: &root,
+            thread_id: "t-ep",
+        });
+        std::fs::write(root.join("guarded.txt"), "keep me\n// user note\n").unwrap();
+        let out = execute(ToolInvocation {
+            name: "edit_patch",
+            args: json!({"path": "guarded.txt", "blocks": [
+                {"old": "keep me", "new": "replaced"}
+            ]}),
+            project_root: &root,
+            thread_id: "t-ep",
+        });
+        assert!(!out.ok, "stale patch must be refused");
+        assert!(out.text.contains("changed since it was read"), "{}", out.text);
+        assert_eq!(
+            std::fs::read_to_string(root.join("guarded.txt")).unwrap(),
+            "keep me\n// user note\n",
+            "user work must be untouched"
+        );
+
+        // Re-read arms the fingerprint and the same patch now applies,
+        // preserving the user's added line.
+        execute(ToolInvocation {
+            name: "fs_read",
+            args: json!({"path": "guarded.txt"}),
+            project_root: &root,
+            thread_id: "t-ep",
+        });
+        let out = execute(ToolInvocation {
+            name: "edit_patch",
+            args: json!({"path": "guarded.txt", "blocks": [
+                {"old": "keep me", "new": "replaced"}
+            ]}),
+            project_root: &root,
+            thread_id: "t-ep",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert_eq!(
+            std::fs::read_to_string(root.join("guarded.txt")).unwrap(),
+            "replaced\n// user note\n"
+        );
     }
 
     // ---- edit-022..024: read-only git tools (real temp repos) ----

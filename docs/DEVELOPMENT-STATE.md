@@ -6,6 +6,29 @@
 
 Last updated: 2026-08-23
 
+## edit_patch Tool + ADR-0011 (2026-08-23) — COMPLETE
+
+1. ✅ **edit-008..013**: `edit_patch` tool — multi-block sequential patching
+   against an in-memory copy: exact substring match per block, then a narrow
+   whitespace-normalized fallback (summary notes the normalization); missing
+   anchor aborts the WHOLE patch before disk contact with the ZD-E-0061
+   message; safety path shared with fs_write via one extracted
+   `checked_write` (scope → fingerprint stale-check → parent dirs → atomic
+   write → re-arm). Wired into definitions/classify(Write)/describe.
+2. ✅ **ADR-0011** (`docs/adr/0011-settings-and-provider-router.md`):
+   settings in versioned `data/settings.json` ({version, values}) keyed by
+   spec ids, schema-owned defaults, snapshot cache access (Mutex<Arc> cloned
+   once per turn, mirroring ADR-0009 semantics); provider router = registry +
+   failover hook seams behind the existing single-active ConfigureProvider,
+   keeping protocol additive. Unblocks set-002/003 → core-011/012/015 and
+   prov-004..008.
+
+Verification: full workspace suite green — **322 tests, 0 failed**
+(316 → 322). Ledger: 31 IMPLEMENTED.
+
+Next work continues → set-002/003 + core-011/012 wiring (settings now have
+a contract), then edit-014..018 (rollback staging, write grants).
+
 ## Atomic Writes + Git Read Tools (2026-08-23) — COMPLETE
 
 1. ✅ **edit-004/005**: `z-core/src/atomic_write.rs` — same-dir temp

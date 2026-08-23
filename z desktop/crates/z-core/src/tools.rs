@@ -43,7 +43,9 @@ pub struct ToolInvocation<'a> {
 /// Classify a tool call's risk before it runs.
 pub fn classify(name: &str, args: &Value) -> Risk {
     match name {
-        "fs_read" | "fs_list" | "fs_search" => Risk::ReadOnly,
+        "fs_read" | "fs_list" | "fs_search" | "git_status" | "git_diff" | "git_log" => {
+            Risk::ReadOnly
+        }
         "fs_write" => Risk::Write,
         "terminal_exec" => Risk::Execute,
         _ => {
@@ -62,6 +64,11 @@ pub fn describe(name: &str, args: &Value) -> String {
         "fs_search" => format!("{} in {}", fmt_arg(args, "query"), fmt_arg(args, "path")),
         "fs_write" => fmt_arg(args, "path"),
         "terminal_exec" => fmt_arg(args, "command"),
+        "git_status" | "git_diff" => fmt_arg(args, "path"),
+        "git_log" => {
+            let n = args.get("limit").and_then(Value::as_u64).unwrap_or(20);
+            format!("last {n} commits")
+        }
         _ => name.to_string(),
     }
 }
@@ -127,6 +134,33 @@ pub fn definitions() -> Vec<ToolDef> {
                 &["command"],
             ),
         },
+        ToolDef {
+            name: "git_status".into(),
+            description:
+                "Show the current git branch and working-tree changes (read-only summary).".into(),
+            parameters: obj(
+                json!({"path":{"type":"string","description":"Repo directory inside the project, default '.'"}}),
+                &[],
+            ),
+        },
+        ToolDef {
+            name: "git_diff".into(),
+            description:
+                "Summarise unstaged changes against the index: added/deleted line counts per file."
+                    .into(),
+            parameters: obj(
+                json!({"path":{"type":"string","description":"Repo directory inside the project, default '.'"}}),
+                &[],
+            ),
+        },
+        ToolDef {
+            name: "git_log".into(),
+            description: "List recent commits: short hash, author, unix timestamp, subject.".into(),
+            parameters: obj(
+                json!({"limit":{"type":"integer","description":"Max commits, clamped to 1..=100, default 20"}}),
+                &[],
+            ),
+        },
     ]
 }
 
@@ -188,6 +222,9 @@ pub fn execute(inv: ToolInvocation) -> ToolOutput {
         "fs_search" => fs_search(&inv),
         "fs_write" => fs_write(&inv),
         "terminal_exec" => terminal_exec(&inv),
+        "git_status" => git_status(&inv),
+        "git_diff" => git_diff(&inv),
+        "git_log" => git_log(&inv),
         other => ToolOutput { ok: false, text: format!("unknown tool {other:?}") },
     }
 }
@@ -301,7 +338,9 @@ fn fs_write(inv: &ToolInvocation) -> ToolOutput {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        // edit-005: route through the atomic temp+rename helper (ADR-0010)
+        // so a crash mid-write leaves old-or-new, never a truncated file.
+        crate::atomic_write::atomic_write(&path, content.as_bytes())?;
         // Re-arm so consecutive agent writes don't trip against their own output.
         if !inv.thread_id.is_empty() {
             if let Ok(fp) = crate::fingerprint::file_fingerprint(&path) {
@@ -351,6 +390,152 @@ fn terminal_exec(inv: &ToolInvocation) -> ToolOutput {
             ToolOutput { ok: !outcome.timed_out && outcome.code == Some(0), text: bound(text) }
         }
         Err(e) => ToolOutput { ok: false, text: format!("terminal_exec failed: {e}") },
+    }
+}
+
+/// Single git facade (ADR-0008): direct argv via `std::process::Command`,
+/// never shell strings; machine-readable output flags only; `LC_ALL=C` set
+/// defensively; the exit code is authoritative. This is the sole place the
+/// core spawns git (edit-028 will pin that invariant).
+fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("LC_ALL", "C")
+        // Reads must never refresh or take the index lock (ADR-0008 §3).
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .map_err(|_| "not a git repository (or git not found)".to_string())?;
+    if !out.status.success() {
+        let detail = String::from_utf8_lossy(&out.stderr);
+        let detail = detail.trim();
+        return Err(if detail.is_empty() {
+            "not a git repository (or git not found)".into()
+        } else {
+            detail.to_string()
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+fn git_status(inv: &ToolInvocation) -> ToolOutput {
+    let result: Result<String, String> = (|| {
+        let raw = inv.args.get("path").and_then(Value::as_str).unwrap_or(".");
+        let dir = scoped(inv.project_root, raw)?;
+        let out = run_git(&dir, &["status", "--porcelain=v2", "--branch", "-z"])?;
+        // edit-022: decode `--porcelain=v2 -z`. Records are NUL-separated;
+        // rename/unmerged entries carry extra path fields as their own NUL
+        // tokens, which fail the shape checks below and are skipped.
+        let mut branch = String::from("(unknown)");
+        let mut ahead_behind = String::new();
+        let mut entries: Vec<String> = Vec::new();
+        for rec in out.split('\0').filter(|r| !r.is_empty()) {
+            if let Some(rest) = rec.strip_prefix("# ") {
+                if let Some(name) = rest.strip_prefix("branch.head ") {
+                    branch = name.to_string();
+                } else if let Some(ab) = rest.strip_prefix("branch.ab ") {
+                    // "+1 -2" -> "ahead 1, behind 2"
+                    ahead_behind = ab.replace('+', "ahead ").replace('-', ", behind ");
+                }
+                continue;
+            }
+            let (code, path) = match rec.split_once(' ') {
+                Some(("?", p)) | Some(("!", p)) => ("??", p),
+                Some((kind @ ("1" | "2" | "u"), _)) => {
+                    // Fixed-field prefix lengths before the path:
+                    // 1 -> 9 fields, 2 (rename) -> 10, u (unmerged) -> 11.
+                    let fixed = match kind {
+                        "1" => 9,
+                        "2" => 10,
+                        _ => 11,
+                    };
+                    let mut parts = rec.splitn(fixed, ' ');
+                    let xy = parts.nth(1).unwrap_or("");
+                    (xy, parts.last().unwrap_or(""))
+                }
+                _ => continue,
+            };
+            entries.push(format!("{} {}", code.replace('.', " "), path));
+        }
+        let mut text = format!("branch {branch}");
+        if !ahead_behind.is_empty() {
+            text.push_str(&format!(" [{ahead_behind}]"));
+        }
+        if entries.is_empty() {
+            text.push_str("\nclean");
+        } else {
+            for e in entries.iter().take(100) {
+                text.push('\n');
+                text.push_str(e);
+            }
+            if entries.len() > 100 {
+                text.push_str(&format!("\n+{} more", entries.len() - 100));
+            }
+        }
+        Ok(text)
+    })();
+    match result {
+        Ok(text) => ToolOutput { ok: true, text },
+        Err(e) => ToolOutput { ok: false, text: format!("git_status failed: {e}") },
+    }
+}
+
+fn is_numstat_count(s: &str) -> bool {
+    s == "-" || s.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn git_diff(inv: &ToolInvocation) -> ToolOutput {
+    let result: Result<String, String> = (|| {
+        let raw = inv.args.get("path").and_then(Value::as_str).unwrap_or(".");
+        let dir = scoped(inv.project_root, raw)?;
+        let out = run_git(&dir, &["diff", "--numstat", "-z"])?;
+        // edit-023: numstat -z records are "<added>\t<deleted>\t<path>",
+        // NUL-terminated; rename records repeat the original path as an
+        // extra NUL token without count fields, failing the shape check.
+        let mut lines: Vec<String> = Vec::new();
+        for rec in out.split('\0').filter(|r| !r.is_empty()) {
+            let f: Vec<&str> = rec.split('\t').collect();
+            if f.len() < 3 || !is_numstat_count(f[0]) || !is_numstat_count(f[1]) {
+                continue;
+            }
+            lines.push(format!("{} {} {}", f[0], f[1], f[2]));
+        }
+        let mut text = String::new();
+        for l in lines.iter().take(200) {
+            text.push_str(l);
+            text.push('\n');
+        }
+        text.push_str(&format!("{} files changed", lines.len()));
+        Ok(text)
+    })();
+    match result {
+        Ok(text) => ToolOutput { ok: true, text },
+        Err(e) => ToolOutput { ok: false, text: format!("git_diff failed: {e}") },
+    }
+}
+
+fn git_log(inv: &ToolInvocation) -> ToolOutput {
+    let result: Result<String, String> = (|| {
+        let raw = inv.args.get("path").and_then(Value::as_str).unwrap_or(".");
+        let dir = scoped(inv.project_root, raw)?;
+        let limit =
+            inv.args.get("limit").and_then(Value::as_u64).unwrap_or(20).clamp(1, 100).to_string();
+        let out =
+            run_git(&dir, &["log", "-n", limit.as_str(), "--format=%H%x00%h%x00%an%x00%at%x00%s%x00"])?;
+        // edit-024: each commit emits five NUL-separated tokens (full hash,
+        // short hash, author, unix time, subject) and the trailing %x00 ends
+        // the record, so chunks-of-five decode it directly.
+        let mut lines: Vec<String> = Vec::new();
+        for c in out.split('\0').collect::<Vec<_>>().chunks(5) {
+            if c.len() == 5 && !c[0].is_empty() {
+                lines.push(format!("{} {} {} {}", c[1], c[2], c[3], c[4]));
+            }
+        }
+        Ok(lines.join("\n"))
+    })();
+    match result {
+        Ok(text) => ToolOutput { ok: true, text },
+        Err(e) => ToolOutput { ok: false, text: format!("git_log failed: {e}") },
     }
 }
 
@@ -564,5 +749,143 @@ mod tests {
             thread_id: "t-other",
         });
         assert!(out.ok, "{}", out.text);
+    }
+
+    // ---- edit-022..024: read-only git tools (real temp repos) ----
+
+    fn git_available() -> bool {
+        std::process::Command::new("git").arg("--version").output().is_ok()
+    }
+
+    /// Direct-argv git runner for test setup (same discipline as the facade).
+    fn git(repo: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .env("LC_ALL", "C")
+            .output()
+            .expect("git binary should exist");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Throwaway repo with one commit; None makes callers skip gracefully
+    /// when no git binary is installed.
+    fn temp_repo(tag: &str) -> Option<PathBuf> {
+        if !git_available() {
+            return None;
+        }
+        let dir = temp_root(tag);
+        git(&dir, &["init"]);
+        git(&dir, &["config", "user.email", "agent@example.com"]);
+        git(&dir, &["config", "user.name", "Agent"]);
+        std::fs::write(dir.join("file.txt"), "one\n").unwrap();
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-m", "initial commit"]);
+        Some(dir)
+    }
+
+    #[test]
+    fn git_read_tools_are_classified_read_only_and_described() {
+        for name in ["git_status", "git_diff", "git_log"] {
+            assert_eq!(classify(name, &json!({})), Risk::ReadOnly, "{name}");
+        }
+        assert_eq!(describe("git_status", &json!({"path": "."})), ".");
+        assert_eq!(
+            describe("git_log", &json!({"limit": 7})),
+            "last 7 commits"
+        );
+    }
+
+    #[test]
+    fn git_status_reports_branch_then_clean_tree_after_commit() {
+        let Some(root) = temp_repo("gstatus") else { return };
+        let out = execute(ToolInvocation {
+            name: "git_status",
+            args: json!({}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert!(out.text.starts_with("branch "), "{}", out.text);
+        assert!(out.text.contains("clean"), "{}", out.text);
+
+        // Untracked and modified files both surface as entries.
+        std::fs::write(root.join("new.txt"), "x").unwrap();
+        std::fs::write(root.join("file.txt"), "two\n").unwrap();
+        let out = execute(ToolInvocation {
+            name: "git_status",
+            args: json!({"path": "."}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert!(out.text.contains("?? new.txt"), "{}", out.text);
+        assert!(out.text.contains("file.txt"), "{}", out.text);
+    }
+
+    #[test]
+    fn git_status_fails_cleanly_outside_a_repository() {
+        let root = temp_root("nonrepo"); // never git-inited
+        let out = execute(ToolInvocation {
+            name: "git_status",
+            args: json!({}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(!out.ok);
+        assert!(out.text.starts_with("git_status failed:"), "{}", out.text);
+    }
+
+    #[test]
+    fn git_diff_is_empty_after_commit_and_counts_unstaged_edits() {
+        let Some(root) = temp_repo("gdiff") else { return };
+        let out = execute(ToolInvocation {
+            name: "git_diff",
+            args: json!({}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert!(out.text.contains("0 files changed"), "{}", out.text);
+
+        // A +2/-0 unstaged edit shows as "2 0 <path>".
+        std::fs::write(root.join("file.txt"), "one\ntwo\nthree\n").unwrap();
+        let out = execute(ToolInvocation {
+            name: "git_diff",
+            args: json!({"path": "."}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert!(out.text.contains("2 0 file.txt"), "{}", out.text);
+        assert!(out.text.ends_with("files changed"), "{}", out.text);
+    }
+
+    #[test]
+    fn git_log_lists_commits_and_clamps_limit() {
+        let Some(root) = temp_repo("glog") else { return };
+        let out = execute(ToolInvocation {
+            name: "git_log",
+            args: json!({"limit": 5}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert_eq!(out.text.lines().count(), 1, "{}", out.text);
+        assert!(out.text.contains("initial commit"), "{}", out.text);
+
+        // An absurd limit clamps into the 1..=100 window instead of erroring.
+        let out = execute(ToolInvocation {
+            name: "git_log",
+            args: json!({"limit": 99_999}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert!(out.text.lines().count() <= 100);
     }
 }

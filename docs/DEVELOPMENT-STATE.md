@@ -6,6 +6,28 @@
 
 Last updated: 2026-08-23
 
+## Atomic Writes + Git Read Tools (2026-08-23) — COMPLETE
+
+1. ✅ **edit-004/005**: `z-core/src/atomic_write.rs` — same-dir temp
+   (`.{name}.{pid}.{n}.tmp`) → write → `sync_all` → rename; Windows rename
+   retried 5×50 ms for sharing violations; Unix best-effort parent-dir
+   sync after rename; temp removed on every error path. `fs_write` routes
+   through it (fingerprint stale-check/re-arm untouched). Race test: 8
+   readers × 50 writes — every observed read is old-or-new, never partial.
+2. ✅ **edit-022..024**: git_status / git_diff / git_log read tools behind
+   a single `run_git` facade per ADR-0008 — direct argv only, LC_ALL=C,
+   GIT_OPTIONAL_LOCKS=0 on reads, exit code authoritative, stderr carried
+   into failure messages. porcelain=v2 -z status, numstat -z diff,
+   %H%x00-separated log with clamped limits. classify() = ReadOnly.
+   Tests use real temp repos (git init + commit) and skip cleanly if git
+   is absent.
+
+Verification: full workspace suite green — **316 tests, 0 failed**
+(307 → 316). Ledger: 25 IMPLEMENTED.
+
+Next work continues → edit-006/007 crash-simulation tests for the atomic
+path, then edit-008+ patch tool (edit_patch) per ADR-0010.
+
 ## Safe-Editing Foundation + ADR-0010 (2026-08-23) — COMPLETE
 
 1. ✅ **edit-001**: `z-core/src/fingerprint.rs` — hand-rolled FNV-1a 64-bit

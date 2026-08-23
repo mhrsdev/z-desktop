@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 18 |
+| IMPLEMENTED | 23 |
 | PARTIAL | 1 |
-| PLANNED | 704 |
+| PLANNED | 699 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -378,10 +378,10 @@
 ### [IMPLEMENTED] edit-003 — Stale-write refusal (ZD-E-0060)
 - depends: edit-002
 
-### [PLANNED] edit-004 — Atomic write helper (temp+rename+fsync)
+### [IMPLEMENTED] edit-004 — Atomic write helper (temp+rename+fsync)
 - depends: —
 
-### [PLANNED] edit-005 — fs_write routes through atomic helper
+### [IMPLEMENTED] edit-005 — fs_write routes through atomic helper
 - depends: edit-004
 
 ### [PLANNED] edit-006 — Crash-simulation test for atomic writes
@@ -432,13 +432,13 @@
 ### [PLANNED] edit-021 — Binary file diff placeholder
 - depends: edit-019
 
-### [PLANNED] edit-022 — git_status read tool
+### [IMPLEMENTED] edit-022 — git_status read tool
 - depends: —
 
-### [PLANNED] edit-023 — git_diff read tool
+### [IMPLEMENTED] edit-023 — git_diff read tool
 - depends: edit-022
 
-### [PLANNED] edit-024 — git_log read tool
+### [IMPLEMENTED] edit-024 — git_log read tool
 - depends: edit-022
 
 ### [IMPLEMENTED] edit-025 — git library vs shell-out decision ADR

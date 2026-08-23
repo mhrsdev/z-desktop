@@ -6,6 +6,24 @@
 
 Last updated: 2026-08-23
 
+## mem-001..004 Memory Architecture — 2026-08-23 COMPLETE
+
+1. ✅ **mem-001/003**: `z-core/src/memory.rs` — MemoryRecord
+   {id, layer, content, provenance{kind, ref, thread_id, turn_id, ts_ms},
+   confidence, status, superseded_by}; constructor enforces non-empty
+   provenance and 0..=1 confidence (Result, never panic). record() appends
+   additive JournalKind::MemoryRecorded events best-effort.
+2. ✅ **mem-002**: MemoryStore writes per-layer last-line-wins JSONL views
+   under data/memory/<layer>.jsonl; journal remains the fail-loud truth.
+3. ✅ **mem-004**: MemoryView::fold over the journal; live() returns
+   Promoted, non-superseded tips only.
+
+Verification: full workspace suite green — **379 tests, 0 failed**
+(373 → 379). Ledger: 64 IMPLEMENTED.
+
+Next work continues → mem-005 candidate extraction from journaled turns,
+mem-006 consolidation pass, or core-021/022 thread management.
+
 ## ui-030 Sidebar Scaffold — 2026-08-23 COMPLETE
 
 1. ✅ **ui-030**: WorkspaceView gains `sidebar_items: Vec<(label, hint)>`

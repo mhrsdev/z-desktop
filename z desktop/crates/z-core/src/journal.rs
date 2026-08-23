@@ -47,6 +47,9 @@ pub enum JournalKind {
     /// A supervision evidence record was captured (sup-001/sup-002, ADR-0016;
     /// folded by the EvidenceView reducer).
     EvidenceRecorded,
+    /// A memory record was written (mem-001, ADR-0014; folded by the
+    /// MemoryView reducer into the per-layer JSONL views).
+    MemoryRecorded,
     /// Escape hatch for kinds this build does not know yet.
     Other(String),
 }
@@ -60,6 +63,7 @@ impl JournalKind {
             JournalKind::MessagePersisted => "message_persisted",
             JournalKind::TaskStateChanged => "task_state_changed",
             JournalKind::EvidenceRecorded => "evidence_recorded",
+            JournalKind::MemoryRecorded => "memory_recorded",
             JournalKind::Other(s) => s.as_str(),
         }
     }
@@ -72,6 +76,7 @@ impl JournalKind {
             "message_persisted" => JournalKind::MessagePersisted,
             "task_state_changed" => JournalKind::TaskStateChanged,
             "evidence_recorded" => JournalKind::EvidenceRecorded,
+            "memory_recorded" => JournalKind::MemoryRecorded,
             _ => JournalKind::Other(s),
         }
     }
@@ -348,6 +353,11 @@ mod journal_tests {
                 JournalKind::EvidenceRecorded,
                 Some("thread-1".into()),
                 json!({"id": "ev-1", "kind": "build", "ok": true}),
+            ),
+            RecordDraft::new(
+                JournalKind::MemoryRecorded,
+                Some("thread-1".into()),
+                json!({"id": "mem-1", "content": "project uses pnpm"}),
             ),
         ]
     }

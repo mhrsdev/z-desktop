@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 58 |
+| IMPLEMENTED | 62 |
 | PARTIAL | 1 |
-| PLANNED | 664 |
+| PLANNED | 660 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -692,16 +692,16 @@
 
 ## Memory Architecture (`mem-*`)
 
-### [PLANNED] mem-001 — Memory record schema + store layout
+### [IMPLEMENTED] mem-001 — Memory record schema + store layout
 - depends: —
 
-### [PLANNED] mem-002 — Layer stores (project/semantic/episodic)
+### [IMPLEMENTED] mem-002 — Layer stores (project/semantic/episodic)
 - depends: mem-001
 
-### [PLANNED] mem-003 — Provenance + confidence fields enforced
+### [IMPLEMENTED] mem-003 — Provenance + confidence fields enforced
 - depends: mem-001
 
-### [PLANNED] mem-004 — Superseding chain support
+### [IMPLEMENTED] mem-004 — Superseding chain support
 - depends: mem-001
 
 ### [PLANNED] mem-005 — Candidate extraction from journaled turns

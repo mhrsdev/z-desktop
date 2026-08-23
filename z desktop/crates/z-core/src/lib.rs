@@ -8,6 +8,7 @@
 pub mod context;
 pub mod evidence;
 pub mod journal;
+pub mod memory;
 pub mod provider;
 pub mod redact;
 pub mod reducer;

@@ -50,6 +50,10 @@ pub struct WorkspaceView {
     pub steering_depth: u32,
     /// Tool call awaiting approval, if any.
     pub pending_approval: Option<PendingApproval>,
+    /// Project index summary for the sidebar's lower section (ui-030):
+    /// (label, hint) rows mirrored from `ProjectIndexed` events. Empty until
+    /// the runtime indexes a project; the view invents nothing.
+    pub sidebar_items: Vec<(String, String)>,
     /// Called when the user sends the composer text.
     pub on_send: Option<Box<dyn FnMut(String)>>,
     /// Called when the user resolves a pending approval.
@@ -177,6 +181,7 @@ impl WorkspaceView {
             steering_depth: 0,
             status_line: "Z Desktop Personal".into(),
             pending_approval: None,
+            sidebar_items: Vec::new(),
             on_send: None,
             on_resolve: None,
         }
@@ -1211,6 +1216,38 @@ impl WorkspaceView {
                 .selected(selected),
             );
             y = row.bottom() + 2.0;
+        }
+
+        // Project index rows (ui-030): counts mirrored from `ProjectIndexed`
+        // by App. Hidden in icon-only mode, where a two-part row cannot fit,
+        // and capped above the pinned Settings row instead of overlapping it.
+        if !icon_only {
+            let section_bottom = rail.bottom() - Spacing::S3 - row_height;
+            let width = rail.width - Spacing::S4;
+            for (label, hint) in &self.sidebar_items {
+                if y + 40.0 > section_bottom {
+                    break;
+                }
+                scene.push_text(
+                    Layer::Content,
+                    TextRun::new(
+                        label.clone(),
+                        Rect::new(rail.x + Spacing::S2, y, width, 22.0),
+                        Typography::BASE,
+                        c.text_secondary,
+                    ),
+                );
+                scene.push_text(
+                    Layer::Content,
+                    TextRun::new(
+                        hint.clone(),
+                        Rect::new(rail.x + Spacing::S2, y + 20.0, width, 18.0),
+                        Typography::LABEL,
+                        c.text_tertiary,
+                    ),
+                );
+                y += 40.0;
+            }
         }
 
         // Settings is pinned to the foot of the rail, away from the scroll list.
@@ -3577,5 +3614,44 @@ mod tests {
         assert!(wrapped_line_count("", 100.0, 14.0) >= 1.0);
         assert!(wrapped_line_count("hello", 0.0, 14.0) >= 1.0);
         assert!(wrapped_line_count("hello", -5.0, 14.0) >= 1.0);
+    }
+
+    #[test]
+    fn sidebar_index_rows_draw_as_text_inside_the_rail() {
+        let mut view = WorkspaceView::new();
+        view.sidebar_items = vec![("Project".into(), "12 files · 340 symbols".into())];
+        let viewport = Rect::new(0.0, 0.0, 1536.0, 1024.0);
+        // build() walks every registered panel through render_panel
+        // (ADR-0019 D3), so this exercises the Sidebar arm directly.
+        let scene = view.build(viewport);
+        let rail = px(view.workspace.frame(1536.0, 1024.0).rect(PanelId::Sidebar));
+
+        let in_rail: Vec<&TextRun> = scene
+            .texts()
+            .filter(|t| {
+                t.bounds.x >= rail.x - 0.01
+                    && t.bounds.right() <= rail.right() + 0.01
+                    && t.bounds.y >= rail.y - 0.01
+                    && t.bounds.bottom() <= rail.bottom() + 0.01
+            })
+            .collect();
+        assert!(
+            in_rail.iter().any(|t| t.text == "12 files · 340 symbols"),
+            "the sidebar item hint should render as a text run inside the rail"
+        );
+        assert!(
+            in_rail.iter().any(|t| t.text == "Project"),
+            "the sidebar item label should render as a text run inside the rail"
+        );
+    }
+
+    #[test]
+    fn an_unindexed_project_draws_no_sidebar_rows() {
+        let mut view = WorkspaceView::new();
+        let scene = view.build(Rect::new(0.0, 0.0, 1536.0, 1024.0));
+        assert!(
+            !scene.texts().any(|t| t.text.contains(" indexed")),
+            "the view must not invent index counts the runtime never sent"
+        );
     }
 }

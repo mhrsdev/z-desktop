@@ -163,6 +163,11 @@ impl App {
                     content::ContextEntry { label: "Symbols", count: symbols as u32 },
                 ];
                 self.view.status_line = format!("indexed {path}: {files} files, {symbols} symbols");
+                // ui-030: mirror the fresh index into the sidebar rows.
+                self.view.sidebar_items = vec![
+                    ("Files".into(), format!("{files} indexed")),
+                    ("Symbols".into(), format!("{symbols} indexed")),
+                ];
                 true
             }
             Event::TextDone { .. } => false,

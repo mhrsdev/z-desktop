@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 57 |
+| IMPLEMENTED | 58 |
 | PARTIAL | 1 |
-| PLANNED | 665 |
+| PLANNED | 664 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -2119,7 +2119,7 @@
 ### [PLANNED] ui-022 — Component library: splitter
 - depends: ui-020
 
-### [PLANNED] ui-030 — Sidebar panel scaffold
+### [IMPLEMENTED] ui-030 — Sidebar panel scaffold
 - depends: ui-020
 
 ### [PLANNED] ui-040 — Evidence badge components

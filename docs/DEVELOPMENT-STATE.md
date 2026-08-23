@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-23
 
+## ui-030 Sidebar Scaffold — 2026-08-23 COMPLETE
+
+1. ✅ **ui-030**: WorkspaceView gains `sidebar_items: Vec<(label, hint)>`
+   mirrored from ProjectIndexed (view invents nothing); the ADR-0019
+   dispatch arm draws nav rows plus index summary rows (label in BASE,
+   hint in LABEL typography) inside frame.rect(PanelId::Sidebar).
+   Visual suite stays green.
+
+Verification: full workspace suite green — **373 tests, 0 failed**
+(371 → 373). Ledger: 60 IMPLEMENTED.
+
+Next work continues → ui-040 evidence badges, mem-006..009 memory stores
+per ADR-0014, or core-021/022 thread management commands.
+
 ## idx-004 Tree-Sitter Rust Grammar — 2026-08-23 COMPLETE
 
 1. ✅ **idx-004**: first authorized dependency add per ADR-0007 —

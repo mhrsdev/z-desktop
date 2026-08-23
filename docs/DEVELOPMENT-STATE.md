@@ -6,6 +6,23 @@
 
 Last updated: 2026-08-23
 
+## sup-009/010/011 Detectors — 2026-08-23 COMPLETE
+
+1. ✅ **sup-009/010**: detect_unexecuted_tests/build — a success claim of
+   that kind with zero same-turn evidence of the kind (failed evidence
+   still counts as executed).
+2. ✅ **sup-011**: detect_ignored_failures — failing Tests evidence plus a
+   success phrase in the final text.
+3. run_turn supervision block warns naming fired detectors; unexecuted
+   kinds extend the sup-007 blocked reason ([detectors: …]); gating
+   behavior otherwise unchanged.
+
+Verification: full workspace suite green — **412 tests, 0 failed**
+(409 → 412). Ledger: 77 IMPLEMENTED.
+
+Next work continues → sup-012..015 remaining detectors, mem-006
+consolidation, or prov-005 capability registry.
+
 ## orch-024 Crash Recovery — 2026-08-23 COMPLETE
 
 1. ✅ **orch-024**: recover_orphans(tasks_dir) folds the task journal;

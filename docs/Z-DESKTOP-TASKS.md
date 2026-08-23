@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 72 |
+| IMPLEMENTED | 75 |
 | PARTIAL | 2 |
-| PLANNED | 649 |
+| PLANNED | 646 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -562,13 +562,13 @@
 ### [IMPLEMENTED] sup-008 — Verdict attached to TurnFinished
 - depends: sup-007
 
-### [PLANNED] sup-009 — unexecuted-tests detector
+### [IMPLEMENTED] sup-009 — unexecuted-tests detector
 - depends: sup-006
 
-### [PLANNED] sup-010 — unexecuted-build detector
+### [IMPLEMENTED] sup-010 — unexecuted-build detector
 - depends: sup-006
 
-### [PLANNED] sup-011 — ignored-failure detector
+### [IMPLEMENTED] sup-011 — ignored-failure detector
 - depends: sup-006
 
 ### [PLANNED] sup-012 — fake-completion detector

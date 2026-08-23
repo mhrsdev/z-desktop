@@ -775,6 +775,30 @@ fn run_turn(
                             &report,
                             turn_evidence.iter().filter(|e| e.ok).count(),
                         );
+                        // sup-009/010/011 (ADR-0016): extra detectors, pure
+                        // observability — firing never gates by itself here.
+                        let unexecuted_tests =
+                            crate::evidence::detect_unexecuted_tests(&claims, &turn_evidence);
+                        let unexecuted_build =
+                            crate::evidence::detect_unexecuted_build(&claims, &turn_evidence);
+                        let ignored_failures =
+                            crate::evidence::detect_ignored_failures(&turn_evidence, &outcome.text);
+                        let mut fired: Vec<&str> = Vec::new();
+                        if unexecuted_tests {
+                            fired.push("unexecuted-tests");
+                        }
+                        if unexecuted_build {
+                            fired.push("unexecuted-build");
+                        }
+                        if ignored_failures {
+                            fired.push("ignored-failures");
+                        }
+                        if !fired.is_empty() {
+                            log::warn!(
+                                "supervision: detector(s) fired in turn {turn_id}: {}",
+                                fired.join(", ")
+                            );
+                        }
                         // sup-008: an evaluation happened this turn — record
                         // its outcome on TurnFinished regardless of whether
                         // the sup-007 gate promotes it to a turn failure.
@@ -791,7 +815,23 @@ fn run_turn(
                         // ambiguity (capture path broken, tool-less turn, some
                         // claim linked or some ok evidence) stays warn-only.
                         if verdict.blocked && journal.is_some() && turn_had_tool_call {
-                            blocked_reason = verdict.reason;
+                            // sup-009/010: fold the unexecuted-execution
+                            // findings into the reason when the sup-007 gate
+                            // fires anyway (gating itself unchanged).
+                            let mut reason = verdict.reason;
+                            let mut extensions: Vec<&str> = Vec::new();
+                            if unexecuted_tests {
+                                extensions.push("unexecuted-tests");
+                            }
+                            if unexecuted_build {
+                                extensions.push("unexecuted-build");
+                            }
+                            if !extensions.is_empty() {
+                                if let Some(r) = reason.as_mut() {
+                                    r.push_str(&format!(" [detectors: {}]", extensions.join(", ")));
+                                }
+                            }
+                            blocked_reason = reason;
                         } else if !report.unlinked.is_empty() {
                             log::warn!(
                                 "supervision: {}/{} claim(s) unlinked in turn {turn_id} (kinds: {:?})",
@@ -2512,6 +2552,80 @@ mod supervision_verdict_tests {
                 assert!(
                     v.reason.unwrap_or_default().contains("without recorded evidence"),
                     "reason names the missing-evidence failure"
+                );
+            }
+        }
+        assert!(finished, "turn never emitted TurnFinished");
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// sup-009 (ADR-0016): when the sup-007 gate blocks anyway and the
+    /// unexecuted-tests detector fired (Tests claim, zero Tests evidence this
+    /// turn), the turn error names it. Gating unchanged — extension only.
+    #[test]
+    fn blocked_turn_error_names_fired_unexecuted_detector() {
+        let data_dir = unique_data_dir("detector-ext");
+        let shared = Shared {
+            provider: Mutex::new(Some(Arc::new(ScriptedProvider {
+                outcomes: std::sync::Mutex::new(vec![
+                    provider::StreamOutcome {
+                        text: String::new(),
+                        tool_calls: vec![provider::ToolCallSpec {
+                            id: "call-1".into(),
+                            name: "fs_read".into(),
+                            arguments_json: r#"{"path":"README.md"}"#.into(),
+                        }],
+                    },
+                    provider::StreamOutcome {
+                        text: "All done, the tests pass.".into(),
+                        tool_calls: Vec::new(),
+                    },
+                ]),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }) as Arc<dyn provider::Provider>)),
+            provider_label: Mutex::new("scripted".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+        };
+        let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
+
+        let thread = Thread {
+            id: "detector-thread".into(),
+            title: "detector".into(),
+            messages: vec![StoredMessage {
+                role: z_protocol::Role::User,
+                text: "do work".into(),
+                tool_calls: Vec::new(),
+            }],
+            updated_ms: 0,
+        };
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        run_turn(
+            Arc::clone(&rt.shared),
+            event_tx,
+            Arc::new(Mutex::new(())),
+            data_dir.clone(),
+            rt.journal.clone(),
+            thread,
+            "turn-detector".into(),
+        );
+
+        let mut finished = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let Event::TurnFinished { ok, error, .. } = event {
+                finished = true;
+                assert!(!ok);
+                // fs_read captures no evidence, so "the tests pass" is an
+                // unexecuted Tests claim on top of the unlinked-claim block.
+                let err = error.expect("blocked turn carries a reason");
+                assert!(
+                    err.contains("without recorded evidence [detectors: unexecuted-tests]"),
+                    "reason must fold in the fired detector: {err}"
                 );
             }
         }

@@ -205,6 +205,43 @@ pub fn evaluate_claims(report: &LinkReport, evidence_count_ok: usize) -> Supervi
     }
 }
 
+// ---------------------------------------------------------------------------
+// sup-009/010/011 (ADR-0016): observability detectors — warn-first, none of
+// these change gating on their own.
+// ---------------------------------------------------------------------------
+
+/// Shared shape of sup-009/sup-010: a success claim of `kind` with ZERO
+/// same-kind evidence recorded this turn — the run never happened.
+fn claimed_without_execution(
+    claims: &[ClaimSpan],
+    evidence: &[Evidence],
+    kind: EvidenceKind,
+) -> bool {
+    claims.iter().any(|c| c.kind == kind) && !evidence.iter().any(|e| e.kind == kind)
+}
+
+/// sup-009: Tests success claimed but no Tests-kind evidence at all was
+/// recorded this turn. Failed Tests evidence still counts as "executed"
+/// (narrating over it is [`detect_ignored_failures`]' job).
+pub fn detect_unexecuted_tests(claims: &[ClaimSpan], evidence: &[Evidence]) -> bool {
+    claimed_without_execution(claims, evidence, EvidenceKind::Tests)
+}
+
+/// sup-010: same rule for Build claims vs Build evidence.
+pub fn detect_unexecuted_build(claims: &[ClaimSpan], evidence: &[Evidence]) -> bool {
+    claimed_without_execution(claims, evidence, EvidenceKind::Build)
+}
+
+/// sup-011: Tests-kind evidence exists with `ok == false` AND the turn's
+/// final text still contains a success phrase — the failure was narrated
+/// over instead of reported.
+pub fn detect_ignored_failures(evidence: &[Evidence], final_text: &str) -> bool {
+    evidence
+        .iter()
+        .any(|e| e.kind == EvidenceKind::Tests && !e.ok)
+        && !extract_claims(final_text).is_empty()
+}
+
 /// Best-effort append of one evidence record. Journal failures are warned
 /// and dropped (same policy as every other lifecycle append).
 pub fn record(journal: &Mutex<Journal>, e: &Evidence) {
@@ -439,6 +476,52 @@ mod evidence_tests {
 
         // Unlinked but SOME ok evidence exists this turn -> ambiguous, passes.
         assert!(!evaluate_claims(&unlinked, 1).blocked);
+    }
+
+    #[test]
+    fn unexecuted_detectors_fire_only_on_claim_without_same_kind_evidence() {
+        let tests_claim = vec![ClaimSpan {
+            text: "tests pass".into(),
+            kind: EvidenceKind::Tests,
+        }];
+        let build_claim = vec![ClaimSpan {
+            text: "build succeeds".into(),
+            kind: EvidenceKind::Build,
+        }];
+        // Claim + zero evidence of its kind -> fires.
+        assert!(detect_unexecuted_tests(&tests_claim, &[]));
+        assert!(detect_unexecuted_build(&build_claim, &[]));
+        // FAILED evidence of the kind still means "executed" — no fire
+        // (narrating over a failure is sup-011's job).
+        assert!(!detect_unexecuted_tests(
+            &tests_claim,
+            &[Evidence::tests("t", "u", 1, 1, "cargo test")]
+        ));
+        assert!(!detect_unexecuted_build(
+            &build_claim,
+            &[Evidence::build("t", "u", Some(1), "cargo build")]
+        ));
+        // Wrong-kind claim never fires; clean turns with no claims stay silent.
+        assert!(!detect_unexecuted_build(&tests_claim, &[]));
+        assert!(!detect_unexecuted_tests(&build_claim, &[]));
+        assert!(!detect_unexecuted_tests(&[], &[]));
+        assert!(!detect_unexecuted_build(&[], &[]));
+    }
+
+    #[test]
+    fn ignored_failures_need_failing_tests_and_a_success_phrase() {
+        let failed = vec![Evidence::tests("t", "u", 1, 1, "cargo test")];
+        assert!(detect_ignored_failures(&failed, "All good, tests pass."));
+        // Passing tests + success phrase -> fine.
+        let passed = vec![Evidence::tests("t", "u", 5, 0, "cargo test")];
+        assert!(!detect_ignored_failures(&passed, "tests pass"));
+        // Failing tests + honest text -> no fire.
+        assert!(!detect_ignored_failures(
+            &failed,
+            "1 test failed; fixing next."
+        ));
+        // Clean turn (no evidence, no phrase) -> no false positive.
+        assert!(!detect_ignored_failures(&[], ""));
     }
 
     #[test]

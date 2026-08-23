@@ -134,6 +134,15 @@ impl App {
     fn apply_event(&mut self, event: Event) -> bool {
         match event {
             Event::Accepted { .. } => false,
+            Event::SteeringQueued { depth, .. } => {
+                self.view.steering_depth = depth as u32;
+                self.view.status_line = if depth > 0 {
+                    format!("steering queued ({depth} pending)")
+                } else {
+                    "ready".into()
+                };
+                true
+            }
             Event::ProviderStatus { ok, message } => {
                 self.view.status_line = if ok {
                     message
@@ -266,10 +275,20 @@ impl App {
         let text = std::mem::take(&mut self.view.input);
         let id = self.next_command;
         self.next_command += 1;
-        let _ = self.command_tx.send((
-            id,
-            Command::SendMessage { thread_id: self.thread_id.clone(), text },
-        ));
+        // A running turn is steered, not interrupted: queued text is injected
+        // between tool rounds instead of starting a second concurrent turn.
+        let command = if self.streaming {
+            Command::EnqueueMessage {
+                thread_id: self.thread_id.clone(),
+                text,
+            }
+        } else {
+            Command::SendMessage {
+                thread_id: self.thread_id.clone(),
+                text,
+            }
+        };
+        let _ = self.command_tx.send((id, command));
         true
     }
 
@@ -817,5 +836,52 @@ mod access_tests {
         assert_eq!(message.plan.len(), 1);
         assert_eq!(message.plan[0].state, content::StepState::Completed);
         assert!(message.plan[0].title.contains("fs_read"));
+    }
+
+    #[test]
+    fn a_message_sent_mid_turn_is_enqueued_as_steering_not_a_second_turn() {
+        // The app-layer half of the steering proof: with a turn streaming,
+        // the composer must route through EnqueueMessage so the text lands
+        // between tool rounds instead of starting a concurrent turn.
+        let mut app = App::new();
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        app.command_tx = cmd_tx;
+        app.streaming = true;
+
+        for c in "slow down".chars() {
+            assert!(app.on_key(&Key::Character(c.to_string().into()), ModifiersState::empty()));
+        }
+        assert!(app.send_composer());
+        assert!(app.view.input.is_empty(), "sending must clear the composer");
+
+        match cmd_rx.try_recv() {
+            Ok((_, Command::EnqueueMessage { thread_id, text })) => {
+                assert_eq!(thread_id, app.thread_id);
+                assert_eq!(text, "slow down");
+            }
+            other => panic!("expected EnqueueMessage mid-turn, got {other:?}"),
+        }
+
+        // Idle: the same input routes as a normal SendMessage.
+        app.streaming = false;
+        for c in "start fresh".chars() {
+            assert!(app.on_key(&Key::Character(c.to_string().into()), ModifiersState::empty()));
+        }
+        assert!(app.send_composer());
+        match cmd_rx.try_recv() {
+            Ok((_, Command::SendMessage { .. })) => {}
+            other => panic!("expected SendMessage when idle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_steering_queued_event_updates_the_depth_indicator() {
+        let mut app = App::new();
+        let thread = app.thread_id.clone();
+
+        app.events.lock().unwrap().push(Event::SteeringQueued { thread_id: thread, depth: 2 });
+        assert!(app.drain_events());
+        assert_eq!(app.view.steering_depth, 2);
+        assert!(app.view.status_line.contains("steering queued (2 pending)"));
     }
 }

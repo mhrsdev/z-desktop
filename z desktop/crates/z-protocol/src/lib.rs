@@ -41,6 +41,10 @@ pub enum Risk {
 pub enum Command {
     /// Send user text; starts a new turn on the thread.
     SendMessage { thread_id: Id, text: String },
+    /// Steer a running turn: queue user text for injection between tool
+    /// rounds. If no turn is running, the text waits for the next turn's
+    /// first drain (never lost, never a second concurrent turn).
+    EnqueueMessage { thread_id: Id, text: String },
     /// Cancel the running turn. Already-applied work stays applied.
     CancelTurn { thread_id: Id },
     /// Answer a pending approval for a tool call.
@@ -80,6 +84,9 @@ pub enum Event {
     /// The runtime accepted the command. Acceptance is not success.
     Accepted { command_id: u64 },
     TurnStarted { thread_id: Id, turn_id: Id },
+    /// User text was queued for steering on a running turn. `depth` is the
+    /// queue length after this enqueue (drives the queue-depth indicator).
+    SteeringQueued { thread_id: Id, depth: u64 },
     /// Streaming assistant text delta.
     TextDelta { thread_id: Id, turn_id: Id, delta: String },
     TextDone { thread_id: Id, turn_id: Id },
@@ -123,5 +130,23 @@ mod tests {
     fn commands_are_tagged_snake_case() {
         let json = serde_json::to_string(&Command::CancelTurn { thread_id: "t".into() }).unwrap();
         assert!(json.contains(r#""type":"cancel_turn""#), "{json}");
+    }
+
+    #[test]
+    fn enqueue_message_round_trips_through_json() {
+        let command = Command::EnqueueMessage { thread_id: "t1".into(), text: "steer left".into() };
+        let json = serde_json::to_string(&command).unwrap();
+        assert!(json.contains(r#""type":"enqueue_message""#), "{json}");
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Command::EnqueueMessage { text, .. } if text == "steer left"));
+    }
+
+    #[test]
+    fn steering_queued_event_carries_depth() {
+        let event = Event::SteeringQueued { thread_id: "t1".into(), depth: 3 };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""type":"steering_queued""#), "{json}");
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Event::SteeringQueued { depth: 3, .. }));
     }
 }

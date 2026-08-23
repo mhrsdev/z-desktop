@@ -66,6 +66,9 @@ pub struct WorkspaceView {
     pub input: String,
     /// One-line status readout (provider / project / last error).
     pub status_line: String,
+    /// Number of steering messages queued for the running turn. Driven by
+    /// `SteeringQueued` events; shown so the user knows their text will land.
+    pub steering_depth: u32,
     /// Tool call awaiting approval, if any.
     pub pending_approval: Option<PendingApproval>,
     /// Called when the user sends the composer text.
@@ -192,6 +195,7 @@ impl WorkspaceView {
             chat_list,
             focused: None,
             input: String::new(),
+            steering_depth: 0,
             status_line: "Z Desktop Personal".into(),
             pending_approval: None,
             on_send: None,

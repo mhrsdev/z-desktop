@@ -6,6 +6,50 @@
 
 Last updated: 2026-08-23
 
+## Steering Slice (2026-08-23) — COMPLETE
+
+Vertical slice "Exact Next Tasks #1" (steering queue) shipped and verified:
+
+1. ✅ **core-020**: `Command::EnqueueMessage { thread_id, text }` +
+   `Event::SteeringQueued { thread_id, depth }` in z-protocol (additive;
+   serde round-trip + snake_case tag tests).
+2. ✅ **core-004**: per-thread steering queue (`VecDeque<String>`) in
+   `Shared`, capped at `STEERING_QUEUE_CAP = 16` (oldest dropped under
+   pressure — newest intent wins).
+3. ✅ **core-005**: `enqueue_message` on the command loop; empty/whitespace
+   text ignored; depth event emitted per enqueue.
+4. ✅ **core-006**: turn worker drains the queue at the top of every tool
+   round after round 0, before building the next provider request; injected
+   as one combined user message; persisted with the thread.
+5. ✅ **core-007**: combine gate — all texts drained in one pass merge into
+   a single `User steering:\n…` history entry (one marker, N lines).
+6. ✅ **core-008**: `CancelTurn` clears that thread's pending steering so
+   stale guidance never leaks into a later turn.
+7. ✅ App layer: composer routes through `EnqueueMessage` while
+   `streaming == true` (SendMessage otherwise); `SteeringQueued` drives a
+   `steering_depth` view field + status line ("steering queued (N pending)").
+
+Verification: full workspace suite green — **288 tests, 0 failed**
+(baseline was 278; +10: z-core steering tests ×7 incl. scripted-provider
+mid-turn injection proof, z-protocol serde ×2, zero-app composer routing +
+depth indicator ×2... net +10 across crates). Clippy warnings unchanged vs
+baseline (8 pre-existing; none introduced).
+
+Also this session:
+- ✅ **idx-003** (ADR): `docs/adr/0007-tree-sitter-indexing.md` — tree-sitter
+  0.26.x accepted for M2 (MSRV 1.77 < workspace floor 1.85), grammar packs
+  incremental (Rust first per idx-004), wasm feature banned, per-file
+  catch_unwind mandated, TS/TSX gated on upstream staleness (>21 months at
+  evaluation time). Ledger statuses updated via `tools/gen_tasks.py` (the
+  generator, not the generated file).
+- Reference sync: grok-build re-cloned to `references/external/grok-build`
+  (blob-filtered), HEAD `07b2f71` recorded in THIRD_PARTY ledger. Its
+  `xai-interjection-core` confirms our shape: capped queue + drain-at-hook
+  + single framing note per injected batch. No code copied.
+
+Next work continues per "Exact Next Tasks" below → item 2: JSONL task
+journal (jour-001..005), then idx-001 index actor.
+
 ## Canonicalization Slice (2026-08-23) — COMPLETE
 
 This session published the repository's canonical documentation layer:
@@ -168,14 +212,11 @@ cargo run -p zero-app --manifest-path "z desktop/Cargo.toml" -- --shot <dir>
 
 ## Exact Next Tasks
 
-1. Steering queue: add `Command::EnqueueMessage { thread_id, text }` to
-   z-protocol; queue in Shared; drain between tool rounds inside run_turn
-   with combine gate (merge consecutive queued plain-text messages); emit
-   queue-depth event; app-layer test proving mid-turn steering lands before
-   the next provider round.
+1. ~~Steering queue~~ — COMPLETE (see Steering Slice above; core-020, 004–008).
 2. Task journal: append-only JSONL event log under data/journal/ first (no
    new dep); record command/event lifecycle; replay on startup; crash-
-   recovery ordering tests. Upgrade path to SQLite documented.
-3. Tree-sitter repo index actor (matrix #3, cap #41) after journal lands.
+   recovery ordering tests. Upgrade path to SQLite documented (jour-001..005).
+3. Tree-sitter repo index actor (matrix #3, cap #41) after journal lands;
+   ADR-0007 already fixes the dependency decision (idx-004 Rust pack first).
 
 Resume command: cargo test --manifest-path "z desktop/Cargo.toml" --workspace

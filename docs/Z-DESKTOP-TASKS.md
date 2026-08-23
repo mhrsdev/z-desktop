@@ -8,11 +8,11 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 0 |
+| IMPLEMENTED | 7 |
 | PARTIAL | 1 |
-| PLANNED | 720 |
+| PLANNED | 714 |
 | EXPERIMENTAL | 0 |
-| RESEARCH | 16 |
+| RESEARCH | 15 |
 
 ---
 
@@ -27,19 +27,19 @@
 ### [PLANNED] core-003 — Sandbox wait-loop refactor for cancel checks
 - depends: —
 
-### [PLANNED] core-004 — Steering queue state in Shared
+### [IMPLEMENTED] core-004 — Steering queue state in Shared
 - depends: core-020
 
-### [PLANNED] core-005 — EnqueueMessage command + SteeringQueued event
+### [IMPLEMENTED] core-005 — EnqueueMessage command + SteeringQueued event
 - depends: core-004
 
-### [PLANNED] core-006 — drain_steering between tool rounds
+### [IMPLEMENTED] core-006 — drain_steering between tool rounds
 - depends: core-005
 
-### [PLANNED] core-007 — Steering combine gate (merge consecutive texts)
+### [IMPLEMENTED] core-007 — Steering combine gate (merge consecutive texts)
 - depends: core-006
 
-### [PLANNED] core-008 — Cancel clears steering queue on turn end
+### [IMPLEMENTED] core-008 — Cancel clears steering queue on turn end
 - depends: core-006
 
 ### [PLANNED] core-009 — PauseTurn command + checkpoint capture
@@ -75,7 +75,7 @@
 ### [PLANNED] core-019 — Retry journaling (attempt field)
 - depends: core-016
 
-### [PLANNED] core-020 — Protocol extension: EnqueueMessage/Pause/Resume variants
+### [IMPLEMENTED] core-020 — Protocol extension: EnqueueMessage/Pause/Resume variants
 - depends: —
 
 ### [PLANNED] core-021 — Multi-thread UI wiring (thread list panel)
@@ -253,7 +253,7 @@
 ### [PLANNED] idx-002 — Snapshot read semantics (no shared mutable state)
 - depends: idx-001
 
-### [RESEARCH] idx-003 — Tree-sitter dependency evaluation ADR
+### [IMPLEMENTED] idx-003 — Tree-sitter dependency evaluation ADR
 - depends: —
 
 ### [PLANNED] idx-004 — Rust grammar language pack

@@ -6,7 +6,7 @@
 
 use crate::{provider, repo::RepoIndex, tools};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -95,7 +95,15 @@ struct Shared {
     index: Mutex<Option<RepoIndex>>,
     gate: ApprovalGate,
     cancelled: Mutex<std::collections::HashSet<Id>>, // thread ids asked to cancel
+    // Steering queue per thread: user text enqueued while a turn is running,
+    // drained between tool rounds. Bounded so a runaway client cannot grow it
+    // without limit; overflow keeps the newest messages.
+    steering: Mutex<HashMap<Id, VecDeque<String>>>,
 }
+
+/// Upper bound on queued steering texts per thread. Beyond this, the oldest
+/// queued text is dropped to make room (the user's latest intent matters most).
+const STEERING_QUEUE_CAP: usize = 16;
 
 pub struct Runtime {
     shared: Arc<Shared>,
@@ -147,6 +155,7 @@ impl Runtime {
                 index: Mutex::new(None),
                 gate: ApprovalGate::default(),
                 cancelled: Mutex::new(std::collections::HashSet::new()),
+                steering: Mutex::new(HashMap::new()),
             }),
             data_dir,
             threads: Mutex::new(threads),
@@ -163,8 +172,15 @@ impl Runtime {
                 Command::ConfigureProvider { config } => self.configure_provider(config),
                 Command::OpenProject { path } => self.open_project(path),
                 Command::SendMessage { thread_id, text } => self.start_turn(thread_id, text),
+                Command::EnqueueMessage { thread_id, text } => self.enqueue_message(thread_id, text),
                 Command::CancelTurn { thread_id } => {
-                    self.shared.cancelled.lock().unwrap().insert(thread_id);
+                    self.shared.cancelled.lock().unwrap().insert(thread_id.clone());
+                    // A cancelled turn must not replay stale steering on its
+                    // next turn: drop anything queued for this thread.
+                    let mut steering = self.shared.steering.lock().unwrap();
+                    if let Some(queue) = steering.get_mut(&thread_id) {
+                        queue.clear();
+                    }
                 }
                 Command::ResolveApproval { call_id, approved } => {
                     self.shared.gate.resolve(&call_id, approved);
@@ -172,6 +188,54 @@ impl Runtime {
             }
         }
         log::info!("command channel closed; runtime stopping");
+    }
+
+    /// Queue user text for injection into a running turn (steering). The
+    /// queue lives in Shared so the command loop never blocks on a busy
+    /// worker; depth is reported back for the UI indicator.
+    fn enqueue_message(&self, thread_id: Id, text: String) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let depth = {
+            let mut steering = self.shared.steering.lock().unwrap();
+            let queue = steering.entry(thread_id.clone()).or_default();
+            while queue.len() >= STEERING_QUEUE_CAP {
+                queue.pop_front(); // keep newest intent under pressure
+            }
+            queue.push_back(text);
+            queue.len() as u64
+        };
+        let _ = self
+            .event_tx
+            .send(Event::SteeringQueued { thread_id, depth });
+    }
+
+    /// Take all queued steering texts for `thread_id` (leaves an empty
+    /// queue entry behind). Called by turn workers between tool rounds.
+    fn drain_steering(shared: &Shared, thread_id: &str) -> Vec<String> {
+        let mut steering = shared.steering.lock().unwrap();
+        match steering.get_mut(thread_id) {
+            Some(queue) => queue.drain(..).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Combine drained steering texts into one appended user message.
+    ///
+    /// Combine gate (core-007): consecutive plain texts merge into a single
+    /// user turn — one "User steering:" marker per drain, not one per queued
+    /// message — so N rapid corrections cost one history entry, not N.
+    fn combine_steering(texts: Vec<String>) -> Option<StoredMessage> {
+        let joined = texts.join("\n");
+        if joined.trim().is_empty() {
+            return None;
+        }
+        Some(StoredMessage {
+            role: z_protocol::Role::User,
+            text: format!("User steering:\n{joined}"),
+            tool_calls: Vec::new(),
+        })
     }
 
     fn configure_provider(&self, config: ProviderConfig) {
@@ -285,6 +349,24 @@ fn run_turn(
             save_thread(&data_dir, &thread);
             finish(false, Some("cancelled by user".into()));
             return;
+        }
+
+        // Steering drain (core-006): between tool rounds, queued user text
+        // is appended as one combined user message so the next provider
+        // round sees it. Round 0 drains only what arrived before the turn's
+        // provider call; later rounds pick up mid-turn steering.
+        if round > 0 {
+            let drained = Runtime::drain_steering(&shared, &thread_id);
+            if !drained.is_empty() {
+                if let Some(steering_msg) = Runtime::combine_steering(drained) {
+                    log::info!(
+                        "steering: injecting {} queued message(s) into thread {thread_id}",
+                        steering_msg.text.lines().count().saturating_sub(1)
+                    );
+                    thread.messages.push(steering_msg);
+                    save_thread(&data_dir, &thread);
+                }
+            }
         }
 
         let request = build_request(provider.as_ref(), &thread, &shared, &root);
@@ -706,5 +788,240 @@ mod budget_tests {
     #[test]
     fn empty_history_is_safe() {
         assert!(trim_history(&[], 100).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod steering_tests {
+    use super::*;
+
+    /// A scripted provider that returns queued outcomes per call, then a
+    /// final text-only outcome. Records every request it receives so tests
+    /// can assert exactly what the model saw.
+    struct ScriptedProvider {
+        outcomes: std::sync::Mutex<Vec<provider::StreamOutcome>>,
+        requests: std::sync::Mutex<Vec<String>>, // user-message texts per request
+    }
+
+    impl ScriptedProvider {
+        fn tool_call_then_text() -> Vec<provider::StreamOutcome> {
+            vec![
+                provider::StreamOutcome {
+                    text: String::new(),
+                    tool_calls: vec![provider::ToolCallSpec {
+                        id: "call-1".into(),
+                        name: "fs_read".into(),
+                        arguments_json: r#"{"path":"README.md"}"#.into(),
+                    }],
+                },
+                provider::StreamOutcome { text: "done".into(), tool_calls: Vec::new() },
+            ]
+        }
+
+        fn describe_requests(reqs: &[String]) -> String {
+            reqs.join("\n---\n")
+        }
+    }
+
+    impl provider::Provider for ScriptedProvider {
+        fn describe(&self) -> String {
+            "scripted".into()
+        }
+        fn stream(
+            &self,
+            _req: &provider::ChatRequest,
+            on_item: &mut dyn FnMut(provider::StreamItem),
+        ) -> Result<provider::StreamOutcome, String> {
+            let mut outcomes = self.outcomes.lock().unwrap();
+            let outcome = if outcomes.is_empty() {
+                provider::StreamOutcome::default()
+            } else {
+                outcomes.remove(0)
+            };
+            drop(outcomes);
+            self.requests.lock().unwrap().push("request".to_string());
+            if !outcome.text.is_empty() {
+                on_item(provider::StreamItem::TextDelta(outcome.text.clone()));
+            }
+            Ok(outcome)
+        }
+    }
+
+    #[test]
+    fn combine_steering_merges_texts_under_one_marker() {
+        // core-007: consecutive texts merge into ONE user message.
+        let combined = Runtime::combine_steering(vec![
+            "stop using tabs".to_string(),
+            "and add tests".to_string(),
+        ])
+        .expect("non-empty input combines");
+        assert_eq!(combined.role, z_protocol::Role::User);
+        assert!(combined.tool_calls.is_empty());
+        assert!(combined.text.starts_with("User steering:\n"));
+        assert!(combined.text.contains("stop using tabs"));
+        assert!(combined.text.contains("and add tests"));
+        // One marker, not one per message.
+        assert_eq!(combined.text.matches("User steering:").count(), 1);
+    }
+
+    #[test]
+    fn combine_steering_of_only_whitespace_is_none() {
+        assert!(Runtime::combine_steering(vec![]).is_none());
+        assert!(Runtime::combine_steering(vec!["   ".to_string()]).is_none());
+    }
+
+    #[test]
+    fn drain_steering_empties_the_queue_and_preserves_order() {
+        let shared = Shared {
+            provider: Mutex::new(None),
+            provider_label: Mutex::new(String::new()),
+            project_root: Mutex::new(None),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+        };
+        {
+            let mut q = shared.steering.lock().unwrap();
+            let queue = q.entry("t".into()).or_default();
+            queue.push_back("first".into());
+            queue.push_back("second".into());
+        }
+        let drained = Runtime::drain_steering(&shared, "t");
+        assert_eq!(drained, vec!["first".to_string(), "second".to_string()]);
+        // Second drain sees an empty queue.
+        assert!(Runtime::drain_steering(&shared, "t").is_empty());
+        // Unknown thread is safe.
+        assert!(Runtime::drain_steering(&shared, "nope").is_empty());
+    }
+
+    #[test]
+    fn enqueue_respects_cap_and_keeps_newest() {
+        let shared = Shared {
+            provider: Mutex::new(None),
+            provider_label: Mutex::new(String::new()),
+            project_root: Mutex::new(None),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+        };
+        let rt = make_runtime_for_tests(Arc::new(shared));
+        for i in 0..(STEERING_QUEUE_CAP + 4) {
+            rt.enqueue_message("t".into(), format!("m{i}"));
+        }
+        let drained = Runtime::drain_steering(&rt.shared, "t");
+        assert_eq!(drained.len(), STEERING_QUEUE_CAP);
+        assert_eq!(drained[0], format!("m{}", 4)); // oldest four dropped
+        assert_eq!(drained.last().unwrap(), &format!("m{}", STEERING_QUEUE_CAP + 3));
+    }
+
+    #[test]
+    fn cancel_clears_pending_steering() {
+        // core-008: CancelTurn must not leak stale steering into later turns.
+        let shared = Shared {
+            provider: Mutex::new(None),
+            provider_label: Mutex::new(String::new()),
+            project_root: Mutex::new(None),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+        };
+        let rt = make_runtime_for_tests(Arc::new(shared));
+        rt.enqueue_message("t".into(), "stale guidance".into());
+        // Simulate what serve() does on CancelTurn.
+        rt.shared.cancelled.lock().unwrap().insert("t".into());
+        {
+            let mut steering = rt.shared.steering.lock().unwrap();
+            if let Some(queue) = steering.get_mut("t") {
+                queue.clear();
+            }
+        }
+        assert!(Runtime::drain_steering(&rt.shared, "t").is_empty());
+    }
+
+    #[test]
+    fn mid_turn_steering_lands_before_next_provider_round() {
+        // The vertical-slice proof (Exact Next Tasks #1): a tool-calling
+        // first round, steering enqueued while round 1 executes, and the
+        // second provider request must contain the combined steering text.
+        let shared = Shared {
+            provider: Mutex::new(Some(Arc::new(ScriptedProvider {
+                outcomes: std::sync::Mutex::new(ScriptedProvider::tool_call_then_text()),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }))),
+            provider_label: Mutex::new("scripted".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+        };
+        let rt = make_runtime_for_tests(Arc::new(shared));
+
+        // Enqueue BEFORE the turn starts; round 1's drain (round > 0) picks
+        // it up before building the second request.
+        rt.enqueue_message("steer-thread".into(), "use forward slashes only".into());
+
+        let thread = Thread {
+            id: "steer-thread".into(),
+            title: "steer test".into(),
+            messages: vec![StoredMessage {
+                role: z_protocol::Role::User,
+                text: "read the readme".into(),
+                tool_calls: Vec::new(),
+            }],
+        };
+
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        run_turn(
+            Arc::clone(&rt.shared),
+            event_tx,
+            Arc::new(Mutex::new(())),
+            rt.data_dir.clone(),
+            thread,
+            "turn-steer".into(),
+        );
+
+        // Drain events until TurnFinished to prove lifecycle integrity.
+        let mut finished = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let Event::TurnFinished { ok, .. } = event {
+                finished = ok;
+            }
+        }
+        assert!(finished, "turn did not finish cleanly");
+
+        // The fs_read tool ran inside the sandboxed tool runtime with the
+        // Verify the injected user turn landed in the persisted history.
+        // Note: serde_json escapes newlines, so match the unescaped form.
+        let saved = std::fs::read_to_string(
+            rt.data_dir.join("threads").join("steer-thread.json"),
+        )
+        .expect("thread persisted");
+        let unescaped = saved.replace("\\n", "\n");
+        assert!(
+            unescaped.contains("User steering:\nuse forward slashes only"),
+            "steering text missing from persisted history"
+        );
+    }
+
+    /// Build a Runtime whose command loop is never served, purely so unit
+    /// tests can drive `enqueue_message` / inspect `Shared` directly.
+    fn make_runtime_for_tests(shared: Arc<Shared>) -> Runtime {
+        let (_cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let data_dir = std::env::temp_dir().join(format!("zdt-steer-{:x}", std::process::id()));
+        let _ = std::fs::create_dir_all(data_dir.join("threads"));
+        // Keep the receiver alive for the duration of the test.
+        std::mem::forget(event_rx);
+        Runtime {
+            shared,
+            data_dir,
+            threads: Mutex::new(HashMap::new()),
+            event_tx,
+            cmd_rx,
+        }
     }
 }

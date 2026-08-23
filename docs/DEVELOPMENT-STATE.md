@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-23
 
+## mem-008/009 Retrieval + Injection — 2026-08-23 COMPLETE
+
+1. ✅ **mem-008**: retrieve(view, terms, cap) — scores live() records as
+   0.3×confidence + case-insensitive term-overlap ratio; sorts desc,
+   truncates. Substring ranking noted as the pre-embeddings ceiling.
+2. ✅ **mem-009**: inject_memories appends Turn-layer "[memory] …" items
+   while cumulative est_tokens fits the budget; pure function with unit
+   tests — runtime wiring awaits a settings knob.
+
+Verification: full workspace suite green — **419 tests, 0 failed**
+(415 → 419). Ledger: 81 IMPLEMENTED.
+
+Next work continues → mem-010 correction flow, sup-012..015 detectors,
+or prov-005 capability registry.
+
 ## mem-006/007 Consolidation — 2026-08-23 COMPLETE
 
 1. ✅ **mem-006**: consolidate(journal, store) — promotes Provisional

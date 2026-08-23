@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 77 |
+| IMPLEMENTED | 79 |
 | PARTIAL | 2 |
-| PLANNED | 644 |
+| PLANNED | 642 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -713,10 +713,10 @@
 ### [IMPLEMENTED] mem-007 — Provisional→promoted lifecycle
 - depends: mem-006
 
-### [PLANNED] mem-008 — Retrieval API (ranked candidates)
+### [IMPLEMENTED] mem-008 — Retrieval API (ranked candidates)
 - depends: mem-002
 
-### [PLANNED] mem-009 — Context injection respecting budgets
+### [IMPLEMENTED] mem-009 — Context injection respecting budgets
 - depends: mem-008, ctx-001
 
 ### [PLANNED] mem-010 — User correction creates superseding record

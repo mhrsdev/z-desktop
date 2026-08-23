@@ -8,6 +8,7 @@
 //! the pinned latest-user message are never dropped. build_request wiring is
 //! a later slice — this module is the core the wiring will call.
 
+use crate::memory::RankedMemory;
 use serde::{Deserialize, Serialize};
 
 /// Context layer, snake_case on the wire for journal/inspector export.
@@ -95,6 +96,32 @@ pub fn demote_if_stale(items: Vec<ContextItem>, stale_paths: &[String]) -> Vec<C
             item
         })
         .collect()
+}
+
+/// mem-009 (ADR-0014): appends ranked memories as Turn-layer items
+/// ("[memory] {content}") while the cumulative added estimate stays within
+/// `budget_tokens`; ranked order means the first overflow ends injection.
+/// Pure — callers insert before [`assemble`]; runtime wiring is a later slice.
+pub fn inject_memories(
+    items: &mut Vec<ContextItem>,
+    memories: &[RankedMemory],
+    budget_tokens: usize,
+) {
+    let mut added = 0usize;
+    for m in memories {
+        let text = format!("[memory] {}", m.content);
+        let est_tokens = crate::tokens::estimate(&text);
+        if added + est_tokens > budget_tokens {
+            break;
+        }
+        added += est_tokens;
+        items.push(ContextItem {
+            layer: Layer::Turn,
+            text,
+            est_tokens,
+            stale: false,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -206,6 +233,56 @@ mod tests {
         let out = demote_if_stale(items.clone(), &[]);
         assert_eq!(out.len(), 1);
         assert!(!out[0].stale);
+    }
+
+    fn mem(id: &str, content: &str, score: f32) -> RankedMemory {
+        RankedMemory {
+            record_id: id.into(),
+            content: content.into(),
+            score,
+        }
+    }
+
+    #[test]
+    fn inject_memories_prefixes_and_respects_token_budget() {
+        let mems = vec![
+            mem("a", "alpha fact", 1.0),
+            mem("b", "beta fact", 0.5),
+            mem("c", "gamma fact", 0.1),
+        ];
+        let est = |s: &str| crate::tokens::estimate(&format!("[memory] {s}"));
+        // Budget fits exactly two of the three.
+        let budget = est("alpha fact") + est("beta fact");
+        let mut items = vec![item(Layer::Prefix, "sys", 5)];
+        inject_memories(&mut items, &mems, budget);
+        assert_eq!(items.len(), 3, "third memory must not fit");
+        for injected in &items[1..] {
+            assert_eq!(injected.layer, Layer::Turn);
+            assert!(injected.text.starts_with("[memory] "));
+            assert_eq!(injected.est_tokens, crate::tokens::estimate(&injected.text));
+        }
+        let added: usize = items[1..].iter().map(|i| i.est_tokens).sum();
+        assert!(added <= budget);
+        // Zero budget injects nothing.
+        let mut none = Vec::new();
+        inject_memories(&mut none, &mems, 0);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn injected_memories_keep_assemble_output_under_budget() {
+        let mems = vec![mem("m1", "the deploy target is staging", 0.9)];
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Session, "history", 20),
+            item(Layer::Session, "latest", 20),
+        ];
+        let memory_budget = 10usize;
+        inject_memories(&mut items, &mems, memory_budget);
+        let total_budget = items.iter().map(|i| i.est_tokens).sum::<usize>();
+        let kept = assemble(items, total_budget);
+        assert!(kept.iter().map(|i| i.est_tokens).sum::<usize>() <= total_budget);
+        assert!(kept.iter().any(|i| i.text.starts_with("[memory] ")));
     }
 
     #[test]

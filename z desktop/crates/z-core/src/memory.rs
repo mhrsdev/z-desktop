@@ -174,6 +174,52 @@ impl MemoryView {
     }
 }
 
+/// One ranked retrieval hit (mem-008, ADR-0014): a live record plus its
+/// heuristic score — 0.3*confidence + query-term overlap ratio.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RankedMemory {
+    pub record_id: String,
+    pub content: String,
+    pub score: f32,
+}
+
+/// Ranks [`MemoryView::live`] records against `query_terms` (mem-008):
+/// score = 0.3*confidence + (#terms found case-insensitively in content /
+/// #terms; 0 when no terms). Sorted by score desc, then id asc; capped.
+/// ponytail: substring overlap, no embeddings/stemming — refine if recall
+/// complaints show up.
+pub fn retrieve(view: &MemoryView, query_terms: &[&str], cap: usize) -> Vec<RankedMemory> {
+    let mut ranked: Vec<RankedMemory> = view
+        .live()
+        .iter()
+        .map(|r| {
+            let lower = r.content.to_lowercase();
+            let overlap = if query_terms.is_empty() {
+                0.0
+            } else {
+                query_terms
+                    .iter()
+                    .filter(|t| lower.contains(&t.to_lowercase()))
+                    .count() as f32
+                    / query_terms.len() as f32
+            };
+            RankedMemory {
+                record_id: r.id.clone(),
+                content: r.content.clone(),
+                score: 0.3 * r.confidence + overlap,
+            }
+        })
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.record_id.cmp(&b.record_id))
+    });
+    ranked.truncate(cap);
+    ranked
+}
+
 /// Owns the `data/memory/` view directory: one append-only JSONL file per
 /// layer, rebuilt from the journal (delete any of them and replaying
 /// reproduces equivalent state — ADR-0014 D2).
@@ -881,5 +927,40 @@ mod memory_tests {
         assert_eq!(view.live().len(), 100, "cap enforced exactly");
         drop(journal);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn retrieve_ranks_matching_terms_higher_and_respects_cap() {
+        let mut view = MemoryView::default();
+        view.records.push(rec_conf("mem-a", "deploys happen on Tuesday", 0.9, Status::Promoted));
+        view.records.push(rec_conf("mem-b", "the cache is cold", 0.9, Status::Promoted));
+        view.records.push(rec_conf("mem-c", "deploys on friday", 0.2, Status::Promoted));
+        // Never retrieved: Provisional is not live (D4).
+        view.records.push(rec_conf("mem-p", "deploys deploys deploys", 1.0, Status::Provisional));
+
+        let hits = retrieve(&view, &["DEPLOYS", "tuesday"], 10);
+        // mem-a matches both terms; beats the higher-confidence non-match.
+        assert_eq!(hits[0].record_id, "mem-a");
+        assert!((hits[0].score - (0.3 * 0.9 + 1.0)).abs() < 1e-5);
+        assert!(hits[0].score > hits[1].score, "{hits:?}");
+        assert!(!hits.iter().any(|h| h.record_id == "mem-p"), "{hits:?}");
+
+        assert_eq!(retrieve(&view, &[], 2).len(), 2, "cap enforced");
+    }
+
+    #[test]
+    fn retrieve_with_no_terms_ranks_all_live_records_by_confidence() {
+        let mut view = MemoryView::default();
+        view.records.push(rec_conf("lo", "x", 0.1, Status::Promoted));
+        view.records.push(rec_conf("hi", "y", 0.9, Status::Promoted));
+        view.records.push(rec_conf("mid", "z", 0.5, Status::Promoted));
+
+        let hits = retrieve(&view, &[], 10);
+        let ids: Vec<&str> = hits.iter().map(|h| h.record_id.as_str()).collect();
+        assert_eq!(ids, vec!["hi", "mid", "lo"]);
+        for h in &hits {
+            let conf = view.records.iter().find(|r| r.id == h.record_id).unwrap().confidence;
+            assert!((h.score - 0.3 * conf).abs() < 1e-5);
+        }
     }
 }

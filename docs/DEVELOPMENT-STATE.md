@@ -6,6 +6,22 @@
 
 Last updated: 2026-08-23
 
+## sup-005/006 Claim Linking — 2026-08-23 COMPLETE
+
+1. ✅ **sup-005**: ClaimSpan + extract_claims — regex-free sentence
+   scanner with 8 conservative success-phrase classes mapping to
+   Tests/Build/Bench/Regression kinds.
+2. ✅ **sup-006**: link_claims(claims, evidence) → LinkReport; a claim
+   links only when same-kind ok evidence exists. run_turn's success path
+   now extracts+links claims on the final text; unlinked spans log a
+   warn (observability only — gating is sup-007+).
+
+Verification: full workspace suite green — **387 tests, 0 failed**
+(384 → 387). Ledger: 67 IMPLEMENTED.
+
+Next work continues → sup-007 fake-completion gating, mem-005 extraction,
+or the ui thread list panel.
+
 ## core-021/022/025 Thread Management — 2026-08-23 COMPLETE
 
 1. ✅ **core-021**: additive Command::ListThreads → Event::ThreadList with

@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 63 |
+| IMPLEMENTED | 65 |
 | PARTIAL | 2 |
-| PLANNED | 658 |
+| PLANNED | 656 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -550,10 +550,10 @@
 ### [IMPLEMENTED] sup-004 — Capture hook: fs_write/edit_patch diffs
 - depends: sup-001, edit-019
 
-### [PLANNED] sup-005 — Claim regex set (conservative success phrases)
+### [IMPLEMENTED] sup-005 — Claim regex set (conservative success phrases)
 - depends: —
 
-### [PLANNED] sup-006 — Claim-to-evidence linker
+### [IMPLEMENTED] sup-006 — Claim-to-evidence linker
 - depends: sup-005, sup-002
 
 ### [PLANNED] sup-007 — Supervision verdict type (pass/fail/needs-review)

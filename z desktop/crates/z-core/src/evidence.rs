@@ -96,6 +96,83 @@ pub fn classify_command(cmd: &str) -> EvidenceKind {
     }
 }
 
+// sup-005: a success claim found in assistant text ("tests pass", "build
+// succeeds", …). Conservative phrase classes only — regex-free per house
+// style; misses paraphrases by design (ADR-0016: tripwire, not lie detector).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimSpan {
+    pub text: String,
+    pub kind: EvidenceKind,
+}
+
+/// Scans assistant text sentence-by-sentence for known success phrases and
+/// maps them to the matching evidence kind. False-positive tolerance: only
+/// exact phrase classes match, so "the tests passed last week" still links —
+/// acceptable noise, measured later by sup-025.
+pub fn extract_claims(text: &str) -> Vec<ClaimSpan> {
+    const PATTERNS: [(&str, EvidenceKind); 8] = [
+        ("tests pass", EvidenceKind::Tests),
+        ("test suite passes", EvidenceKind::Tests),
+        ("build succeeds", EvidenceKind::Build),
+        ("build succeeded", EvidenceKind::Build),
+        ("compiles successfully", EvidenceKind::Build),
+        ("compiled successfully", EvidenceKind::Build),
+        ("benchmark shows", EvidenceKind::Bench),
+        ("no regressions", EvidenceKind::Regression),
+    ];
+    let mut claims = Vec::new();
+    for sentence in text.split(['.', '!', '?', '\n']) {
+        let lower = sentence.to_lowercase();
+        // A bare "<number> ms" reads like a benchmark result (sup-025 will
+        // measure whether this is too eager).
+        let squeezed = lower.replace(" ms", "ms");
+        let bench_ms = squeezed.split_whitespace().any(|w| {
+            w.strip_suffix("ms").is_some_and(|digits| {
+                !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+            })
+        });
+        let kind = PATTERNS
+            .iter()
+            .find(|(p, _)| lower.contains(p))
+            .map(|(_, k)| *k)
+            .or(bench_ms.then_some(EvidenceKind::Bench));
+        if let Some(kind) = kind {
+            claims.push(ClaimSpan {
+                text: sentence.trim().to_string(),
+                kind,
+            });
+        }
+    }
+    claims
+}
+
+/// sup-006 result: how many claims found ok same-turn evidence of their own
+/// kind, and which spans went unlinked (fake-completion detector input).
+#[derive(Debug, PartialEq)]
+pub struct LinkReport {
+    pub linked: usize,
+    pub unlinked: Vec<ClaimSpan>,
+}
+
+/// Links claims to evidence: a claim is linked when any `ok == true` evidence
+/// of the same kind exists. Same-turn/thread filtering happens at the call
+/// site (`turn_id` is caller context) — an earlier green build never
+/// whitewashes a later claim (ADR-0016 linking window).
+pub fn link_claims(claims: &[ClaimSpan], evidence: &[Evidence]) -> LinkReport {
+    let mut report = LinkReport {
+        linked: 0,
+        unlinked: Vec::new(),
+    };
+    for claim in claims {
+        if evidence.iter().any(|e| e.kind == claim.kind && e.ok) {
+            report.linked += 1;
+        } else {
+            report.unlinked.push(claim.clone());
+        }
+    }
+    report
+}
+
 /// Best-effort append of one evidence record. Journal failures are warned
 /// and dropped (same policy as every other lifecycle append).
 pub fn record(journal: &Mutex<Journal>, e: &Evidence) {
@@ -239,6 +316,62 @@ mod evidence_tests {
             EvidenceView::fold(&dir.join("runtime.jsonl")).expect_err("bad payload must fail loud");
         assert!(err.contains("bad evidence payload"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_claims_maps_phrases_to_kinds() {
+        let cases = [
+            ("All 384 tests pass in the workspace.", EvidenceKind::Tests),
+            ("The test suite passes locally.", EvidenceKind::Tests),
+            ("Build succeeds on release profile.", EvidenceKind::Build),
+            ("The build succeeded after the fix.", EvidenceKind::Build),
+            ("It compiles successfully now.", EvidenceKind::Build),
+            ("Everything compiled successfully.", EvidenceKind::Build),
+            ("Benchmark shows 12 ms p50 latency.", EvidenceKind::Bench),
+            ("The run finished in 250 ms.", EvidenceKind::Bench),
+            ("No regressions were introduced.", EvidenceKind::Regression),
+        ];
+        for (text, want) in cases {
+            let claims = extract_claims(text);
+            assert_eq!(claims.len(), 1, "text: {text:?}");
+            assert_eq!(claims[0].kind, want, "text: {text:?}");
+        }
+    }
+
+    #[test]
+    fn benign_text_yields_no_claims() {
+        assert!(extract_claims("").is_empty());
+        assert!(extract_claims("I looked at the file and thought about it.").is_empty());
+        assert!(extract_claims("The build is still running; tests pending.").is_empty());
+        assert!(extract_claims("Ran the tests, results below.").is_empty());
+    }
+
+    #[test]
+    fn link_claims_needs_ok_evidence_of_same_kind() {
+        let claims = vec![
+            ClaimSpan { text: "tests pass".into(), kind: EvidenceKind::Tests },
+            ClaimSpan { text: "build succeeds".into(), kind: EvidenceKind::Build },
+            ClaimSpan { text: "no regressions".into(), kind: EvidenceKind::Regression },
+        ];
+        // ok Tests + failed Build + wrong-turn Tests: only the Tests claim links.
+        let evidence = vec![
+            Evidence::tests("t", "u1", 5, 0, "cargo test"),
+            Evidence::build("t", "u1", Some(1), "cargo build"),
+            Evidence::tests("t", "u2", 5, 0, "cargo test"), // different turn
+        ];
+        let report = link_claims(&claims, &evidence);
+        assert_eq!(report.linked, 1);
+        assert_eq!(report.unlinked.len(), 2);
+        assert_eq!(report.unlinked[0].kind, EvidenceKind::Build);
+        assert_eq!(report.unlinked[1].kind, EvidenceKind::Regression);
+        // Same-turn ok evidence of matching kinds links everything.
+        let ok_evidence = vec![
+            Evidence::tests("t", "u1", 5, 0, "cargo test"),
+            Evidence::build("t", "u1", Some(0), "cargo build"),
+        ];
+        let report = link_claims(&claims[..2], &ok_evidence);
+        assert_eq!(report.linked, 2);
+        assert!(report.unlinked.is_empty());
     }
 
     #[test]

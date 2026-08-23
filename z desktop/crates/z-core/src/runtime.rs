@@ -747,6 +747,32 @@ fn run_turn(
 
         if outcome.tool_calls.is_empty() {
             let _ = event_tx.send(Event::TextDone { thread_id: thread_id.clone(), turn_id: turn_id.clone() });
+            // sup-005/006 (ADR-0016): success claims in the final text are
+            // linked to same-turn ok evidence — observability only, never a
+            // turn failure (verdict gating is sup-007+). Same-turn window:
+            // an earlier turn's green build does not whitewash this claim.
+            if !outcome.text.trim().is_empty() && !crate::evidence::extract_claims(&outcome.text).is_empty() {
+                let claims = crate::evidence::extract_claims(&outcome.text);
+                match crate::evidence::EvidenceView::fold(&data_dir.join("journal").join("runtime.jsonl")) {
+                    Ok(view) => {
+                        let turn_evidence: Vec<_> = view
+                            .items
+                            .into_iter()
+                            .filter(|e| e.turn_id == turn_id)
+                            .collect();
+                        let report = crate::evidence::link_claims(&claims, &turn_evidence);
+                        if !report.unlinked.is_empty() {
+                            log::warn!(
+                                "supervision: {}/{} claim(s) unlinked in turn {turn_id} (kinds: {:?})",
+                                report.unlinked.len(),
+                                claims.len(),
+                                report.unlinked.iter().map(|c| c.kind).collect::<Vec<_>>()
+                            );
+                        }
+                    }
+                    Err(err) => log::warn!("supervision: evidence fold failed: {err}"),
+                }
+            }
             persist(&thread);
             finish(true, None);
             return;

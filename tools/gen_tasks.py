@@ -33,7 +33,7 @@ DOMAINS = [
         ("018", "Byte-identical retry payloads", ["016"], "PLANNED"),
         ("019", "Retry journaling (attempt field)", ["016"], "PLANNED"),
         ("020", "Protocol extension: EnqueueMessage/Pause/Resume variants", [], "IMPLEMENTED"),
-        ("021", "Multi-thread UI wiring (thread list panel)", ["ui-030"], "PLANNED"),
+        ("021", "Multi-thread UI wiring (thread list panel)", ["ui-030"], "IMPLEMENTED"),
         ("022", "Thread rename/delete/duplicate commands", ["021"], "IMPLEMENTED"),
         ("023", "Thread delete tombstone in journal", ["022", "jour-001"], "PLANNED"),
         ("024", "Active-turn delete rejection", ["022"], "PLANNED"),

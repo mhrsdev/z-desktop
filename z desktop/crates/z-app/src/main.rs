@@ -134,9 +134,11 @@ impl App {
     fn apply_event(&mut self, event: Event) -> bool {
         match event {
             Event::Accepted { .. } => false,
-            // core-021: UI wiring of the thread list is a later task; ignore
-            // for now so the additive protocol variant keeps compiling.
-            Event::ThreadList { .. } => false,
+            Event::ThreadList { threads } => {
+                // core-021: mirror the snapshot into the sidebar's thread rows.
+                self.view.threads = threads;
+                true
+            }
             Event::SteeringQueued { depth, .. } => {
                 self.view.steering_depth = depth as u32;
                 self.view.status_line = if depth > 0 {
@@ -891,5 +893,26 @@ mod access_tests {
         assert!(app.drain_events());
         assert_eq!(app.view.steering_depth, 2);
         assert!(app.view.status_line.contains("steering queued (2 pending)"));
+    }
+
+    #[test]
+    fn a_thread_list_event_populates_the_sidebar_mirror_and_triggers_a_frame() {
+        let mut app = App::new();
+
+        app.events.lock().unwrap().push(Event::ThreadList {
+            threads: vec![z_protocol::ThreadInfo {
+                id: "t1".into(),
+                title: "Refactor tokens".into(),
+                message_count: 7,
+                updated_ms: 42,
+            }],
+        });
+        assert!(
+            app.drain_events(),
+            "a ThreadList event must trigger a re-render"
+        );
+        assert_eq!(app.view.threads.len(), 1);
+        assert_eq!(app.view.threads[0].title, "Refactor tokens");
+        assert_eq!(app.view.threads[0].message_count, 7);
     }
 }

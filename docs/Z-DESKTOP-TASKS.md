@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 66 |
+| IMPLEMENTED | 67 |
 | PARTIAL | 2 |
-| PLANNED | 655 |
+| PLANNED | 654 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -78,7 +78,7 @@
 ### [IMPLEMENTED] core-020 — Protocol extension: EnqueueMessage/Pause/Resume variants
 - depends: —
 
-### [PLANNED] core-021 — Multi-thread UI wiring (thread list panel)
+### [IMPLEMENTED] core-021 — Multi-thread UI wiring (thread list panel)
 - depends: ui-030
 
 ### [IMPLEMENTED] core-022 — Thread rename/delete/duplicate commands

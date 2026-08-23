@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## Thread List UI Wiring — 2026-08-23 COMPLETE
+
+1. ✅ **core-021 UI**: WorkspaceView.threads mirrors Event::ThreadList;
+   sidebar draws thread rows (title + message count) above the project
+   index rows via a shared two-line row helper; apply_event populates the
+   mirror and triggers re-render. Display-only; selection is later work.
+
+Verification: full workspace suite green — **395 tests, 0 failed**
+(392 → 395). Ledger: 69 IMPLEMENTED.
+
+Next work continues → thread selection/switching, sup-007 fake-completion
+gating, or mem-006 consolidation pass.
+
 ## mem-005 Candidate Extraction — 2026-08-23 COMPLETE
 
 1. ✅ **mem-005**: extract_candidates — regex-free sentence heuristics;

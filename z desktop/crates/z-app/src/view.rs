@@ -54,6 +54,9 @@ pub struct WorkspaceView {
     /// (label, hint) rows mirrored from `ProjectIndexed` events. Empty until
     /// the runtime indexes a project; the view invents nothing.
     pub sidebar_items: Vec<(String, String)>,
+    /// Thread rows for the sidebar (core-021), mirrored verbatim from
+    /// `ThreadList` events. Display-only for now; selection is a later task.
+    pub threads: Vec<z_protocol::ThreadInfo>,
     /// Called when the user sends the composer text.
     pub on_send: Option<Box<dyn FnMut(String)>>,
     /// Called when the user resolves a pending approval.
@@ -182,6 +185,7 @@ impl WorkspaceView {
             status_line: "Z Desktop Personal".into(),
             pending_approval: None,
             sidebar_items: Vec::new(),
+            threads: Vec::new(),
             on_send: None,
             on_resolve: None,
         }
@@ -1218,34 +1222,34 @@ impl WorkspaceView {
             y = row.bottom() + 2.0;
         }
 
+        // Thread rows (core-021): display-only mirror of `ThreadList` events.
+        // Same icon-only and cap rules as the project index rows below them.
         // Project index rows (ui-030): counts mirrored from `ProjectIndexed`
         // by App. Hidden in icon-only mode, where a two-part row cannot fit,
         // and capped above the pinned Settings row instead of overlapping it.
         if !icon_only {
             let section_bottom = rail.bottom() - Spacing::S3 - row_height;
             let width = rail.width - Spacing::S4;
+            for thread in &self.threads {
+                if y + 40.0 > section_bottom {
+                    break;
+                }
+                sidebar_two_line_row(
+                    scene,
+                    rail.x + Spacing::S2,
+                    width,
+                    y,
+                    thread.title.clone(),
+                    format!("{} messages", thread.message_count),
+                    c,
+                );
+                y += 40.0;
+            }
             for (label, hint) in &self.sidebar_items {
                 if y + 40.0 > section_bottom {
                     break;
                 }
-                scene.push_text(
-                    Layer::Content,
-                    TextRun::new(
-                        label.clone(),
-                        Rect::new(rail.x + Spacing::S2, y, width, 22.0),
-                        Typography::BASE,
-                        c.text_secondary,
-                    ),
-                );
-                scene.push_text(
-                    Layer::Content,
-                    TextRun::new(
-                        hint.clone(),
-                        Rect::new(rail.x + Spacing::S2, y + 20.0, width, 18.0),
-                        Typography::LABEL,
-                        c.text_tertiary,
-                    ),
-                );
+                sidebar_two_line_row(scene, rail.x + Spacing::S2, width, y, label.clone(), hint.clone(), c);
                 y += 40.0;
             }
         }
@@ -2748,6 +2752,27 @@ fn wrapped_line_count(text: &str, width: f32, font_size: f32) -> f32 {
     ((text.chars().count() as f32 / per_line).ceil()).max(1.0)
 }
 
+/// One two-line sidebar row: primary label over a smaller hint. Shared by the
+/// thread rows (core-021) and the project index rows (ui-030).
+fn sidebar_two_line_row(
+    scene: &mut Scene,
+    x: f32,
+    width: f32,
+    y: f32,
+    label: String,
+    hint: String,
+    c: &Semantic,
+) {
+    scene.push_text(
+        Layer::Content,
+        TextRun::new(label, Rect::new(x, y, width, 22.0), Typography::BASE, c.text_secondary),
+    );
+    scene.push_text(
+        Layer::Content,
+        TextRun::new(hint, Rect::new(x, y + 20.0, width, 18.0), Typography::LABEL, c.text_tertiary),
+    );
+}
+
 fn hairline_bottom(scene: &mut Scene, area: Rect, color: Rgba) {
     scene.push_quad(
         Layer::Background,
@@ -3642,6 +3667,65 @@ mod tests {
         assert!(
             in_rail.iter().any(|t| t.text == "Project"),
             "the sidebar item label should render as a text run inside the rail"
+        );
+    }
+
+    #[test]
+    fn thread_list_rows_draw_as_text_inside_the_rail() {
+        let mut view = WorkspaceView::new();
+        view.threads = vec![
+            z_protocol::ThreadInfo {
+                id: "t1".into(),
+                title: "Refactor tokens".into(),
+                message_count: 7,
+                updated_ms: 42,
+            },
+            z_protocol::ThreadInfo {
+                id: "t2".into(),
+                title: "Wire runtime events".into(),
+                message_count: 3,
+                updated_ms: 43,
+            },
+        ];
+        let viewport = Rect::new(0.0, 0.0, 1536.0, 1024.0);
+        let scene = view.build(viewport);
+        let rail = px(view.workspace.frame(1536.0, 1024.0).rect(PanelId::Sidebar));
+
+        // Two runs per row (title + message count) for every mirrored thread.
+        let in_rail: Vec<&TextRun> = scene
+            .texts()
+            .filter(|t| {
+                t.bounds.x >= rail.x - 0.01
+                    && t.bounds.right() <= rail.right() + 0.01
+                    && t.bounds.y >= rail.y - 0.01
+                    && t.bounds.bottom() <= rail.bottom() + 0.01
+            })
+            .collect();
+        assert!(
+            in_rail.len() >= view.threads.len() * 2,
+            "each thread should draw a title and a count inside the rail"
+        );
+        for thread in &view.threads {
+            assert!(
+                in_rail.iter().any(|t| t.text == thread.title),
+                "thread title {:?} should render as a text run",
+                thread.title
+            );
+            let hint = format!("{} messages", thread.message_count);
+            assert!(
+                in_rail.iter().any(|t| t.text == hint),
+                "thread count {hint:?} should render as a text run"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_thread_list_draws_no_thread_rows() {
+        let mut view = WorkspaceView::new();
+        let scene = view.build(Rect::new(0.0, 0.0, 1536.0, 1024.0));
+        assert!(
+            !scene.texts().any(|t| t.text.ends_with(" messages")),
+            "the view must not invent threads the runtime never sent"
         );
     }
 

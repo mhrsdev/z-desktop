@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 56 |
+| IMPLEMENTED | 57 |
 | PARTIAL | 1 |
-| PLANNED | 666 |
+| PLANNED | 665 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -256,7 +256,7 @@
 ### [IMPLEMENTED] idx-003 — Tree-sitter dependency evaluation ADR
 - depends: —
 
-### [PLANNED] idx-004 — Rust grammar language pack
+### [IMPLEMENTED] idx-004 — Rust grammar language pack
 - depends: idx-003
 
 ### [PLANNED] idx-005 — TypeScript/JavaScript grammar pack

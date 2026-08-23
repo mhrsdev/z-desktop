@@ -60,7 +60,21 @@ impl RepoIndex {
                 entry.rel_path = rel.clone();
                 entry.size = meta.len();
                 entry.stamp = stamp;
-                entry.symbols = extract_symbols(path);
+                // idx-004 (ADR-0007): tree-sitter is primary for .rs; the
+                // regex scan stays as fallback for other languages and for
+                // any file the parser rejects.
+                entry.symbols = if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    std::fs::read_to_string(path)
+                        .map(|src| {
+                            match super::symbols::extract_rust_symbols(&src) {
+                                Ok(syms) => syms.into_iter().map(|s| s.name).collect(),
+                                Err(_) => extract_symbols(path),
+                            }
+                        })
+                        .unwrap_or_default()
+                } else {
+                    extract_symbols(path)
+                };
                 parsed += 1;
             }
         });

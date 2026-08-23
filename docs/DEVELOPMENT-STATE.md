@@ -6,6 +6,23 @@
 
 Last updated: 2026-08-23
 
+## idx-004 Tree-Sitter Rust Grammar — 2026-08-23 COMPLETE
+
+1. ✅ **idx-004**: first authorized dependency add per ADR-0007 —
+   tree-sitter 0.26.13 + tree-sitter-rust 0.24.2 (+ transitives
+   streaming-iterator, tree-sitter-language), no wasm feature. New
+   `z-core/src/symbols.rs`: extract_rust_symbols over six node kinds with
+   catch_unwind panic containment; impl items named by trait/type operand;
+   dedup is (name, kind) so a trait and its impl coexist. repo.rs routes
+   .rs files through tree-sitter with the regex scan kept as fallback.
+5 new tests; malformed input never panics (tested).
+
+Verification: full workspace suite green — **371 tests, 0 failed**
+(367 → 371). Ledger: 59 IMPLEMENTED.
+
+Next work continues → idx-005/006 TS/JS + Python grammar packs, or ui-030
+sidebar scaffold on the new panel seam.
+
 ## ctx-003 Budget Gate + ADR-0020 — 2026-08-23 COMPLETE
 
 1. ✅ **ctx-003**: `enforce_budget(msgs, budget)` in runtime.rs — second

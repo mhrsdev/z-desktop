@@ -95,7 +95,7 @@ DOMAINS = [
         ("001", "Index actor thread + channel API", [], "IMPLEMENTED"),
         ("002", "Snapshot read semantics (no shared mutable state)", ["001"], "IMPLEMENTED"),
         ("003", "Tree-sitter dependency evaluation ADR", [], "IMPLEMENTED"),
-        ("004", "Rust grammar language pack", ["003"], "PLANNED"),
+        ("004", "Rust grammar language pack", ["003"], "IMPLEMENTED"),
         ("005", "TypeScript/JavaScript grammar pack", ["003"], "PLANNED"),
         ("006", "Python grammar pack", ["003"], "PLANNED"),
         ("007", "Symbol extraction queries (fn/class/method/struct)", ["004"], "PLANNED"),

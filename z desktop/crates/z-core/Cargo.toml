@@ -12,6 +12,8 @@ serde_json = { workspace = true }
 ureq = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

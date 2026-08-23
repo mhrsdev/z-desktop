@@ -108,6 +108,23 @@ impl ShellFrame {
             (PanelId::PerformanceStrip, self.performance_strip),
         ]
     }
+
+    /// The resolved rectangle for one panel, by id.
+    ///
+    /// This is the seam renderers walk through (ADR-0019 D3): geometry is
+    /// looked up by [`PanelId`] instead of callers hand-copying fields, so an
+    /// eighth panel needs zero changes to geometry plumbing.
+    pub fn rect(&self, id: PanelId) -> Rect {
+        match id {
+            PanelId::TopBar => self.top_bar,
+            PanelId::Sidebar => self.sidebar,
+            PanelId::TabBar => self.tab_bar,
+            PanelId::Chat => self.chat,
+            PanelId::ContextPanel => self.context_panel,
+            PanelId::PerformanceStrip => self.performance_strip,
+            PanelId::FloatingTool => self.floating_tool,
+        }
+    }
 }
 
 /// Lay the shell out.
@@ -391,6 +408,14 @@ mod tests {
         let a = frame(1440.0, 900.0);
         let b = frame(1440.0, 900.0);
         assert_eq!(a, b, "the same inputs must produce the same frame");
+    }
+
+    #[test]
+    fn every_panel_id_resolves_to_a_rect() {
+        let frame = frame(1536.0, 1024.0);
+        for id in PanelId::ALL {
+            assert!(!frame.rect(*id).is_empty(), "{id:?} has no rect at the default preset");
+        }
     }
 
     #[test]

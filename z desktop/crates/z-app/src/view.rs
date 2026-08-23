@@ -15,35 +15,14 @@ use z_shell::{
 use z_tokens::metrics::{Radius, Spacing};
 use z_tokens::{Rgba, Semantic, Theme, Typography};
 
-/// The shell's rectangles, in the runtime's geometry type.
+/// Convert a shell-model rectangle into the runtime's geometry type.
 ///
-/// `z-shell` and `z-gpui` each own a `Rect` on purpose: the workspace
-/// model must not depend on the UI runtime, and the runtime must not know the
+/// `z-shell` and `z-gpui` each own a `Rect` on purpose: the workspace model
+/// must not depend on the UI runtime, and the runtime must not know the
 /// workspace exists. The app is where the two meet, so the conversion lives
 /// here — once, explicitly, rather than scattered through the draw calls.
-struct Frame {
-    top_bar: Rect,
-    sidebar: Rect,
-    tab_bar: Rect,
-    chat: Rect,
-    context_panel: Rect,
-    performance_strip: Rect,
-    floating_tool: Rect,
-}
-
-impl Frame {
-    fn from_shell(frame: &ShellFrame) -> Self {
-        let px = |r: z_shell::Rect| Rect::new(r.x, r.y, r.width, r.height);
-        Self {
-            top_bar: px(frame.top_bar),
-            sidebar: px(frame.sidebar),
-            tab_bar: px(frame.tab_bar),
-            chat: px(frame.chat),
-            context_panel: px(frame.context_panel),
-            performance_strip: px(frame.performance_strip),
-            floating_tool: px(frame.floating_tool),
-        }
-    }
+fn px(rect: z_shell::Rect) -> Rect {
+    Rect::new(rect.x, rect.y, rect.width, rect.height)
 }
 
 pub struct WorkspaceView {
@@ -222,7 +201,7 @@ impl WorkspaceView {
     }
 
     pub fn build(&mut self, viewport: Rect) -> Scene {
-        let frame = Frame::from_shell(&self.workspace.frame(viewport.width, viewport.height));
+        let frame = self.workspace.frame(viewport.width, viewport.height);
         let mut scene = Scene::new();
         let c = self.colors();
 
@@ -233,20 +212,11 @@ impl WorkspaceView {
                 .focusable(false),
         );
 
-        self.top_bar(&mut scene, &frame);
-        self.sidebar(&mut scene, &frame);
-        if self.workspace.view.nav_selection == NavItem::Home {
-            let active_surface = self.workspace.view.tabs.active_tab().map(|tab| tab.kind.clone());
-            match active_surface {
-                Some(SurfaceKind::Chat { .. }) | None => self.chat(&mut scene, &frame),
-                Some(surface) => self.empty_surface(&mut scene, &frame, surface),
-            }
-        } else {
-            self.navigation_surface(&mut scene, &frame, self.workspace.view.nav_selection);
+        // One dispatch over the registered panels (ADR-0019 D3): every region
+        // renders through `render_panel`, so a new panel is one new arm.
+        for id in PanelId::ALL {
+            self.render_panel(&mut scene, *id, &frame);
         }
-        self.context_panel(&mut scene, &frame);
-        self.performance_strip(&mut scene, &frame);
-        self.floating_tool(&mut scene, &frame);
 
         // Focus is restored into the tree that was just built, so an element
         // that vanished this frame does not leave focus pointing at nothing.
@@ -258,6 +228,34 @@ impl WorkspaceView {
         self.draw_focus_ring(&mut scene);
 
         scene
+    }
+
+    /// The single dispatch point from [`PanelId`] to its draw code (ADR-0019
+    /// D3). Exhaustive over the registry's ids, so adding a panel is a compile
+    /// error until it has an arm.
+    fn render_panel(&mut self, scene: &mut Scene, id: PanelId, frame: &ShellFrame) {
+        match id {
+            PanelId::TopBar => self.top_bar(scene, frame),
+            PanelId::Sidebar => self.sidebar(scene, frame),
+            // The tab strip is a zone inside the top-bar band and is drawn as
+            // part of it; its id exists for layout and persistence.
+            PanelId::TabBar => {}
+            PanelId::Chat => {
+                if self.workspace.view.nav_selection == NavItem::Home {
+                    let active_surface =
+                        self.workspace.view.tabs.active_tab().map(|tab| tab.kind.clone());
+                    match active_surface {
+                        Some(SurfaceKind::Chat { .. }) | None => self.chat(scene, frame),
+                        Some(surface) => self.empty_surface(scene, frame, surface),
+                    }
+                } else {
+                    self.navigation_surface(scene, frame, self.workspace.view.nav_selection);
+                }
+            }
+            PanelId::ContextPanel => self.context_panel(scene, frame),
+            PanelId::PerformanceStrip => self.performance_strip(scene, frame),
+            PanelId::FloatingTool => self.floating_tool(scene, frame),
+        }
     }
 
     /// The focus ring, drawn on the topmost layer.
@@ -278,9 +276,9 @@ impl WorkspaceView {
     /// A project-independent workspace surface. Selecting a view tool changes
     /// the presentation immediately; actions that need a project, runtime or
     /// reviewed change set remain explicitly unavailable in the copy.
-    fn empty_surface(&self, scene: &mut Scene, frame: &Frame, surface_kind: SurfaceKind) {
+    fn empty_surface(&self, scene: &mut Scene, frame: &ShellFrame, surface_kind: SurfaceKind) {
         let c = self.colors();
-        let surface = frame.chat;
+        let surface = px(frame.rect(PanelId::Chat));
         if surface.is_empty() {
             return;
         }
@@ -633,9 +631,9 @@ impl WorkspaceView {
     /// Each destination in the left rail owns a centre surface. This makes the
     /// rail more than a cosmetic selection while preserving the active work
     /// tab: activating any top tab returns to Home and reveals it again.
-    fn navigation_surface(&self, scene: &mut Scene, frame: &Frame, item: NavItem) {
+    fn navigation_surface(&self, scene: &mut Scene, frame: &ShellFrame, item: NavItem) {
         let c = self.colors();
-        let surface = frame.chat;
+        let surface = px(frame.rect(PanelId::Chat));
         if surface.is_empty() {
             return;
         }
@@ -976,9 +974,9 @@ impl WorkspaceView {
 
     // -- Top band ------------------------------------------------------------
 
-    fn top_bar(&self, scene: &mut Scene, frame: &Frame) {
+    fn top_bar(&self, scene: &mut Scene, frame: &ShellFrame) {
         let c = self.colors();
-        let bar = frame.top_bar;
+        let bar = px(frame.rect(PanelId::TopBar));
         if bar.is_empty() {
             return;
         }
@@ -1016,9 +1014,9 @@ impl WorkspaceView {
         self.account_zone(scene, frame);
     }
 
-    fn tab_strip(&self, scene: &mut Scene, frame: &Frame) {
+    fn tab_strip(&self, scene: &mut Scene, frame: &ShellFrame) {
         let c = self.colors();
-        let zone = frame.tab_bar;
+        let zone = px(frame.rect(PanelId::TabBar));
         if zone.is_empty() {
             return;
         }
@@ -1097,15 +1095,11 @@ impl WorkspaceView {
         }
     }
 
-    fn account_zone(&self, scene: &mut Scene, frame: &Frame) {
+    fn account_zone(&self, scene: &mut Scene, frame: &ShellFrame) {
         let c = self.colors();
-        let bar = frame.top_bar;
-        let zone = Rect::new(
-            frame.tab_bar.right(),
-            bar.y,
-            (bar.right() - frame.tab_bar.right()).max(0.0),
-            bar.height,
-        );
+        let bar = px(frame.rect(PanelId::TopBar));
+        let tabs = px(frame.rect(PanelId::TabBar));
+        let zone = Rect::new(tabs.right(), bar.y, (bar.right() - tabs.right()).max(0.0), bar.height);
         if zone.width < 120.0 {
             return;
         }
@@ -1187,9 +1181,9 @@ impl WorkspaceView {
 
     // -- Left rail -----------------------------------------------------------
 
-    fn sidebar(&self, scene: &mut Scene, frame: &Frame) {
+    fn sidebar(&self, scene: &mut Scene, frame: &ShellFrame) {
         let c = self.colors();
-        let rail = frame.sidebar;
+        let rail = px(frame.rect(PanelId::Sidebar));
         if rail.is_empty() {
             return;
         }
@@ -1290,9 +1284,9 @@ impl WorkspaceView {
 
     // -- Centre surface ------------------------------------------------------
 
-    fn chat(&mut self, scene: &mut Scene, frame: &Frame) {
+    fn chat(&mut self, scene: &mut Scene, frame: &ShellFrame) {
         let c = self.colors();
-        let surface = frame.chat;
+        let surface = px(frame.rect(PanelId::Chat));
         if surface.is_empty() {
             return;
         }
@@ -1868,9 +1862,9 @@ impl WorkspaceView {
 
     // -- Right rail ----------------------------------------------------------
 
-    fn context_panel(&self, scene: &mut Scene, frame: &Frame) {
+    fn context_panel(&self, scene: &mut Scene, frame: &ShellFrame) {
         let c = self.colors();
-        let panel = frame.context_panel;
+        let panel = px(frame.rect(PanelId::ContextPanel));
         if panel.is_empty() {
             return;
         }
@@ -2052,9 +2046,9 @@ impl WorkspaceView {
 
     // -- Bottom band ---------------------------------------------------------
 
-    fn performance_strip(&self, scene: &mut Scene, frame: &Frame) {
+    fn performance_strip(&self, scene: &mut Scene, frame: &ShellFrame) {
         let c = self.colors();
-        let strip = frame.performance_strip;
+        let strip = px(frame.rect(PanelId::PerformanceStrip));
         if strip.is_empty() {
             return;
         }
@@ -2130,16 +2124,17 @@ impl WorkspaceView {
 
     // -- Overlay -------------------------------------------------------------
 
-    fn floating_tool(&self, scene: &mut Scene, frame: &Frame) {
+    fn floating_tool(&self, scene: &mut Scene, frame: &ShellFrame) {
         let c = self.colors();
-        let anchor = frame.floating_tool;
+        let anchor = px(frame.rect(PanelId::FloatingTool));
+        let chat = px(frame.rect(PanelId::Chat));
         if anchor.is_empty() {
             return;
         }
 
         // The overlay floats above the composer, never over it: covering the
         // field the user types into would be worse than not showing the tool.
-        let floor = frame.chat.bottom() - CHAT_GUTTER - INPUT_BAR_HEIGHT - Spacing::S4;
+        let floor = chat.bottom() - CHAT_GUTTER - INPUT_BAR_HEIGHT - Spacing::S4;
         let bubble_size = 46.0;
         let bubble = Rect::new(anchor.x, floor - bubble_size, bubble_size, bubble_size);
         let active_task_count =
@@ -2195,7 +2190,7 @@ impl WorkspaceView {
         let padding = Spacing::S3;
         let width = anchor.width.min(240.0);
         let height = padding * 2.0 + FLOATING_TOOLS.len() as f32 * row_height;
-        let ceiling = frame.chat.y + Spacing::S4;
+        let ceiling = chat.y + Spacing::S4;
         let panel_bottom = bubble.y - Spacing::S2;
         let panel = Rect::new(
             anchor.x,

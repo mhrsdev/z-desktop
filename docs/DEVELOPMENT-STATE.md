@@ -6,6 +6,38 @@
 
 Last updated: 2026-08-23
 
+## Safe-Editing Foundation + ADR-0010 (2026-08-23) — COMPLETE
+
+1. ✅ **edit-001**: `z-core/src/fingerprint.rs` — hand-rolled FNV-1a 64-bit
+   (spec vectors tested: empty/a/foobar), `file_fingerprint` streams 8 KiB
+   chunks (no whole-file loads), plus a per-(thread,path) fingerprint
+   registry (`record_fingerprint` / take-on-read `take_fingerprint`;
+   unbounded map noted as fine at personal scale).
+2. ✅ **edit-002**: `ToolInvocation` gained `thread_id`; runtime passes the
+   real thread id; fs_read records the file's fingerprint after a successful
+   read. Empty thread_id (tests) never records.
+3. ✅ **edit-003** (ZD-E-0060): fs_write refuses when the recorded
+   fingerprint differs from current on-disk content — error text is the §51
+   canonical sentence. Never-read files stay writable (blind writes; edit-018
+   flags later). Successful writes re-arm the fingerprint so consecutive
+   agent edits work.
+
+Verification: full workspace suite green — **307 tests, 0 failed**
+(302 → 307; fingerprint vectors, registry semantics, fs_read recording,
+stale-write refusal incl. user-edit preservation and write re-arming).
+
+Also this session:
+- ✅ **ADR-0010** (`docs/adr/0010-safe-editing-pipeline.md`): all writes go
+  through one atomic helper — same-dir temp → fsync → rename → dir-sync,
+  Windows via MoveFileExW semantics with sharing-violation retries; patches
+  apply in memory (exact match, whitespace-normalized fallback, ZD-E-0061 on
+  absent anchor, abort-before-disk); rollback = captured old bytes (git not
+  assumed); write grants live in Shared keyed by canonical path;
+  multi-file txns are validate-all → stage-all → apply.
+
+Next work continues → edit-004 atomic write helper behind the existing
+fs_write path, then edit-008+ patch tools per ADR-0010.
+
 ## Journal Wiring + ADR-0009 (2026-08-23) — COMPLETE
 
 1. ✅ **jour-024**: Runtime owns `journal: Mutex<Journal>` at

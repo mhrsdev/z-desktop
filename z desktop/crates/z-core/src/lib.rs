@@ -13,6 +13,7 @@ pub mod tokens;
 pub mod repo;
 pub mod runtime;
 pub mod tools;
+pub mod fingerprint;
 
 /// Monotonic, collision-free-enough identifiers for a single-user local app:
 /// millisecond timestamp plus a process-wide counter.

@@ -622,6 +622,7 @@ fn run_turn(
                 name: &call.name,
                 args,
                 project_root: &root,
+                thread_id: &thread_id,
             });
             record_result(
                 &mut thread,

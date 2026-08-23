@@ -134,9 +134,9 @@ DOMAINS = [
         ("040", "fixture xl-repo generator script", ["fix-004"], "PLANNED"),
     ]),
     ("edit", "Safe Editing Engine", [
-        ("001", "Fingerprint computation (fnv1a64) utility", [], "PLANNED"),
-        ("002", "fs_read records fingerprint per thread", ["001"], "PLANNED"),
-        ("003", "Stale-write refusal (ZD-E-0060)", ["002"], "PLANNED"),
+        ("001", "Fingerprint computation (fnv1a64) utility", [], "IMPLEMENTED"),
+        ("002", "fs_read records fingerprint per thread", ["001"], "IMPLEMENTED"),
+        ("003", "Stale-write refusal (ZD-E-0060)", ["002"], "IMPLEMENTED"),
         ("004", "Atomic write helper (temp+rename+fsync)", [], "PLANNED"),
         ("005", "fs_write routes through atomic helper", ["004"], "PLANNED"),
         ("006", "Crash-simulation test for atomic writes", ["004"], "PLANNED"),

@@ -35,6 +35,9 @@ pub struct ToolInvocation<'a> {
     pub name: &'a str,
     pub args: Value,
     pub project_root: &'a Path,
+    /// Owning conversation thread, for per-thread read fingerprints
+    /// (edit-002). Empty string in tests that don't care.
+    pub thread_id: &'a str,
 }
 
 /// Classify a tool call's risk before it runs.
@@ -196,7 +199,15 @@ fn fs_read(inv: &ToolInvocation) -> ToolOutput {
         if meta.len() > 512 * 1024 {
             return Err("file larger than 512 KiB; read it in parts via terminal_exec".into());
         }
-        std::fs::read_to_string(&path).map_err(|e| e.to_string())
+        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        // edit-002: remember what this thread last saw, keyed by the raw
+        // requested path so fs_write's later lookup resolves identically.
+        if !inv.thread_id.is_empty() {
+            if let Ok(fp) = crate::fingerprint::file_fingerprint(&path) {
+                crate::fingerprint::record_fingerprint(inv.thread_id, &fmt_arg(&inv.args, "path"), fp);
+            }
+        }
+        Ok(content)
     })();
     match result {
         Ok(content) => ToolOutput { ok: true, text: bound(content) },
@@ -271,10 +282,32 @@ fn fs_write(inv: &ToolInvocation) -> ToolOutput {
         let raw = fmt_arg(&inv.args, "path");
         let content = inv.args.get("content").and_then(Value::as_str).unwrap_or("");
         let path = scoped(inv.project_root, &raw)?;
+        // edit-003 (ZD-E-0060): if this thread read the file before, the
+        // on-disk content must still match what it saw. Never-read files
+        // stay writable for now (blind writes; edit-018 flags them later).
+        if !inv.thread_id.is_empty() {
+            if let Some(expected) = crate::fingerprint::take_fingerprint(inv.thread_id, &raw) {
+                match crate::fingerprint::file_fingerprint(&path) {
+                    Ok(current) if current == expected => {}
+                    _ => {
+                        return Err(
+                            "This file changed since it was read. Re-read it before editing."
+                                .into(),
+                        );
+                    }
+                }
+            }
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        // Re-arm so consecutive agent writes don't trip against their own output.
+        if !inv.thread_id.is_empty() {
+            if let Ok(fp) = crate::fingerprint::file_fingerprint(&path) {
+                crate::fingerprint::record_fingerprint(inv.thread_id, &raw, fp);
+            }
+        }
         Ok(format!("wrote {} bytes to {}", content.len(), raw))
     })();
     match result {
@@ -375,6 +408,7 @@ mod tests {
             name: "fs_read",
             args: json!({"path": "hello.txt"}),
             project_root: &root,
+            thread_id: "",
         });
         assert!(out.ok, "{}", out.text);
         assert_eq!(out.text, "hi");
@@ -383,6 +417,7 @@ mod tests {
             name: "fs_write",
             args: json!({"path": "sub/new.txt", "content": "created"}),
             project_root: &root,
+            thread_id: "",
         });
         assert!(out.ok, "{}", out.text);
         assert_eq!(std::fs::read_to_string(root.join("sub/new.txt")).unwrap(), "created");
@@ -399,6 +434,7 @@ mod tests {
             name: "fs_search",
             args: json!({"query": "TODO"}),
             project_root: &root,
+            thread_id: "",
         });
         assert!(out.ok);
         assert!(out.text.contains("src/a.rs:2"), "{}", out.text);
@@ -419,6 +455,7 @@ mod tests {
             name: "terminal_exec",
             args: json!({"command": "echo sandboxed"}),
             project_root: &root,
+            thread_id: "",
         });
         assert!(out.ok, "{}", out.text);
         assert!(out.text.contains("sandboxed"));
@@ -432,8 +469,100 @@ mod tests {
             name: "terminal_exec",
             args: json!({"command": slow, "timeout_ms": 300}),
             project_root: &root,
+            thread_id: "",
         });
         assert!(!out.ok);
         assert!(out.text.contains("[killed:"), "{}", out.text);
+    }
+
+    #[test]
+    fn fs_read_records_a_fingerprint_for_the_thread() {
+        // edit-002: after a read, the thread's fingerprint is queryable.
+        let root = temp_root("fp-read");
+        std::fs::write(root.join("doc.txt"), "hello fp").unwrap();
+
+        execute(ToolInvocation {
+            name: "fs_read",
+            args: json!({"path": "doc.txt"}),
+            project_root: &root,
+            thread_id: "t-fp",
+        });
+        let expected =
+            crate::fingerprint::file_fingerprint(&root.join("doc.txt")).unwrap();
+        assert_eq!(
+            crate::fingerprint::take_fingerprint("t-fp", "doc.txt"),
+            Some(expected)
+        );
+        // Empty thread_id never records.
+        std::fs::write(root.join("other.txt"), "x").unwrap();
+        execute(ToolInvocation {
+            name: "fs_read",
+            args: json!({"path": "other.txt"}),
+            project_root: &root,
+            thread_id: "",
+        });
+        assert_eq!(crate::fingerprint::take_fingerprint("", "other.txt"), None);
+    }
+
+    #[test]
+    fn stale_write_is_refused_until_the_file_is_reread() {
+        // edit-003 (ZD-E-0060): file changed under us -> write refused.
+        let root = temp_root("fp-stale");
+        std::fs::write(root.join("code.rs"), "fn original() {}").unwrap();
+        execute(ToolInvocation {
+            name: "fs_read",
+            args: json!({"path": "code.rs"}),
+            project_root: &root,
+            thread_id: "t-stale",
+        });
+        // The user edits the file behind the agent's back.
+        std::fs::write(root.join("code.rs"), "fn user_edit() {}").unwrap();
+        let out = execute(ToolInvocation {
+            name: "fs_write",
+            args: json!({"path": "code.rs", "content": "fn agent() {}"}),
+            project_root: &root,
+            thread_id: "t-stale",
+        });
+        assert!(!out.ok, "stale write must be refused");
+        assert!(out.text.contains("changed since it was read"), "{}", out.text);
+        assert_eq!(
+            std::fs::read_to_string(root.join("code.rs")).unwrap(),
+            "fn user_edit() {}",
+            "user work must be untouched"
+        );
+
+        // Re-read arms a fresh fingerprint; the same write now succeeds.
+        execute(ToolInvocation {
+            name: "fs_read",
+            args: json!({"path": "code.rs"}),
+            project_root: &root,
+            thread_id: "t-stale",
+        });
+        let out = execute(ToolInvocation {
+            name: "fs_write",
+            args: json!({"path": "code.rs", "content": "fn agent() {}"}),
+            project_root: &root,
+            thread_id: "t-stale",
+        });
+        assert!(out.ok, "{}", out.text);
+        assert_eq!(std::fs::read_to_string(root.join("code.rs")).unwrap(), "fn agent() {}");
+
+        // Consecutive writes succeed without re-reading (write re-arms).
+        let out = execute(ToolInvocation {
+            name: "fs_write",
+            args: json!({"path": "code.rs", "content": "fn again() {}"}),
+            project_root: &root,
+            thread_id: "t-stale",
+        });
+        assert!(out.ok, "{}", out.text);
+
+        // A thread that never read the file may still blind-write.
+        let out = execute(ToolInvocation {
+            name: "fs_write",
+            args: json!({"path": "blind.txt", "content": "new"}),
+            project_root: &root,
+            thread_id: "t-other",
+        });
+        assert!(out.ok, "{}", out.text);
     }
 }

@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 15 |
+| IMPLEMENTED | 18 |
 | PARTIAL | 1 |
-| PLANNED | 707 |
+| PLANNED | 704 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -369,13 +369,13 @@
 
 ## Safe Editing Engine (`edit-*`)
 
-### [PLANNED] edit-001 — Fingerprint computation (fnv1a64) utility
+### [IMPLEMENTED] edit-001 — Fingerprint computation (fnv1a64) utility
 - depends: —
 
-### [PLANNED] edit-002 — fs_read records fingerprint per thread
+### [IMPLEMENTED] edit-002 — fs_read records fingerprint per thread
 - depends: edit-001
 
-### [PLANNED] edit-003 — Stale-write refusal (ZD-E-0060)
+### [IMPLEMENTED] edit-003 — Stale-write refusal (ZD-E-0060)
 - depends: edit-002
 
 ### [PLANNED] edit-004 — Atomic write helper (temp+rename+fsync)

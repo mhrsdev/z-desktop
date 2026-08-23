@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 79 |
+| IMPLEMENTED | 81 |
 | PARTIAL | 2 |
-| PLANNED | 642 |
+| PLANNED | 640 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -719,10 +719,10 @@
 ### [IMPLEMENTED] mem-009 — Context injection respecting budgets
 - depends: mem-008, ctx-001
 
-### [PLANNED] mem-010 — User correction creates superseding record
+### [IMPLEMENTED] mem-010 — User correction creates superseding record
 - depends: mem-004
 
-### [PLANNED] mem-011 — Dependents flagged on correction
+### [IMPLEMENTED] mem-011 — Dependents flagged on correction
 - depends: mem-010
 
 ### [PLANNED] mem-012 — Memory inspector panel

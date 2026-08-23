@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-23
 
+## mem-010/011 Corrections — 2026-08-23 COMPLETE
+
+1. ✅ **mem-010**: correct(journal, original_id, …) — validates the live
+   target (unknown/double-correct error), appends supersede event + a
+   Promoted replacement ({id}-c{ts}, clamped confidence); replacement is
+   built before any append so failures can't orphan the chain.
+2. ✅ **mem-011**: dependents_of walks superseded_by chains iteratively
+   (nearest first, cycle-safe).
+
+Verification: full workspace suite green — **422 tests, 0 failed**
+(419 → 422). Ledger: 83 IMPLEMENTED.
+
+Next work continues → prov-005 capability registry, ui-040 evidence
+badges, or core-026 corrupt-thread surfacing.
+
 ## mem-008/009 Retrieval + Injection — 2026-08-23 COMPLETE
 
 1. ✅ **mem-008**: retrieve(view, terms, cap) — scores live() records as

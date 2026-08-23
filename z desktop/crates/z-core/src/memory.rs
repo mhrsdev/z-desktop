@@ -220,6 +220,84 @@ pub fn retrieve(view: &MemoryView, query_terms: &[&str], cap: usize) -> Vec<Rank
     ranked
 }
 
+/// User correction (mem-010, ADR-0014): folds the journal to find the live
+/// original, then appends TWO `memory_recorded` events — the original
+/// re-recorded with `superseded_by` pointing at the replacement, and a new
+/// Promoted replacement `{original_id}-c{ts}` carrying `corrected_content`,
+/// the original's layer, and `new_confidence` clamped into [0, 1]. Returns
+/// the replacement id. Corrections are new records plus an updated line for
+/// the predecessor, never in-place edits.
+pub fn correct(
+    journal: &Mutex<Journal>,
+    original_id: &str,
+    corrected_content: &str,
+    new_confidence: f32,
+    thread_id: &str,
+    turn_id: &str,
+) -> Result<String, String> {
+    let path = journal.lock().unwrap().path().to_path_buf();
+    let view = MemoryView::fold(&path)?;
+    let original = view
+        .records
+        .iter()
+        .find(|r| r.id == original_id)
+        .ok_or_else(|| format!("memory: cannot correct unknown record {original_id}"))?;
+    if original.superseded_by.is_some() {
+        return Err(format!(
+            "memory: record {original_id} is already superseded"
+        ));
+    }
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let new_id = format!("{original_id}-c{now_ms}");
+    let mut superseded_line = original.clone();
+    superseded_line.superseded_by = Some(new_id.clone());
+    let provenance = Provenance {
+        kind: "user".into(),
+        r#ref: turn_id.into(),
+        thread_id: thread_id.into(),
+        turn_id: turn_id.into(),
+        ts_ms: now_ms,
+    };
+    // Built before any append so an invalid confidence fails loud without
+    // leaving the original superseded with no replacement behind it.
+    // ponytail: f32::clamp passes NaN through; MemoryRecord::new rejects it.
+    let replacement = MemoryRecord::new(
+        new_id.clone(),
+        original.layer,
+        corrected_content,
+        provenance,
+        new_confidence.clamp(0.0, 1.0),
+        Status::Promoted,
+    )?;
+    record(journal, &superseded_line);
+    record(journal, &replacement);
+    Ok(new_id)
+}
+
+/// Dependents of a record (mem-011, ADR-0014): ids of records superseded by
+/// `id`, transitively down the chain, nearest first (BFS from `id`). Cycle-
+/// safe via visited-set semantics on `out`.
+pub fn dependents_of(view: &MemoryView, id: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut frontier = vec![id.to_string()];
+    while let Some(current) = frontier.pop() {
+        for r in &view.records {
+            if r.superseded_by.as_deref() == Some(current.as_str())
+                && r.id != id
+                && !out.contains(&r.id)
+            {
+                out.push(r.id.clone());
+                frontier.push(r.id.clone());
+            }
+        }
+    }
+    out
+}
+
 /// Owns the `data/memory/` view directory: one append-only JSONL file per
 /// layer, rebuilt from the journal (delete any of them and replaying
 /// reproduces equivalent state — ADR-0014 D2).
@@ -927,6 +1005,82 @@ mod memory_tests {
         assert_eq!(view.live().len(), 100, "cap enforced exactly");
         drop(journal);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn correct_supersedes_original_and_lands_promoted_replacement() {
+        let dir = temp_dir("correct");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        record(
+            &journal,
+            &rec_conf("mem-a", "deploys happen on Tuesday", 0.6, Status::Promoted),
+        );
+
+        let new_id =
+            correct(&journal, "mem-a", "deploys happen on Wednesday", 1.5, "thread-9", "turn-9")
+                .expect("correction");
+        assert!(new_id.starts_with("mem-a-c"), "{new_id}");
+        drop(journal); // release handle before folding
+
+        let view = MemoryView::fold(&path).expect("fold");
+        assert_eq!(view.records.len(), 2);
+        let orig = view.records.iter().find(|r| r.id == "mem-a").unwrap();
+        assert_eq!(orig.superseded_by.as_deref(), Some(new_id.as_str()));
+        let rep = view.records.iter().find(|r| r.id == new_id).expect("replacement");
+        assert_eq!(rep.status, Status::Promoted);
+        assert_eq!(rep.layer, Layer::Project, "same layer as original");
+        assert_eq!(rep.content, "deploys happen on Wednesday");
+        assert_eq!(rep.confidence, 1.0, "clamped into [0,1]");
+        assert_eq!(rep.provenance.kind, "user");
+        assert_eq!(rep.provenance.thread_id, "thread-9");
+        assert_eq!(rep.provenance.turn_id, "turn-9");
+
+        // D4 predicate: only the replacement is live.
+        let live_ids: Vec<&str> = view.live().iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(live_ids, vec![new_id.as_str()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn correct_errors_on_unknown_and_already_superseded_targets() {
+        let dir = temp_dir("correct-errors");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        record(&journal, &rec_conf("mem-a", "original fact", 0.6, Status::Promoted));
+
+        assert!(
+            correct(&journal, "mem-nope", "x", 0.5, "t", "u")
+                .err()
+                .unwrap()
+                .contains("unknown"),
+            "missing id must error"
+        );
+
+        correct(&journal, "mem-a", "fixed fact", 0.7, "t", "u").expect("first correction");
+        let err = correct(&journal, "mem-a", "again", 0.5, "t", "u").err().unwrap();
+        assert!(err.contains("already superseded"), "{err}");
+        drop(journal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dependents_of_walks_the_chain_transitively_nearest_first() {
+        let mut view = MemoryView::default();
+        let mut a = rec("mem-a", Status::Promoted);
+        let mut b = rec("mem-b", Status::Promoted);
+        let c = rec("mem-c", Status::Promoted);
+        a.superseded_by = Some("mem-b".into());
+        b.superseded_by = Some("mem-c".into());
+        view.records.extend([a, b, c]);
+
+        assert_eq!(
+            dependents_of(&view, "mem-c"),
+            vec!["mem-b".to_string(), "mem-a".to_string()],
+            "whole chain, nearest first"
+        );
+        assert_eq!(dependents_of(&view, "mem-b"), vec!["mem-a".to_string()]);
+        assert!(dependents_of(&view, "mem-a").is_empty(), "tip has no dependents");
+        assert!(dependents_of(&view, "mem-absent").is_empty());
     }
 
     #[test]

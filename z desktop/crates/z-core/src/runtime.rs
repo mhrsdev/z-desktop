@@ -13,7 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
-use z_protocol::{Command, Event, Id, ProviderConfig, Risk};
+use z_protocol::{Command, Event, Id, ProviderConfig, Risk, ThreadInfo};
 
 // ---------------------------------------------------------------------------
 // Conversation model (persisted)
@@ -41,12 +41,24 @@ pub struct Thread {
     pub id: Id,
     pub title: String,
     pub messages: Vec<StoredMessage>,
+    /// Last message-activity time (ms since epoch). Drives ThreadList recency
+    /// ordering. Default keeps older files loadable (ADR-0018 additive).
+    #[serde(default)]
+    pub updated_ms: u64,
 }
 
 impl Thread {
     fn new(id: Id) -> Self {
-        Self { id, title: "New chat".into(), messages: Vec::new() }
+        Self { id, title: "New chat".into(), messages: Vec::new(), updated_ms: 0 }
     }
+}
+
+/// Wall-clock milliseconds since the Unix epoch (best-effort; 0 pre-1970).
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +145,9 @@ pub struct Runtime {
     // opened (missing dir, permissions), the runtime runs on without it
     // instead of failing every command.
     journal: Option<Arc<Mutex<Journal>>>,
+    // core-025 partial: id of the most recently modified thread file seen by
+    // the startup restore loop (by fs mtime). Startup wiring reads this later.
+    most_recent_restored: Option<Id>,
 }
 
 /// Open the runtime lifecycle journal at `<data_dir>/journal/runtime.jsonl`
@@ -173,6 +188,42 @@ pub fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("data"))
 }
 
+/// Load every parseable `<dir>/threads/*.json` into memory. Also reports the
+/// id of the most recently modified thread file by fs mtime — core-025
+/// partial, so startup wiring can auto-open it. A file whose mtime cannot be
+/// read simply does not compete for "most recent"; corrupt JSON is skipped.
+fn restore_threads(dir: &std::path::Path) -> (HashMap<Id, Thread>, Option<Id>) {
+    let mut threads = HashMap::new();
+    let mut most_recent: Option<Id> = None;
+    let mut newest = std::time::SystemTime::UNIX_EPOCH;
+    if let Ok(entries) = std::fs::read_dir(dir.join("threads")) {
+        for entry in entries.flatten() {
+            if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            match std::fs::read_to_string(entry.path())
+                .map_err(|e| e.to_string())
+                .and_then(|s| serde_json::from_str::<Thread>(&s).map_err(|e| e.to_string()))
+            {
+                Ok(thread) => {
+                    // Only a file we actually restored can be "most recent" —
+                    // startup auto-open must never point at corrupt data.
+                    if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
+                        if mtime > newest {
+                            newest = mtime;
+                            most_recent =
+                                entry.path().file_stem().and_then(|s| s.to_str()).map(Id::from);
+                        }
+                    }
+                    threads.insert(thread.id.clone(), thread);
+                }
+                Err(e) => log::warn!("skipping unreadable session {:?}: {e}", entry.path()),
+            }
+        }
+    }
+    (threads, most_recent)
+}
+
 impl Runtime {
     pub fn new(event_tx: Sender<Event>, cmd_rx: Receiver<(u64, Command)>) -> Self {
         let data_dir = data_dir();
@@ -180,24 +231,10 @@ impl Runtime {
         // set-002/003 (ADR-0011): load settings once into the shared snapshot;
         // hand-edited files apply on relaunch, SetSetting swaps the Arc later.
         let settings = Arc::new(crate::settings::Snapshot::new(crate::settings::load(&data_dir)));
-        let mut threads = HashMap::new();
         // Restore persisted sessions; a corrupt file is skipped, not fatal.
-        if let Ok(entries) = std::fs::read_dir(data_dir.join("threads")) {
-            for entry in entries.flatten() {
-                if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                match std::fs::read_to_string(entry.path())
-                    .map_err(|e| e.to_string())
-                    .and_then(|s| serde_json::from_str::<Thread>(&s).map_err(|e| e.to_string()))
-                {
-                    Ok(thread) => {
-                        threads.insert(thread.id.clone(), thread);
-                    }
-                    Err(e) => log::warn!("skipping unreadable session {:?}: {e}", entry.path()),
-                }
-            }
-        }
+        // Second return value: id of the most recently modified thread file
+        // (core-025 partial, consumed by `most_recent_thread`).
+        let (threads, most_recent_restored) = restore_threads(&data_dir);
         log::info!("restored {} thread(s)", threads.len());
         // jour-024: resume the lifecycle journal across restarts (best-effort).
         let journal = open_runtime_journal(&data_dir);
@@ -218,7 +255,14 @@ impl Runtime {
             event_tx,
             cmd_rx,
             journal,
+            most_recent_restored,
         }
+    }
+
+    /// core-025 partial (restore-most-recent): id of the most recently
+    /// modified thread file at restore time, for app startup auto-open.
+    pub fn most_recent_thread(&self) -> Option<String> {
+        self.most_recent_restored.clone()
     }
 
     /// Run the command loop until the channel closes (app shutdown).
@@ -244,6 +288,14 @@ impl Runtime {
                 }
                 Command::ResolveApproval { call_id, approved } => {
                     self.shared.gate.resolve(&call_id, approved);
+                }
+                // core-021/022: thread management. Every mutation re-emits a
+                // fresh ThreadList so the UI never drifts from runtime state.
+                Command::ListThreads => self.send_thread_list(),
+                Command::RenameThread { thread_id, title } => self.rename_thread(thread_id, title),
+                Command::DeleteThread { thread_id } => self.delete_thread(thread_id),
+                Command::DuplicateThread { thread_id, new_id } => {
+                    self.duplicate_thread(thread_id, new_id)
                 }
             }
         }
@@ -294,6 +346,20 @@ impl Runtime {
             ),
             Command::ResolveApproval { .. } => (None, json!({ "command": "resolve_approval" })),
             Command::OpenProject { .. } => (None, json!({ "command": "open_project" })),
+            // core-021/022 thread management: shape-only breadcrumbs.
+            Command::ListThreads => (None, json!({ "command": "list_threads" })),
+            Command::RenameThread { thread_id, .. } => (
+                Some(thread_id.clone()),
+                json!({ "command": "rename_thread", "thread_id": thread_id }),
+            ),
+            Command::DeleteThread { thread_id } => (
+                Some(thread_id.clone()),
+                json!({ "command": "delete_thread", "thread_id": thread_id }),
+            ),
+            Command::DuplicateThread { thread_id, new_id } => (
+                Some(thread_id.clone()),
+                json!({ "command": "duplicate_thread", "thread_id": thread_id, "new_id": new_id }),
+            ),
             Command::ConfigureProvider { config } => (
                 None,
                 // Shape only: which configuration fields were sent, never
@@ -399,6 +465,7 @@ impl Runtime {
                 let title: String = text.chars().take(48).collect();
                 thread.title = if text.chars().count() > 48 { format!("{title}…") } else { title };
             }
+            thread.updated_ms = now_ms(); // core-021 recency marker
             thread.messages.push(StoredMessage { role: z_protocol::Role::User, text, tool_calls: Vec::new() });
             let snapshot = thread.clone();
             self.persist(&snapshot);
@@ -439,6 +506,66 @@ impl Runtime {
         if let Ok(json) = serde_json::to_string_pretty(thread) {
             let _ = std::fs::write(path, json);
         }
+    }
+
+    /// core-021: project the threads map into a recency-ordered ThreadList
+    /// event. Most recent first; id ascending breaks ties deterministically.
+    fn send_thread_list(&self) {
+        let threads = self.threads.lock().unwrap();
+        let mut infos: Vec<ThreadInfo> = threads
+            .values()
+            .map(|t| ThreadInfo {
+                id: t.id.clone(),
+                title: t.title.clone(),
+                message_count: t.messages.len() as u64,
+                updated_ms: t.updated_ms,
+            })
+            .collect();
+        drop(threads);
+        infos.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
+        let _ = self.event_tx.send(Event::ThreadList { threads: infos });
+    }
+
+    /// core-022: set a thread title (clamped to 120 chars), persist it.
+    fn rename_thread(&self, thread_id: Id, title: String) {
+        {
+            let mut threads = self.threads.lock().unwrap();
+            let Some(thread) = threads.get_mut(&thread_id) else { return };
+            // ponytail: hard char clamp keeps UI rows single-line-ish; no
+            // trimming/normalization until a real consumer asks for it.
+            thread.title = title.chars().take(120).collect();
+            let snapshot = thread.clone();
+            self.persist(&snapshot);
+        }
+        self.send_thread_list();
+    }
+
+    /// core-022: remove a thread from memory and delete its file on disk.
+    fn delete_thread(&self, thread_id: Id) {
+        if self.threads.lock().unwrap().remove(&thread_id).is_none() {
+            return;
+        }
+        let path = self.data_dir.join("threads").join(format!("{thread_id}.json"));
+        if let Err(e) = std::fs::remove_file(&path) {
+            log::warn!("delete_thread: could not remove {path:?}: {e}");
+        }
+        self.send_thread_list();
+    }
+
+    /// core-022: deep-copy all messages of `thread_id` under `new_id`.
+    fn duplicate_thread(&self, thread_id: Id, new_id: Id) {
+        {
+            let mut threads = self.threads.lock().unwrap();
+            if threads.contains_key(&new_id) || !threads.contains_key(&thread_id) {
+                return;
+            }
+            let mut copy = threads[&thread_id].clone();
+            copy.id = new_id.clone();
+            copy.title = format!("{} (copy)", copy.title);
+            threads.insert(new_id, copy.clone());
+            self.persist(&copy);
+        }
+        self.send_thread_list();
     }
 }
 
@@ -1291,6 +1418,7 @@ mod budget_tests {
             id: "t".into(),
             title: "gate".into(),
             messages: (0..40).map(|_| user(&big)).collect(),
+            updated_ms: 0,
         };
         let req = build_request(&NullProvider, &thread, &shared, std::path::Path::new("/"));
 
@@ -1609,6 +1737,7 @@ mod steering_tests {
                 text: "read the readme".into(),
                 tool_calls: Vec::new(),
             }],
+            updated_ms: 0,
         };
 
         let (event_tx, event_rx) = std::sync::mpsc::channel();
@@ -1670,6 +1799,7 @@ mod steering_tests {
                 event_tx,
                 cmd_rx,
                 journal,
+                most_recent_restored: None,
             },
             cmd_tx,
             event_rx,
@@ -2025,6 +2155,7 @@ mod settings_wiring_tests {
                 text: "loop forever".into(),
                 tool_calls: Vec::new(),
             }],
+            updated_ms: 0,
         };
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         run_turn(
@@ -2159,6 +2290,7 @@ mod doom_loop_retry_tests {
                 text: "read it again and again".into(),
                 tool_calls: Vec::new(),
             }],
+            updated_ms: 0,
         };
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         run_turn(
@@ -2314,6 +2446,7 @@ mod write_grant_tests {
                 text: "write doc twice".into(),
                 tool_calls: Vec::new(),
             }],
+            updated_ms: 0,
         };
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         run_turn(
@@ -2568,6 +2701,286 @@ mod orchestrator_tests {
             "task with failing body must reach Failed"
         );
         orch.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// core-021/022/025: thread list / rename / delete / duplicate / most-recent
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod thread_management_tests {
+    use super::*;
+
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn temp_data_dir(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("zdt-threads-{tag}-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("threads")).expect("create temp threads dir");
+        dir
+    }
+
+    fn msg(text: &str) -> StoredMessage {
+        StoredMessage { role: z_protocol::Role::User, text: text.into(), tool_calls: Vec::new() }
+    }
+
+    /// A Runtime over `dir`, pre-seeded with `seed` threads (no restore).
+    fn runtime_with(
+        dir: PathBuf,
+        seed: Vec<Thread>,
+    ) -> (
+        Runtime,
+        Sender<(u64, Command)>,
+        std::sync::mpsc::Receiver<Event>,
+    ) {
+        let journal = open_runtime_journal(&dir);
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        (
+            Runtime {
+                shared: Arc::new(Shared {
+                    provider: Mutex::new(None),
+                    provider_label: Mutex::new(String::new()),
+                    project_root: Mutex::new(None),
+                    index: Mutex::new(None),
+                    gate: ApprovalGate::default(),
+                    cancelled: Mutex::new(std::collections::HashSet::new()),
+                    steering: Mutex::new(HashMap::new()),
+                    settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+                    write_grants: Mutex::new(HashMap::new()),
+                }),
+                data_dir: dir,
+                threads: Mutex::new(seed.into_iter().map(|t| (t.id.clone(), t)).collect()),
+                event_tx,
+                cmd_rx,
+                journal,
+                most_recent_restored: None,
+            },
+            cmd_tx,
+            event_rx,
+        )
+    }
+
+    /// Serve the command batch on a real serve() loop, then drain every event.
+    /// Dropping cmd_tx shuts the loop down, so this is race-free.
+    fn run(
+        rt: Runtime,
+        cmd_tx: Sender<(u64, Command)>,
+        event_rx: std::sync::mpsc::Receiver<Event>,
+        cmds: Vec<(u64, Command)>,
+    ) -> Vec<Event> {
+        let server = std::thread::spawn(move || rt.serve());
+        for (id, command) in cmds {
+            cmd_tx.send((id, command)).expect("send command");
+        }
+        drop(cmd_tx);
+        server.join().expect("serve loop must not panic");
+        let mut events = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    fn last_thread_list(events: &[Event]) -> &[z_protocol::ThreadInfo] {
+        events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                Event::ThreadList { threads } => Some(threads.as_slice()),
+                _ => None,
+            })
+            .expect("at least one ThreadList event")
+    }
+
+    #[test]
+    fn rename_updates_title_in_memory_and_persists_to_disk() {
+        let dir = temp_data_dir("rename");
+        let seed = Thread {
+            id: "r1".into(),
+            title: "old".into(),
+            messages: vec![msg("hi")],
+            updated_ms: 10,
+        };
+        let (rt, cmd_tx, event_rx) = runtime_with(dir.clone(), vec![seed]);
+        let events = run(
+            rt,
+            cmd_tx,
+            event_rx,
+            vec![(
+                1,
+                Command::RenameThread { thread_id: "r1".into(), title: "renamed".into() },
+            )],
+        );
+
+        // Refreshed list reflects the new title...
+        let listed = last_thread_list(&events);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].title, "renamed");
+        // ...and the change landed on disk.
+        let saved = std::fs::read_to_string(dir.join("threads").join("r1.json"))
+            .expect("thread persisted");
+        let back: Thread = serde_json::from_str(&saved).unwrap();
+        assert_eq!(back.title, "renamed");
+
+        // Titles are clamped to 120 chars.
+        let long: String = std::iter::repeat('x').take(300).collect();
+        let (rt2, cmd_tx2, event_rx2) = runtime_with(dir.clone(), vec![back]);
+        let events = run(
+            rt2,
+            cmd_tx2,
+            event_rx2,
+            vec![(1, Command::RenameThread { thread_id: "r1".into(), title: long })],
+        );
+        assert_eq!(last_thread_list(&events)[0].title.chars().count(), 120);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_removes_thread_from_memory_and_disk() {
+        let dir = temp_data_dir("delete");
+        let seed = Thread {
+            id: "gone".into(),
+            title: "doomed".into(),
+            messages: vec![msg("bye")],
+            updated_ms: 5,
+        };
+        let path = dir.join("threads").join("gone.json");
+        std::fs::write(&path, serde_json::to_string(&seed).unwrap()).expect("seed on disk");
+
+        let (rt, cmd_tx, event_rx) = runtime_with(dir.clone(), vec![seed]);
+        let events = run(rt, cmd_tx, event_rx, vec![(1, Command::DeleteThread { thread_id: "gone".into() })]);
+
+        let listed = last_thread_list(&events);
+        assert!(listed.is_empty(), "memory entry removed");
+        assert!(!path.exists(), "disk file removed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicate_copies_all_messages_under_new_id_and_both_exist() {
+        let dir = temp_data_dir("dup");
+        let source = Thread {
+            id: "src".into(),
+            title: "original".into(),
+            messages: vec![msg("one"), msg("two"), msg("three")],
+            updated_ms: 7,
+        };
+        // Seed on disk too, so "both exist" covers the durable state.
+        std::fs::write(
+            dir.join("threads").join("src.json"),
+            serde_json::to_string(&source).unwrap(),
+        )
+        .expect("seed source on disk");
+        let (rt, cmd_tx, event_rx) = runtime_with(dir.clone(), vec![source]);
+        let events = run(
+            rt,
+            cmd_tx,
+            event_rx,
+            vec![(
+                1,
+                Command::DuplicateThread { thread_id: "src".into(), new_id: "dst".into() },
+            )],
+        );
+
+        // Both exist in the refreshed list; the copy carries every message.
+        let listed = last_thread_list(&events);
+        assert_eq!(listed.len(), 2, "source and copy both listed");
+        let dst = listed.iter().find(|t| t.id == "dst").expect("copy listed");
+        assert_eq!(dst.message_count, 3);
+        assert!(dst.title.ends_with("(copy)"));
+        assert!(listed.iter().any(|t| t.id == "src" && t.message_count == 3));
+
+        // Copy persisted under its own id; original untouched on disk.
+        let saved: Thread =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("threads").join("dst.json")).expect("copy persisted")).unwrap();
+        assert_eq!(saved.id, "dst");
+        assert_eq!(saved.messages.len(), 3);
+        assert_eq!(saved.messages[2].text, "three");
+        assert!(dir.join("threads").join("src.json").exists(), "source still on disk");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_threads_returns_recency_order_and_correct_counts_after_mixed_operations() {
+        let dir = temp_data_dir("mixed");
+        let mk = |id: &str, updated_ms: u64| Thread {
+            id: id.into(),
+            title: format!("thread {id}"),
+            messages: vec![msg("m1"), msg("m2")],
+            updated_ms,
+        };
+        let (rt, cmd_tx, event_rx) = runtime_with(
+            dir.clone(),
+            vec![mk("aaa", 100), mk("bbb", 200), mk("ccc", 300)],
+        );
+        let events = run(
+            rt,
+            cmd_tx,
+            event_rx,
+            vec![
+                (1, Command::ListThreads),
+                (2, Command::RenameThread { thread_id: "bbb".into(), title: "bee".into() }),
+                (3, Command::DeleteThread { thread_id: "ccc".into() }),
+                (4, Command::ListThreads),
+            ],
+        );
+
+        // First list: three rows, newest activity first.
+        let first = events
+            .iter()
+            .find_map(|e| match e {
+                Event::ThreadList { threads } => Some(threads),
+                _ => None,
+            })
+            .expect("initial ThreadList");
+        let ids: Vec<&str> = first.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["ccc", "bbb", "aaa"], "sorted by updated_ms desc");
+        assert!(first.iter().all(|t| t.message_count == 2));
+
+        // After rename + delete: two rows, order preserved by stored recency.
+        let second = last_thread_list(&events);
+        let ids: Vec<&str> = second.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["bbb", "aaa"]);
+        assert_eq!(second[0].title, "bee");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restore_reports_the_most_recently_modified_thread_file() {
+        let dir = temp_data_dir("recent");
+        let older = Thread {
+            id: "older".into(),
+            title: "older".into(),
+            messages: Vec::new(),
+            updated_ms: 1,
+        };
+        let newer = Thread {
+            id: "newer".into(),
+            title: "newer".into(),
+            messages: Vec::new(),
+            updated_ms: 2,
+        };
+        std::fs::write(dir.join("threads").join("older.json"), serde_json::to_string(&older).unwrap())
+            .expect("write older");
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        std::fs::write(dir.join("threads").join("newer.json"), serde_json::to_string(&newer).unwrap())
+            .expect("write newer");
+
+        let (threads, most_recent) = restore_threads(&dir);
+        assert_eq!(threads.len(), 2, "both valid files restored");
+        assert_eq!(most_recent.as_deref(), Some("newer"));
+
+        // A later corrupt file must not steal "most recent" nor break restore.
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        std::fs::write(dir.join("threads").join("junk.json"), "{ not json").expect("write junk");
+        let (threads, most_recent) = restore_threads(&dir);
+        assert_eq!(threads.len(), 2, "corrupt file skipped");
+        assert_eq!(most_recent.as_deref(), Some("newer"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

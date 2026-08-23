@@ -53,6 +53,25 @@ pub enum Command {
     OpenProject { path: String },
     /// Replace provider configuration (BYOK). Keys live in config, not here.
     ConfigureProvider { config: ProviderConfig },
+    /// Request the thread list (answered with [`Event::ThreadList`]).
+    ListThreads,
+    /// Set a thread's title (clamped to 120 chars).
+    RenameThread { thread_id: Id, title: String },
+    /// Remove a thread from memory and from disk.
+    DeleteThread { thread_id: Id },
+    /// Deep-copy a thread's messages under `new_id`.
+    DuplicateThread { thread_id: Id, new_id: Id },
+}
+
+/// One row of a thread listing (core-021): cheap projection, never carries
+/// the messages themselves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadInfo {
+    pub id: Id,
+    pub title: String,
+    pub message_count: u64,
+    /// Last activity time (ms since epoch), best-effort.
+    pub updated_ms: u64,
 }
 
 /// Provider configuration. One active provider at a time in Personal v0.1;
@@ -106,6 +125,9 @@ pub enum Event {
     ProjectIndexed { path: String, files: u64, symbols: u64 },
     /// Provider configuration accepted/rejected with reason.
     ProviderStatus { ok: bool, message: String },
+    /// Refreshed snapshot of all threads, most recent first. Emitted both on
+    /// request and after every thread mutation so the UI stays consistent.
+    ThreadList { threads: Vec<ThreadInfo> },
 }
 
 #[cfg(test)]

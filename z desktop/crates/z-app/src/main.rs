@@ -134,6 +134,9 @@ impl App {
     fn apply_event(&mut self, event: Event) -> bool {
         match event {
             Event::Accepted { .. } => false,
+            // core-021: UI wiring of the thread list is a later task; ignore
+            // for now so the additive protocol variant keeps compiling.
+            Event::ThreadList { .. } => false,
             Event::SteeringQueued { depth, .. } => {
                 self.view.steering_depth = depth as u32;
                 self.view.status_line = if depth > 0 {

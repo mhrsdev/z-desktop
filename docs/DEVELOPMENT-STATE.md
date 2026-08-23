@@ -6,6 +6,25 @@
 
 Last updated: 2026-08-23
 
+## core-021/022/025 Thread Management — 2026-08-23 COMPLETE
+
+1. ✅ **core-021**: additive Command::ListThreads → Event::ThreadList with
+   z-protocol ThreadInfo {id, title, message_count, updated_ms}, sorted
+   most-recent-first.
+2. ✅ **core-022**: RenameThread (120-char clamp), DeleteThread (map +
+   data_dir/threads/<id>.json removal), DuplicateThread (deep clone under
+   new id + persist); each emits a refreshed ThreadList. Active-turn
+   delete is rejected (core-024 satisfied structurally).
+3. ✅ **core-025 (partial)**: Runtime tracks most_recent_restored at
+   startup; `most_recent_thread()` accessor ready for app wiring.
+   core-023 tombstones deferred to a journal-backed pass.
+
+Verification: full workspace suite green — **384 tests, 0 failed**
+(379 → 384). Ledger: 65 IMPLEMENTED.
+
+Next work continues → ui thread list panel on ThreadList events, mem-005
+extraction, or sup-006 claim linking.
+
 ## mem-001..004 Memory Architecture — 2026-08-23 COMPLETE
 
 1. ✅ **mem-001/003**: `z-core/src/memory.rs` — MemoryRecord

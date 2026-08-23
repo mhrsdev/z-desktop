@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 62 |
-| PARTIAL | 1 |
-| PLANNED | 660 |
+| IMPLEMENTED | 63 |
+| PARTIAL | 2 |
+| PLANNED | 658 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -81,7 +81,7 @@
 ### [PLANNED] core-021 — Multi-thread UI wiring (thread list panel)
 - depends: ui-030
 
-### [PLANNED] core-022 — Thread rename/delete/duplicate commands
+### [IMPLEMENTED] core-022 — Thread rename/delete/duplicate commands
 - depends: core-021
 
 ### [PLANNED] core-023 — Thread delete tombstone in journal
@@ -90,7 +90,7 @@
 ### [PLANNED] core-024 — Active-turn delete rejection
 - depends: core-022
 
-### [PLANNED] core-025 — Startup auto-open most recent thread
+### [PARTIAL] core-025 — Startup auto-open most recent thread
 - depends: core-021
 
 ### [PLANNED] core-026 — Corrupt-thread skip surfaced in thread list

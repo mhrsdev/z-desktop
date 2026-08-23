@@ -756,19 +756,35 @@ fn run_turn(
                 output.ok,
                 output.text.lines().next().unwrap_or("").chars().take(120).collect(),
             );
-            // sup-002 (ADR-0016): every terminal_exec result also lands a Build
-            // evidence record — capture-time proof, best-effort like all journal
-            // writes. Hooks observe results; they never gate them.
-            if call.name == "terminal_exec" {
-                let evidence = crate::evidence::Evidence::build(
+            // sup-002/003/004 (ADR-0016): capture-time evidence at the
+            // execution chokepoint — terminal_exec lands Build or Tests (by
+            // command class), fs_write/edit_patch land Diff. Best-effort like
+            // all journal writes; hooks observe results, never gate them.
+            let evidence = match call.name.as_str() {
+                "terminal_exec" => {
+                    let mut e = crate::evidence::Evidence::build(
+                        &thread_id,
+                        &turn_id,
+                        crate::evidence::parse_exit_code(&output.text),
+                        output.text.lines().next().unwrap_or("").to_string(),
+                    );
+                    let args: serde_json::Value =
+                        serde_json::from_str(&call.arguments_json).unwrap_or(serde_json::json!({}));
+                    e.kind = crate::evidence::classify_command(
+                        args.get("command").and_then(serde_json::Value::as_str).unwrap_or(""),
+                    );
+                    Some(e)
+                }
+                "fs_write" | "edit_patch" => Some(crate::evidence::Evidence::diff(
                     &thread_id,
                     &turn_id,
-                    crate::evidence::parse_exit_code(&output.text),
+                    output.ok,
                     output.text.lines().next().unwrap_or("").to_string(),
-                );
-                if let Some(journal) = journal.as_deref() {
-                    crate::evidence::record(journal, &evidence);
-                }
+                )),
+                _ => None,
+            };
+            if let (Some(evidence), Some(journal)) = (evidence, journal.as_deref()) {
+                crate::evidence::record(journal, &evidence);
             }
             // Full output goes back to the model as the tool result.
             thread.messages.push(StoredMessage {

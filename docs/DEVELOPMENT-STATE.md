@@ -6,6 +6,24 @@
 
 Last updated: 2026-08-23
 
+## Diff/Tests Evidence Hooks + ADR-0018 — 2026-08-23 COMPLETE
+
+1. ✅ **sup-004**: capture hook records Diff evidence for fs_write and
+   edit_patch calls (ok + first summary line).
+2. ✅ **sup-003 (partial)**: classify_command in evidence.rs maps
+   cargo test/npm test/pytest/go test commands to Tests kind (recorded
+   instead of Build for those terminal_exec calls).
+3. ✅ **ADR-0018** (`docs/adr/0018-protocol-versioning.md`): protocol
+   evolution policy — additive-only discipline codified (append variant +
+   round-trip test, never rename/reorder), strict enums stay until an
+   external IPC boundary exists, git-history-as-schema for Personal scale.
+
+Verification: full workspace suite green — **355 tests, 0 failed**
+(353 → 355). Ledger: 55 IMPLEMENTED.
+
+Next work continues → sup-006 claim linking, ctx-001 ContextItem assembly
+per ADR-0013, or idx-004 tree-sitter Rust grammar pack.
+
 ## Doom-Loop Breaker + Retry Classification (core-013/014/016) — COMPLETE
 
 1. ✅ **core-014**: per-turn HashMap<u64, usize> counter in run_turn keyed

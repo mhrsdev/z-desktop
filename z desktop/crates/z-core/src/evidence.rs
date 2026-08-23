@@ -71,6 +71,29 @@ impl Evidence {
             summary: summary.into(),
         }
     }
+
+    /// Diff evidence from a fs_write/edit_patch result (sup-004).
+    pub fn diff(thread_id: &str, turn_id: &str, ok: bool, summary: impl Into<String>) -> Evidence {
+        Evidence {
+            id: crate::new_id("ev"),
+            kind: EvidenceKind::Diff,
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            ok,
+            summary: summary.into(),
+        }
+    }
+}
+
+/// sup-003 (partial): a terminal_exec command that looks like a test run
+/// lands [`EvidenceKind::Tests`] evidence instead of Build.
+pub fn classify_command(cmd: &str) -> EvidenceKind {
+    const TEST_RUNNERS: [&str; 4] = ["cargo test", "npm test", "pytest", "go test"];
+    if TEST_RUNNERS.iter().any(|runner| cmd.contains(runner)) {
+        EvidenceKind::Tests
+    } else {
+        EvidenceKind::Build
+    }
 }
 
 /// Best-effort append of one evidence record. Journal failures are warned
@@ -233,5 +256,47 @@ mod evidence_tests {
         assert_eq!(parse_exit_code(text), Some(101));
         assert_eq!(parse_exit_code("[exit code: -1]"), Some(-1));
         assert_eq!(parse_exit_code("terminal_exec failed: no sandbox"), None);
+    }
+
+    #[test]
+    fn classify_command_routes_test_runners_to_tests() {
+        let cases = [
+            ("cargo test --workspace", EvidenceKind::Tests),
+            ("cargo build --release", EvidenceKind::Build),
+            ("pytest -q", EvidenceKind::Tests),
+            ("npm test", EvidenceKind::Tests),
+            ("go test ./...", EvidenceKind::Tests),
+            ("ls -la", EvidenceKind::Build),
+            ("", EvidenceKind::Build),
+        ];
+        for (cmd, want) in cases {
+            assert_eq!(classify_command(cmd), want, "cmd: {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn diff_and_tests_evidence_round_trip_through_the_fold() {
+        let dir = temp_dir("sup-004");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let d = Evidence::diff("t", "u1", true, "wrote 42 bytes to src/lib.rs");
+        record(&journal, &d);
+        // sup-003 partial: Tests kind captured from an exit-code parse.
+        let mut e = Evidence::build("t", "u2", Some(0), "running 353 tests");
+        e.kind = classify_command("cargo test --workspace");
+        assert_eq!(e.kind, EvidenceKind::Tests);
+        assert!(e.ok, "exit 0 means ok regardless of kind");
+        record(&journal, &e);
+        drop(journal);
+
+        let view = EvidenceView::fold(&path).expect("fold");
+        assert_eq!(view.items, vec![d, e]);
+        assert_eq!(view.items[0].kind, EvidenceKind::Diff);
+        assert_eq!(
+            view.items[0].summary,
+            "wrote 42 bytes to src/lib.rs"
+        );
+        assert_eq!(view.items[1].kind, EvidenceKind::Tests);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

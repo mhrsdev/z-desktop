@@ -195,8 +195,8 @@ DOMAINS = [
     ("sup", "Supervision & Evidence", [
         ("001", "Evidence record types (Build/Tests/Diff/Bench/Regression)", [], "IMPLEMENTED"),
         ("002", "Capture hook: sandbox exit codes → Build evidence", ["001"], "IMPLEMENTED"),
-        ("003", "Capture hook: test-runner output parsing", ["001"], "PLANNED"),
-        ("004", "Capture hook: fs_write/edit_patch diffs", ["001", "edit-019"], "PLANNED"),
+        ("003", "Capture hook: test-runner output parsing", ["001"], "IMPLEMENTED"),
+        ("004", "Capture hook: fs_write/edit_patch diffs", ["001", "edit-019"], "IMPLEMENTED"),
         ("005", "Claim regex set (conservative success phrases)", [], "PLANNED"),
         ("006", "Claim-to-evidence linker", ["005", "002"], "PLANNED"),
         ("007", "Supervision verdict type (pass/fail/needs-review)", ["006"], "PLANNED"),

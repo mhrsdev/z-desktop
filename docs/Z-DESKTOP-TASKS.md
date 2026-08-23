@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 51 |
+| IMPLEMENTED | 53 |
 | PARTIAL | 1 |
-| PLANNED | 671 |
+| PLANNED | 669 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -544,10 +544,10 @@
 ### [IMPLEMENTED] sup-002 — Capture hook: sandbox exit codes → Build evidence
 - depends: sup-001
 
-### [PLANNED] sup-003 — Capture hook: test-runner output parsing
+### [IMPLEMENTED] sup-003 — Capture hook: test-runner output parsing
 - depends: sup-001
 
-### [PLANNED] sup-004 — Capture hook: fs_write/edit_patch diffs
+### [IMPLEMENTED] sup-004 — Capture hook: fs_write/edit_patch diffs
 - depends: sup-001, edit-019
 
 ### [PLANNED] sup-005 — Claim regex set (conservative success phrases)

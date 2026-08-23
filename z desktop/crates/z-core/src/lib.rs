@@ -12,6 +12,7 @@ pub mod sandbox;
 pub mod tokens;
 pub mod repo;
 pub mod runtime;
+pub mod settings;
 pub mod tools;
 pub mod fingerprint;
 pub mod atomic_write;

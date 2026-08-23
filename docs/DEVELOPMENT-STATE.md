@@ -6,6 +6,29 @@
 
 Last updated: 2026-08-23
 
+## Settings Module + core-011/012 + ADR-0012 (2026-08-23) — COMPLETE
+
+1. ✅ **set-001/003**: `z-core/src/settings.rs` — `Settings{max_tool_rounds,
+   approval_timeout_secs}` defaulting to the former consts (24 / 300);
+   `load()` tolerates missing/malformed/out-of-range values per-field with
+   warnings (never fails); `store()` writes via atomic_write; snapshot
+   cache (`Mutex<Arc>`) cloned once per turn start per ADR-0011.
+2. ✅ **core-011/core-012**: run_turn and the approval gate now read the
+   turn-start snapshot instead of hardcoded consts. Test proves a
+   settings.json with max_tool_rounds=2 actually stops a tool-looping
+   provider at 2 rounds ("stopped after 2 tool rounds").
+3. ✅ **ADR-0012** (`docs/adr/0012-subagent-orchestration.md`): task records
+   exist only as journal events folded by jour-008's reducer (no tasks.json);
+   orchestrator = dedicated thread on the ADR-0009 actor pattern; sub-agent =
+   nested run_turn with restricted grants + budget caps, not a second Runtime;
+   L0..L3 isolation ladder mapped to concrete ledger features.
+
+Verification: full workspace suite green — **327 tests, 0 failed**
+(322 → 327). Ledger: 35 IMPLEMENTED.
+
+Next work continues → edit-014..018 (rollback staging + write grants) or
+jour-006..008 reducer API, then orch-001 task store on the journal.
+
 ## edit_patch Tool + ADR-0011 (2026-08-23) — COMPLETE
 
 1. ✅ **edit-008..013**: `edit_patch` tool — multi-block sequential patching

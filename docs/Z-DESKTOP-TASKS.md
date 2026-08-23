@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 29 |
+| IMPLEMENTED | 33 |
 | PARTIAL | 1 |
-| PLANNED | 693 |
+| PLANNED | 689 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -48,10 +48,10 @@
 ### [PLANNED] core-010 — ResumeTurn from checkpoint
 - depends: core-009
 
-### [PLANNED] core-011 — MAX_TOOL_ROUNDS configurable via settings
+### [IMPLEMENTED] core-011 — MAX_TOOL_ROUNDS configurable via settings
 - depends: set-002
 
-### [PLANNED] core-012 — Approval timeout setting wired to gate deadline
+### [IMPLEMENTED] core-012 — Approval timeout setting wired to gate deadline
 - depends: set-003
 
 ### [PLANNED] core-013 — Doom-loop breaker (identical failing calls)
@@ -1579,13 +1579,13 @@
 
 ## Settings System (`set-*`)
 
-### [PLANNED] set-001 — SettingDef schema representation
+### [IMPLEMENTED] set-001 — SettingDef schema representation
 - depends: —
 
 ### [PLANNED] set-002 — Initial schema population (§75 draft)
 - depends: set-001
 
-### [PLANNED] set-003 — Typed accessor cache
+### [IMPLEMENTED] set-003 — Typed accessor cache
 - depends: set-001
 
 ### [PLANNED] set-004 — SetSetting command + change events

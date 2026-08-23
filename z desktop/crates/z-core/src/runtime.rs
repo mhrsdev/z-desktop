@@ -101,6 +101,9 @@ struct Shared {
     // drained between tool rounds. Bounded so a runaway client cannot grow it
     // without limit; overflow keeps the newest messages.
     steering: Mutex<HashMap<Id, VecDeque<String>>>,
+    // set-003 (ADR-0011): snapshot-cached settings. Readers clone the inner
+    // Arc once per turn start and never hold this lock during the turn.
+    settings: Mutex<Arc<crate::settings::Snapshot>>,
 }
 
 /// Upper bound on queued steering texts per thread. Beyond this, the oldest
@@ -163,13 +166,13 @@ pub fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("data"))
 }
 
-const MAX_TOOL_ROUNDS: usize = 24;
-const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
-
 impl Runtime {
     pub fn new(event_tx: Sender<Event>, cmd_rx: Receiver<(u64, Command)>) -> Self {
         let data_dir = data_dir();
         let _ = std::fs::create_dir_all(data_dir.join("threads"));
+        // set-002/003 (ADR-0011): load settings once into the shared snapshot;
+        // hand-edited files apply on relaunch, SetSetting swaps the Arc later.
+        let settings = Arc::new(crate::settings::Snapshot::new(crate::settings::load(&data_dir)));
         let mut threads = HashMap::new();
         // Restore persisted sessions; a corrupt file is skipped, not fatal.
         if let Ok(entries) = std::fs::read_dir(data_dir.join("threads")) {
@@ -200,6 +203,7 @@ impl Runtime {
                 gate: ApprovalGate::default(),
                 cancelled: Mutex::new(std::collections::HashSet::new()),
                 steering: Mutex::new(HashMap::new()),
+                settings: Mutex::new(settings),
             }),
             data_dir,
             threads: Mutex::new(threads),
@@ -488,7 +492,12 @@ fn run_turn(
         return;
     };
 
-    for round in 0..MAX_TOOL_ROUNDS {
+    // core-011/core-012 (ADR-0011): clone the settings Arc ONCE at turn start;
+    // a concurrent SetSetting applies to the next turn, never mid-turn.
+    let settings = Arc::clone(shared.settings.lock().unwrap().get());
+    let max_tool_rounds = settings.max_tool_rounds;
+
+    for round in 0..max_tool_rounds {
         if is_cancelled(&shared, &thread_id) {
             persist(&thread);
             finish(false, Some("cancelled by user".into()));
@@ -592,7 +601,10 @@ fn run_turn(
                     detail: detail.clone(),
                     risk,
                 });
-                match shared.gate.wait(&call.id, APPROVAL_TIMEOUT) {
+                match shared.gate.wait(
+                    &call.id,
+                    std::time::Duration::from_secs(settings.approval_timeout_secs),
+                ) {
                     Some(true) => {}
                     Some(false) => {
                         shared.gate.clear(&call.id);
@@ -647,7 +659,7 @@ fn run_turn(
         }
     }
     persist(&thread);
-    finish(false, Some(format!("stopped after {MAX_TOOL_ROUNDS} tool rounds")));
+    finish(false, Some(format!("stopped after {max_tool_rounds} tool rounds")));
 }
 
 fn record_result(
@@ -1036,6 +1048,7 @@ mod steering_tests {
             gate: ApprovalGate::default(),
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
         };
         {
             let mut q = shared.steering.lock().unwrap();
@@ -1061,6 +1074,7 @@ mod steering_tests {
             gate: ApprovalGate::default(),
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
         for i in 0..(STEERING_QUEUE_CAP + 4) {
@@ -1083,6 +1097,7 @@ mod steering_tests {
             gate: ApprovalGate::default(),
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
         rt.enqueue_message("t".into(), "stale guidance".into());
@@ -1113,6 +1128,7 @@ mod steering_tests {
             gate: ApprovalGate::default(),
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
 
@@ -1239,6 +1255,7 @@ mod journal_wiring_tests {
             gate: ApprovalGate::default(),
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
         }
     }
 
@@ -1251,6 +1268,7 @@ mod journal_wiring_tests {
             gate: ApprovalGate::default(),
             cancelled: Mutex::new(std::collections::HashSet::new()),
             steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
         }
     }
 
@@ -1457,5 +1475,117 @@ mod journal_wiring_tests {
                 .expect("restore perms");
             let _ = std::fs::remove_dir_all(&data_dir);
         }
+    }
+}
+
+#[cfg(test)]
+mod settings_wiring_tests {
+    use super::*;
+    use super::steering_tests::make_runtime_at;
+
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn unique_data_dir(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("zdt-setw-{tag}-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("threads")).expect("create temp data dir");
+        dir
+    }
+
+    /// Always answers with one read-only tool call — never a plain-text
+    /// completion — so the turn can only exit via the round cap.
+    struct AlwaysToolProvider(std::sync::atomic::AtomicUsize);
+
+    impl provider::Provider for AlwaysToolProvider {
+        fn describe(&self) -> String {
+            "always-tool".into()
+        }
+        fn stream(
+            &self,
+            _req: &provider::ChatRequest,
+            _on_item: &mut dyn FnMut(provider::StreamItem),
+        ) -> Result<provider::StreamOutcome, String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(provider::StreamOutcome {
+                text: String::new(),
+                tool_calls: vec![provider::ToolCallSpec {
+                    id: "call-loop".into(),
+                    name: "fs_read".into(),
+                    arguments_json: r#"{"path":"README.md"}"#.into(),
+                }],
+            })
+        }
+    }
+
+    #[test]
+    fn runtime_honors_configured_round_cap_from_settings() {
+        let data_dir = unique_data_dir("cap");
+        std::fs::write(
+            data_dir.join("settings.json"),
+            r#"{"version":1,"values":{"max_tool_rounds":2,"approval_timeout_secs":7}}"#,
+        )
+        .expect("write settings.json");
+
+        let provider = Arc::new(AlwaysToolProvider(std::sync::atomic::AtomicUsize::new(0)));
+        let shared = Shared {
+            provider: Mutex::new(Some(provider.clone() as Arc<dyn provider::Provider>)),
+            provider_label: Mutex::new("always-tool".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            // Same production load path Runtime::new uses.
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::new(
+                crate::settings::load(&data_dir),
+            ))),
+        };
+        let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
+        assert_eq!(
+            rt.shared.settings.lock().unwrap().get().approval_timeout_secs,
+            7,
+            "snapshot carries the configured approval timeout"
+        );
+
+        let thread = Thread {
+            id: "settings-thread".into(),
+            title: "settings".into(),
+            messages: vec![StoredMessage {
+                role: z_protocol::Role::User,
+                text: "loop forever".into(),
+                tool_calls: Vec::new(),
+            }],
+        };
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        run_turn(
+            Arc::clone(&rt.shared),
+            event_tx,
+            Arc::new(Mutex::new(())),
+            data_dir.clone(),
+            rt.journal.clone(),
+            thread,
+            "turn-settings".into(),
+        );
+
+        let mut finished = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let Event::TurnFinished { ok, error, .. } = event {
+                finished = true;
+                assert!(!ok, "capped turn must not report success");
+                assert!(
+                    error.unwrap_or_default().contains("stopped after 2 tool rounds"),
+                    "stop message must reflect the configured cap"
+                );
+            }
+        }
+        assert!(finished, "turn never emitted TurnFinished");
+        assert_eq!(
+            provider.0.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "exactly max_tool_rounds provider rounds ran"
+        );
+        let _ = std::fs::remove_dir_all(&data_dir);
     }
 }

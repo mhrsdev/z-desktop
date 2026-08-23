@@ -442,6 +442,44 @@ impl Runtime {
     }
 }
 
+// ---------------------------------------------------------------------------
+// core-016 partial (ADR-0017 D2): provider error classification
+// ---------------------------------------------------------------------------
+
+/// What a provider error string means for retry policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryClass {
+    Network,
+    RateLimited,
+    ServerError,
+    Auth,
+    Other,
+}
+
+/// Classify by substring over lowercase text. Order matters: auth first so
+/// nothing shadows a fast-fail class; rate-limit before network so
+/// "rate limit exceeded" can't be eaten by a broader transport word later.
+/// ponytail: string sniffing is load-bearing until `Provider` returns
+/// structured errors (ADR-0017 option e); then only this body changes.
+fn classify_provider_error(e: &str) -> RetryClass {
+    let l = e.to_lowercase();
+    if ["401", "403", "unauthorized", "invalid api key"].iter().any(|s| l.contains(s)) {
+        RetryClass::Auth
+    } else if l.contains("429") || l.contains("rate limit") {
+        RetryClass::RateLimited
+    } else if l.contains("5xx") || l.contains("internal") || l.contains("bad gateway") {
+        RetryClass::ServerError
+    } else if l.contains("timeout")
+        || l.contains("timed out")
+        || l.contains("connection")
+        || l.contains("stream read failed")
+    {
+        RetryClass::Network
+    } else {
+        RetryClass::Other
+    }
+}
+
 /// One full agent turn: stream → (tool calls → approve → execute)×N → done.
 fn run_turn(
     shared: Arc<Shared>,
@@ -504,6 +542,10 @@ fn run_turn(
     // a concurrent SetSetting applies to the next turn, never mid-turn.
     let settings = Arc::clone(shared.settings.lock().unwrap().get());
     let max_tool_rounds = settings.max_tool_rounds;
+    // core-014 (ADR-0017 D1): per-turn fingerprint counter for the doom-loop
+    // breaker. Turn-local lifetime — no Shared field, no reset logic.
+    let mut call_counts: HashMap<u64, usize> = HashMap::new();
+    let doom_threshold = settings.doom_threshold;
 
     for round in 0..max_tool_rounds {
         if is_cancelled(&shared, &thread_id) {
@@ -545,9 +587,20 @@ fn run_turn(
             match result {
                 Ok(o) => o,
                 Err(e) => {
-                    // Transient provider failures get one retry before failing
-                    // the turn; the user's message is never lost either way.
-                    if round == 0 && e.contains("stream read failed") {
+                    // core-016 partial (ADR-0017 D2): classified single retry,
+                    // round 0 only. Network retries immediately; rate-limit/
+                    // server errors back off 1 s first. Auth/Other fail now —
+                    // same key, same answer. Either way the user's message
+                    // is never lost.
+                    let class = classify_provider_error(&e);
+                    let retryable = matches!(
+                        class,
+                        RetryClass::Network | RetryClass::RateLimited | RetryClass::ServerError
+                    );
+                    if retryable && round == 0 {
+                        if !matches!(class, RetryClass::Network) {
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                        }
                         continue;
                     }
                     persist(&thread);
@@ -573,8 +626,7 @@ fn run_turn(
         }
 
         // Assistant message carrying its tool calls, then results.
-        let stored_calls: Vec<StoredToolCall> = outcome
-            .tool_calls
+        let stored_calls: Vec<StoredToolCall> = outcome            .tool_calls
             .iter()
             .map(|c| StoredToolCall {
                 id: c.id.clone(),
@@ -590,6 +642,7 @@ fn run_turn(
             tool_calls: stored_calls,
         });
 
+        let mut steer_doom = false;
         for call in &outcome.tool_calls {
             if is_cancelled(&shared, &thread_id) {
                 persist(&thread);
@@ -666,6 +719,29 @@ fn run_turn(
                 false
             };
 
+            // core-013/014 (ADR-0017 D1): count identical calls this turn.
+            // ponytail: raw arguments_json, not key-order-canonicalized — a
+            // real doom loop emits byte-identical JSON in practice.
+            let fp = crate::fingerprint::fnv1a64(
+                format!("{}{}", call.name, call.arguments_json).as_bytes(),
+            );
+            let count = {
+                let c = call_counts.entry(fp).or_insert(0);
+                *c += 1;
+                *c
+            };
+            if count >= 2 * doom_threshold {
+                persist(&thread);
+                finish(
+                    false,
+                    Some("Repeated identical tool calls detected — stopping to avoid a loop.".into()),
+                );
+                return;
+            }
+            if count == doom_threshold {
+                steer_doom = true;
+            }
+
             let output = tools::execute(tools::ToolInvocation {
                 name: &call.name,
                 args,
@@ -709,6 +785,20 @@ fn run_turn(
             if holds_grant {
                 release_write(&shared, &root, &thread_id, &raw_path);
             }
+        }
+
+        // core-013 (ADR-0017 D1.3): first threshold crossing gets ONE
+        // steering note; the turn continues so the model can course-correct.
+        if steer_doom {
+            log::info!("doom-loop guard: injecting steering note into thread {thread_id}");
+            thread.messages.push(StoredMessage {
+                role: z_protocol::Role::User,
+                text: format!(
+                    "[doom-loop guard] You have repeated the identical tool call {doom_threshold} times. Change approach or explain what you are waiting for."
+                ),
+                tool_calls: Vec::new(),
+            });
+            persist(&thread);
         }
     }
     persist(&thread);
@@ -1694,6 +1784,151 @@ mod settings_wiring_tests {
             provider.0.load(std::sync::atomic::Ordering::Relaxed),
             2,
             "exactly max_tool_rounds provider rounds ran"
+        );
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+}
+
+#[cfg(test)]
+mod doom_loop_retry_tests {
+    use super::*;
+    use super::steering_tests::make_runtime_at;
+
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn unique_data_dir(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("zdt-doom-{tag}-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("threads")).expect("create temp data dir");
+        dir
+    }
+
+    #[test]
+    fn classify_provider_error_table() {
+        use RetryClass::*;
+        let cases: &[(&str, RetryClass)] = &[
+            // Transport / network
+            ("stream read failed: unexpected EOF during SSE", Network),
+            ("request failed: connection refused", Network),
+            ("request failed: operation timed out", Network),
+            // Rate limited
+            ("provider returned HTTP 429: too many requests", RateLimited),
+            ("provider returned HTTP 429: rate limit exceeded", RateLimited),
+            // Server errors
+            ("provider returned HTTP 500: internal server error", ServerError),
+            ("provider returned HTTP 502: bad gateway", ServerError),
+            ("5xx upstream exploded", ServerError),
+            // Auth fails fast
+            ("provider returned HTTP 401: unauthorized", Auth),
+            ("provider returned HTTP 403: forbidden", Auth),
+            ("Invalid API key supplied", Auth),
+            // Everything else is fatal
+            ("provider returned HTTP 400: bad request", Other),
+            ("mystery failure", Other),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(&classify_provider_error(text), expected, "case: {text}");
+        }
+    }
+
+    /// Always answers with the byte-identical read-only tool call — the
+    /// canonical doom loop.
+    struct LoopProvider(std::sync::atomic::AtomicUsize);
+
+    impl provider::Provider for LoopProvider {
+        fn describe(&self) -> String {
+            "loop".into()
+        }
+        fn stream(
+            &self,
+            _req: &provider::ChatRequest,
+            _on_item: &mut dyn FnMut(provider::StreamItem),
+        ) -> Result<provider::StreamOutcome, String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(provider::StreamOutcome {
+                text: String::new(),
+                tool_calls: vec![provider::ToolCallSpec {
+                    id: format!("call-{}", self.0.load(std::sync::atomic::Ordering::Relaxed)),
+                    name: "fs_read".into(),
+                    arguments_json: r#"{"path":"README.md"}"#.into(),
+                }],
+            })
+        }
+    }
+
+    #[test]
+    fn doom_loop_steers_once_then_fails_the_turn() {
+        let data_dir = unique_data_dir("loop");
+        std::fs::write(
+            data_dir.join("settings.json"),
+            r#"{"version":1,"values":{"doom_threshold":3,"max_tool_rounds":24}}"#,
+        )
+        .expect("write settings.json");
+
+        let provider = Arc::new(LoopProvider(std::sync::atomic::AtomicUsize::new(0)));
+        let shared = Shared {
+            provider: Mutex::new(Some(provider.clone() as Arc<dyn provider::Provider>)),
+            provider_label: Mutex::new("loop".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::new(
+                crate::settings::load(&data_dir),
+            ))),
+            write_grants: Mutex::new(HashMap::new()),
+        };
+        let (rt, _cmd_tx, _runtime_events) = make_runtime_at(Arc::new(shared), data_dir.clone());
+
+        let thread = Thread {
+            id: "doom-thread".into(),
+            title: "doom".into(),
+            messages: vec![StoredMessage {
+                role: z_protocol::Role::User,
+                text: "read it again and again".into(),
+                tool_calls: Vec::new(),
+            }],
+        };
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        run_turn(
+            Arc::clone(&rt.shared),
+            event_tx,
+            Arc::new(Mutex::new(())),
+            data_dir.clone(),
+            rt.journal.clone(),
+            thread,
+            "turn-doom".into(),
+        );
+
+        let mut finished = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let Event::TurnFinished { ok, error, .. } = event {
+                finished = true;
+                assert!(!ok, "a doom loop must fail the turn");
+                assert!(
+                    error.unwrap_or_default().contains("identical tool calls"),
+                    "stop message must name the doom-loop breaker"
+                );
+            }
+        }
+        assert!(finished, "turn never emitted TurnFinished");
+
+        // Steer at N=3 (call 3), hard-fail at 2N=6 (call 6): exactly 6 rounds.
+        assert_eq!(
+            provider.0.load(std::sync::atomic::Ordering::Relaxed),
+            6,
+            "steer at threshold N, fail at 2N"
+        );
+
+        // Exactly one persisted steering note.
+        let saved = std::fs::read_to_string(data_dir.join("threads").join("doom-thread.json"))
+            .expect("thread persisted");
+        assert_eq!(
+            saved.matches("Change approach or explain what you are waiting for.").count(),
+            1,
+            "exactly one steering message injected"
         );
         let _ = std::fs::remove_dir_all(&data_dir);
     }

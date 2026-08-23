@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 48 |
+| IMPLEMENTED | 51 |
 | PARTIAL | 1 |
-| PLANNED | 674 |
+| PLANNED | 671 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -54,16 +54,16 @@
 ### [IMPLEMENTED] core-012 — Approval timeout setting wired to gate deadline
 - depends: set-003
 
-### [PLANNED] core-013 — Doom-loop breaker (identical failing calls)
+### [IMPLEMENTED] core-013 — Doom-loop breaker (identical failing calls)
 - depends: core-014
 
-### [PLANNED] core-014 — Per-turn tool-call fingerprint counter
+### [IMPLEMENTED] core-014 — Per-turn tool-call fingerprint counter
 - depends: —
 
 ### [PLANNED] core-015 — Doom-loop threshold setting
 - depends: core-013, set-002
 
-### [PLANNED] core-016 — Provider retry classification (network/429/5xx/auth)
+### [IMPLEMENTED] core-016 — Provider retry classification (network/429/5xx/auth)
 - depends: —
 
 ### [PLANNED] core-017 — Retry-After honoring for 429

@@ -6,6 +6,26 @@
 
 Last updated: 2026-08-23
 
+## Doom-Loop Breaker + Retry Classification (core-013/014/016) — COMPLETE
+
+1. ✅ **core-014**: per-turn HashMap<u64, usize> counter in run_turn keyed
+   by fnv1a64(tool_name ++ raw arguments_json) (raw args fine in practice —
+   ponytail note: canonicalize if a provider ever reorders keys).
+2. ✅ **core-013**: escalation ladder per ADR-0017 — at N identical calls
+   (doom_threshold setting, default 3) inject one steering StoredMessage
+   ("Change approach or explain what you are waiting for."); at ≥2N fail
+   the turn with the loop-detected message; both paths persist.
+3. ✅ **core-016 (partial)**: classify_provider_error maps error strings to
+   Network/RateLimited/ServerError/Auth/Other; Network/RateLimited/Server
+   retry once (round==0) with 1s pre-sleep for RateLimited/ServerError;
+   Auth/Other fail fast. Replaces the crude "stream read failed" check.
+
+Verification: full workspace suite green — **353 tests, 0 failed**
+(350 → 353). Ledger: 53 IMPLEMENTED.
+
+Next work continues → sup-003/004 capture hooks, core-017..019 retry
+journaling, or ctx-001 ContextItem assembly per ADR-0013.
+
 ## Evidence Records (sup-001/002) — 2026-08-23 COMPLETE
 
 1. ✅ **sup-001**: `z-core/src/evidence.rs` — Evidence envelope

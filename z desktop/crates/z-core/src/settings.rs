@@ -19,6 +19,8 @@ use std::sync::Arc;
 /// Documented defaults (§75 / former runtime.rs consts).
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 24;
 const DEFAULT_APPROVAL_TIMEOUT_SECS: u64 = 300;
+/// Doom-loop breaker threshold (ADR-0017 D6): steer at N identical calls.
+const DEFAULT_DOOM_THRESHOLD: usize = 3;
 
 /// Sanity bounds for hand-edited files: no zero-round wedge of the turn loop,
 /// no multi-hour approval hang. Out-of-range ⇒ default + warn, never fail.
@@ -26,6 +28,8 @@ const MIN_TOOL_ROUNDS: u64 = 1;
 const MAX_TOOL_ROUNDS_CAP: u64 = 200;
 const MIN_APPROVAL_TIMEOUT_SECS: u64 = 5;
 const MAX_APPROVAL_TIMEOUT_SECS: u64 = 3600;
+const MIN_DOOM_THRESHOLD: u64 = 1;
+const MAX_DOOM_THRESHOLD_CAP: u64 = 10;
 
 const VERSION: u32 = 1;
 
@@ -35,6 +39,9 @@ pub struct Settings {
     pub max_tool_rounds: usize,
     /// Approval-gate deadline in seconds (was `APPROVAL_TIMEOUT`).
     pub approval_timeout_secs: u64,
+    /// Doom-loop breaker threshold (ADR-0017 D6): steer at N identical
+    /// tool calls in one turn, hard-fail at 2N.
+    pub doom_threshold: usize,
 }
 
 impl Default for Settings {
@@ -42,6 +49,7 @@ impl Default for Settings {
         Self {
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             approval_timeout_secs: DEFAULT_APPROVAL_TIMEOUT_SECS,
+            doom_threshold: DEFAULT_DOOM_THRESHOLD,
         }
     }
 }
@@ -95,6 +103,16 @@ pub fn load(data_dir: &Path) -> Settings {
             ),
         }
     }
+    if let Some(v) = values.and_then(|vals| vals.get("doom_threshold")) {
+        match v.as_u64() {
+            Some(n) if (MIN_DOOM_THRESHOLD..=MAX_DOOM_THRESHOLD_CAP).contains(&n) => {
+                s.doom_threshold = n as usize;
+            }
+            _ => log::warn!(
+                "settings.json: ignoring invalid doom_threshold ({v}); using default {DEFAULT_DOOM_THRESHOLD}"
+            ),
+        }
+    }
     s
 }
 
@@ -107,6 +125,7 @@ pub fn store(data_dir: &Path, s: &Settings) -> Result<(), String> {
         "values": {
             "max_tool_rounds": s.max_tool_rounds,
             "approval_timeout_secs": s.approval_timeout_secs,
+            "doom_threshold": s.doom_threshold,
         },
     }))
     .map_err(|e| e.to_string())?;
@@ -134,13 +153,29 @@ mod settings_tests {
         assert_eq!(load(&dir), Settings::default());
         assert_eq!(load(&dir).max_tool_rounds, 24);
         assert_eq!(load(&dir).approval_timeout_secs, 300);
+        assert_eq!(load(&dir).doom_threshold, 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn doom_threshold_defaults_and_round_trips() {
+        let dir = unique_data_dir("doom");
+        assert_eq!(load(&dir).doom_threshold, 3, "documented default is 3");
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{"version":1,"values":{"doom_threshold":7}}"#,
+        )
+        .unwrap();
+        assert_eq!(load(&dir).doom_threshold, 7);
+        store(&dir, &Settings { doom_threshold: 9, ..Settings::default() }).unwrap();
+        assert_eq!(load(&dir).doom_threshold, 9);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn stored_file_round_trips_through_load() {
         let dir = unique_data_dir("roundtrip");
-        let s = Settings { max_tool_rounds: 7, approval_timeout_secs: 60 };
+        let s = Settings { max_tool_rounds: 7, approval_timeout_secs: 60, doom_threshold: 5 };
         store(&dir, &s).expect("store succeeds");
         // Pretty, versioned shape on disk.
         let raw = std::fs::read_to_string(dir.join("settings.json")).unwrap();

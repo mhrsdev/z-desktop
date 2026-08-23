@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 11 |
+| IMPLEMENTED | 15 |
 | PARTIAL | 1 |
-| PLANNED | 711 |
+| PLANNED | 707 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -224,7 +224,7 @@
 ### [PLANNED] jour-023 — EvidenceRecorded journal events
 - depends: sup-001
 
-### [PLANNED] jour-024 — command_received/turn_started lifecycle records
+### [IMPLEMENTED] jour-024 — command_received/turn_started lifecycle records
 - depends: jour-001
 
 ### [PLANNED] jour-025 — provider_called records with attempt field
@@ -239,7 +239,7 @@
 ### [PLANNED] jour-028 — error_observed records
 - depends: jour-001
 
-### [PLANNED] jour-029 — message_persisted records
+### [IMPLEMENTED] jour-029 — message_persisted records
 - depends: jour-001
 
 ### [PLANNED] jour-030 — ReplaySummary log event
@@ -247,10 +247,10 @@
 
 ## Repository Intelligence (`idx-*`)
 
-### [PLANNED] idx-001 — Index actor thread + channel API
+### [IMPLEMENTED] idx-001 — Index actor thread + channel API
 - depends: —
 
-### [PLANNED] idx-002 — Snapshot read semantics (no shared mutable state)
+### [IMPLEMENTED] idx-002 — Snapshot read semantics (no shared mutable state)
 - depends: idx-001
 
 ### [IMPLEMENTED] idx-003 — Tree-sitter dependency evaluation ADR

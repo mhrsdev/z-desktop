@@ -4,8 +4,10 @@
 //! another. Each turn runs on its own worker thread so the command loop stays
 //! responsive to cancellation and approvals while a turn streams.
 
+use crate::journal::{Journal, JournalKind, Record, RecordDraft};
 use crate::{provider, repo::RepoIndex, tools};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
@@ -111,6 +113,46 @@ pub struct Runtime {
     threads: Mutex<HashMap<Id, Thread>>,
     event_tx: Sender<Event>,
     cmd_rx: Receiver<(u64, Command)>,
+    // jour-024/jour-029: the runtime lifecycle journal (`journal/runtime.jsonl`).
+    // Deliberately NOT inside `Shared`: only the command loop (and, for
+    // MessagePersisted, the turn worker) ever appends to it, so keeping it out
+    // of Shared avoids any lock-order coupling with the provider/project locks.
+    // It is an `Option<Arc<Mutex<Journal>>>` because (a) run_turn workers need
+    // shared ownership across the spawn boundary — same pattern as `shared` —
+    // and (b) journaling is best-effort by design: when the file cannot be
+    // opened (missing dir, permissions), the runtime runs on without it
+    // instead of failing every command.
+    journal: Option<Arc<Mutex<Journal>>>,
+}
+
+/// Open the runtime lifecycle journal at `<data_dir>/journal/runtime.jsonl`
+/// (jour-024), resuming the sequence after the highest seq already on disk so
+/// a restart never reuses sequence numbers. Returns `None` when the journal
+/// cannot be used — journaling must never prevent the runtime from serving,
+/// so an unwritable location degrades to "no journal" (warned, not fatal).
+fn open_runtime_journal(data_dir: &std::path::Path) -> Option<Arc<Mutex<Journal>>> {
+    let dir = data_dir.join("journal");
+    let path = dir.join("runtime.jsonl");
+    let last_seq = if path.exists() {
+        match Journal::replay(&path) {
+            Ok(records) => records.last().map(|r| r.seq).unwrap_or(0),
+            Err(e) => {
+                // A tail we cannot replay would corrupt sequence continuity;
+                // fail loud-ish (warn) and disable rather than duplicate seqs.
+                log::warn!("journal: disabling runtime journal, replay failed: {e}");
+                return None;
+            }
+        }
+    } else {
+        0 // no segment yet: start from scratch
+    };
+    match Journal::open_resuming(&dir, "runtime", last_seq) {
+        Ok(journal) => Some(Arc::new(Mutex::new(journal))),
+        Err(e) => {
+            log::warn!("journal: disabling runtime journal: {e}");
+            None
+        }
+    }
 }
 
 /// Where sessions/config live. `Z_DESKTOP_DATA` overrides; default is `data/`
@@ -147,6 +189,8 @@ impl Runtime {
             }
         }
         log::info!("restored {} thread(s)", threads.len());
+        // jour-024: resume the lifecycle journal across restarts (best-effort).
+        let journal = open_runtime_journal(&data_dir);
         Self {
             shared: Arc::new(Shared {
                 provider: Mutex::new(None),
@@ -161,6 +205,7 @@ impl Runtime {
             threads: Mutex::new(threads),
             event_tx,
             cmd_rx,
+            journal,
         }
     }
 
@@ -168,6 +213,9 @@ impl Runtime {
     pub fn serve(self) {
         while let Ok((command_id, command)) = self.cmd_rx.recv() {
             let _ = self.event_tx.send(Event::Accepted { command_id });
+            // jour-024: durable breadcrumb for every inbound command, before
+            // dispatch. Never fatal (see journal_command).
+            self.journal_command(&command);
             match command {
                 Command::ConfigureProvider { config } => self.configure_provider(config),
                 Command::OpenProject { path } => self.open_project(path),
@@ -209,6 +257,59 @@ impl Runtime {
         let _ = self
             .event_tx
             .send(Event::SteeringQueued { thread_id, depth });
+    }
+
+    /// jour-024: append one `CommandReceived` record per inbound command,
+    /// before dispatch. Payloads are shape summaries only: message text is
+    /// never recorded, and ConfigureProvider contributes field NAMES only —
+    /// never API-key values. Failures are warned and swallowed.
+    fn journal_command(&self, command: &Command) {
+        if self.journal.is_none() {
+            return;
+        }
+        let (thread_id, payload) = match command {
+            Command::SendMessage { thread_id, .. } => (
+                Some(thread_id.clone()),
+                json!({ "command": "send_message", "thread_id": thread_id }),
+            ),
+            Command::EnqueueMessage { thread_id, .. } => (
+                Some(thread_id.clone()),
+                json!({ "command": "enqueue_message", "thread_id": thread_id }),
+            ),
+            Command::CancelTurn { thread_id } => (
+                Some(thread_id.clone()),
+                json!({ "command": "cancel_turn", "thread_id": thread_id }),
+            ),
+            Command::ResolveApproval { .. } => (None, json!({ "command": "resolve_approval" })),
+            Command::OpenProject { .. } => (None, json!({ "command": "open_project" })),
+            Command::ConfigureProvider { config } => (
+                None,
+                // Shape only: which configuration fields were sent, never
+                // their values (api_key et al stay out of the journal).
+                json!({
+                    "command": "configure_provider",
+                    "fields": config_field_names(config),
+                }),
+            ),
+        };
+        Runtime::journal_record(&self.journal, JournalKind::CommandReceived, thread_id, payload);
+    }
+
+    /// Best-effort append of one lifecycle record (jour-024/029). Journal
+    /// failures are warned about and dropped: observability must never break
+    /// a command or a turn. The lock is held for a single append only, so
+    /// critical sections stay narrow even when called from turn workers.
+    fn journal_record(
+        journal: &Option<Arc<Mutex<Journal>>>,
+        kind: JournalKind,
+        thread_id: Option<String>,
+        payload: serde_json::Value,
+    ) {
+        let Some(journal) = journal.as_ref() else { return };
+        let draft = RecordDraft::new(kind, thread_id, payload);
+        if let Err(e) = journal.lock().unwrap().append(draft) {
+            log::warn!("journal: append failed: {e}");
+        }
     }
 
     /// Take all queued steering texts for `thread_id` (leaves an empty
@@ -294,16 +395,29 @@ impl Runtime {
 
         let turn_id = crate::new_id("turn");
         let _ = self.event_tx.send(Event::TurnStarted { thread_id: thread.id.clone(), turn_id: turn_id.clone() });
+        // jour-024: durable marker that this turn began executing. Written by
+        // the command loop before the worker spawns, so its position relative
+        // to CommandReceived/TurnFinished records is deterministic.
+        Runtime::journal_record(
+            &self.journal,
+            JournalKind::TurnStarted,
+            Some(thread.id.clone()),
+            json!({ "turn_id": turn_id }),
+        );
 
         // The turn runs on a worker so CancelTurn/ResolveApproval stay live.
         let shared = Arc::clone(&self.shared);
         let event_tx = self.event_tx.clone();
         let threads_lock = Arc::new(Mutex::new(())); // serialise history mutation
         let data_dir = self.data_dir.clone();
+        // jour-029: the worker needs the SAME journal instance to append
+        // MessagePersisted records; hand it an Arc clone exactly like `shared`
+        // (a plain borrow cannot cross the spawn boundary).
+        let journal = self.journal.clone();
         std::thread::Builder::new()
             .name("z-turn".into())
             .spawn(move || {
-                run_turn(shared, event_tx, threads_lock, data_dir, thread, turn_id);
+                run_turn(shared, event_tx, threads_lock, data_dir, journal, thread, turn_id);
             })
             .expect("could not spawn turn worker");
     }
@@ -322,6 +436,12 @@ fn run_turn(
     event_tx: Sender<Event>,
     _history_lock: Arc<Mutex<()>>,
     data_dir: PathBuf,
+    // jour-029: the same journal instance Runtime owns, handed to this worker
+    // as an `Option<Arc<..>>` clone (mirrors how `shared`/`data_dir` travel).
+    // Choice documented on the Runtime.journal field: it stays OUT of Shared
+    // so no other Shared reader has to reason about it; only this worker and
+    // the command loop ever append.
+    journal: Option<Arc<Mutex<Journal>>>,
     mut thread: Thread,
     turn_id: Id,
 ) {
@@ -335,6 +455,30 @@ fn run_turn(
         });
     };
 
+    // jour-029: baseline = history length at turn entry. Only messages added
+    // during THIS turn are counted in MessagePersisted payloads. Every save
+    // below goes through `persist`, which journals after writing the snapshot;
+    // a failed append is warned and swallowed — it can never fail the turn.
+    let turn_start_len = thread.messages.len();
+    let persist = |thread: &Thread| {
+        save_thread(&data_dir, thread);
+        let n_new = thread.messages.len().saturating_sub(turn_start_len);
+        if n_new == 0 {
+            return;
+        }
+        let last_role = match thread.messages.last().map(|m| m.role) {
+            Some(z_protocol::Role::User) => "user",
+            Some(z_protocol::Role::Agent) => "agent",
+            None => "unknown",
+        };
+        Runtime::journal_record(
+            &journal,
+            JournalKind::MessagePersisted,
+            Some(thread.id.clone()),
+            json!({ "count": n_new, "last_role": last_role }),
+        );
+    };
+
     let Some(provider) = shared.provider.lock().unwrap().clone() else {
         finish(false, Some("no provider configured — set one in Settings".into()));
         return;
@@ -346,7 +490,7 @@ fn run_turn(
 
     for round in 0..MAX_TOOL_ROUNDS {
         if is_cancelled(&shared, &thread_id) {
-            save_thread(&data_dir, &thread);
+            persist(&thread);
             finish(false, Some("cancelled by user".into()));
             return;
         }
@@ -364,7 +508,7 @@ fn run_turn(
                         steering_msg.text.lines().count().saturating_sub(1)
                     );
                     thread.messages.push(steering_msg);
-                    save_thread(&data_dir, &thread);
+                    persist(&thread);
                 }
             }
         }
@@ -389,7 +533,7 @@ fn run_turn(
                     if round == 0 && e.contains("stream read failed") {
                         continue;
                     }
-                    save_thread(&data_dir, &thread);
+                    persist(&thread);
                     finish(false, Some(e));
                     return;
                 }
@@ -406,7 +550,7 @@ fn run_turn(
 
         if outcome.tool_calls.is_empty() {
             let _ = event_tx.send(Event::TextDone { thread_id: thread_id.clone(), turn_id: turn_id.clone() });
-            save_thread(&data_dir, &thread);
+            persist(&thread);
             finish(true, None);
             return;
         }
@@ -431,7 +575,7 @@ fn run_turn(
 
         for call in &outcome.tool_calls {
             if is_cancelled(&shared, &thread_id) {
-                save_thread(&data_dir, &thread);
+                persist(&thread);
                 finish(false, Some("cancelled by user".into()));
                 return;
             }
@@ -501,7 +645,7 @@ fn run_turn(
             });
         }
     }
-    save_thread(&data_dir, &thread);
+    persist(&thread);
     finish(false, Some(format!("stopped after {MAX_TOOL_ROUNDS} tool rounds")));
 }
 
@@ -538,6 +682,16 @@ fn save_thread(data_dir: &std::path::Path, thread: &Thread) {
     let path = data_dir.join("threads").join(format!("{}.json", thread.id));
     if let Ok(json) = serde_json::to_string_pretty(thread) {
         let _ = std::fs::write(path, json);
+    }
+}
+
+/// Shape summary of a ProviderConfig for the journal (jour-024): the NAMES of
+/// the fields the client sent, never their values — in particular the API key
+/// value must not reach the journal under any circumstances.
+fn config_field_names(config: &ProviderConfig) -> Vec<String> {
+    match serde_json::to_value(config) {
+        Ok(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -797,10 +951,11 @@ mod steering_tests {
 
     /// A scripted provider that returns queued outcomes per call, then a
     /// final text-only outcome. Records every request it receives so tests
-    /// can assert exactly what the model saw.
-    struct ScriptedProvider {
-        outcomes: std::sync::Mutex<Vec<provider::StreamOutcome>>,
-        requests: std::sync::Mutex<Vec<String>>, // user-message texts per request
+    /// can assert exactly what the model saw. (`pub(super)` so the sibling
+    /// journal_wiring_tests module can reuse it.)
+    pub(super) struct ScriptedProvider {
+        pub(super) outcomes: std::sync::Mutex<Vec<provider::StreamOutcome>>,
+        pub(super) requests: std::sync::Mutex<Vec<String>>, // user-message texts per request
     }
 
     impl ScriptedProvider {
@@ -980,6 +1135,7 @@ mod steering_tests {
             event_tx,
             Arc::new(Mutex::new(())),
             rt.data_dir.clone(),
+            rt.journal.clone(),
             thread,
             "turn-steer".into(),
         );
@@ -1007,21 +1163,298 @@ mod steering_tests {
         );
     }
 
+    /// Build a Runtime at an explicit `data_dir` WITHOUT serving its command
+    /// loop, returning the command sender and event receiver so tests can
+    /// drive `serve()` themselves or poke `Shared` directly. The runtime
+    /// journal is opened through the same production path (`open_runtime_journal`)
+    /// so tests exercise the real resume-on-restart logic.
+    pub(super) fn make_runtime_at(
+        shared: Arc<Shared>,
+        data_dir: PathBuf,
+    ) -> (
+        Runtime,
+        Sender<(u64, Command)>,
+        std::sync::mpsc::Receiver<Event>,
+    ) {
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let _ = std::fs::create_dir_all(data_dir.join("threads"));
+        let journal = open_runtime_journal(&data_dir);
+        (
+            Runtime {
+                shared,
+                data_dir,
+                threads: Mutex::new(HashMap::new()),
+                event_tx,
+                cmd_rx,
+                journal,
+            },
+            cmd_tx,
+            event_rx,
+        )
+    }
+
     /// Build a Runtime whose command loop is never served, purely so unit
     /// tests can drive `enqueue_message` / inspect `Shared` directly.
     fn make_runtime_for_tests(shared: Arc<Shared>) -> Runtime {
-        let (_cmd_tx, cmd_rx) = std::sync::mpsc::channel();
-        let (event_tx, event_rx) = std::sync::mpsc::channel();
         let data_dir = std::env::temp_dir().join(format!("zdt-steer-{:x}", std::process::id()));
-        let _ = std::fs::create_dir_all(data_dir.join("threads"));
+        let (rt, _cmd_tx, event_rx) = make_runtime_at(shared, data_dir);
         // Keep the receiver alive for the duration of the test.
         std::mem::forget(event_rx);
-        Runtime {
-            shared,
-            data_dir,
-            threads: Mutex::new(HashMap::new()),
-            event_tx,
-            cmd_rx,
+        rt
+    }
+}
+
+#[cfg(test)]
+mod journal_wiring_tests {
+    use super::*;
+    use super::steering_tests::{make_runtime_at, ScriptedProvider};
+
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn unique_data_dir(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "zdt-jour-{}-{tag}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir); // start clean even after a crashed run
+        std::fs::create_dir_all(dir.join("threads")).expect("create temp data dir");
+        dir
+    }
+
+    fn scripted_shared(reply_text: &str) -> Shared {
+        Shared {
+            provider: Mutex::new(Some(Arc::new(ScriptedProvider {
+                outcomes: std::sync::Mutex::new(vec![provider::StreamOutcome {
+                    text: reply_text.into(),
+                    tool_calls: Vec::new(),
+                }]),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }))),
+            provider_label: Mutex::new("scripted".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn empty_shared() -> Shared {
+        Shared {
+            provider: Mutex::new(None),
+            provider_label: Mutex::new(String::new()),
+            project_root: Mutex::new(None),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Drive one full SendMessage turn through a real serve() loop on a
+    /// background thread; blocks until the turn finishes, then shuts the loop
+    /// down. Returns the turn_id from the TurnStarted event.
+    fn serve_one_turn(data_dir: &std::path::Path, thread_id: &str, text: &str) -> Id {
+        let (rt, cmd_tx, event_rx) =
+            make_runtime_at(Arc::new(scripted_shared("journaled answer")), data_dir.to_path_buf());
+        let server = std::thread::spawn(move || rt.serve());
+        cmd_tx
+            .send((
+                1,
+                Command::SendMessage { thread_id: thread_id.into(), text: text.into() },
+            ))
+            .expect("send SendMessage");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut turn_id = None;
+        loop {
+            assert!(std::time::Instant::now() < deadline, "turn did not finish in time");
+            match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(Event::TurnStarted { thread_id: t, turn_id: tid }) if t == thread_id => {
+                    turn_id = Some(tid);
+                }
+                Ok(Event::TurnFinished { ok: true, thread_id: t, .. }) if t == thread_id => break,
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        drop(cmd_tx);
+        server.join().expect("serve loop must not panic");
+        turn_id.expect("saw TurnStarted event")
+    }
+
+    #[test]
+    fn serve_pipeline_journals_command_received_turn_started_and_message_persisted() {
+        let data_dir = unique_data_dir("pipeline");
+        let (rt, cmd_tx, event_rx) =
+            make_runtime_at(Arc::new(scripted_shared("journaled answer")), data_dir.clone());
+        let server = std::thread::spawn(move || rt.serve());
+
+        cmd_tx.send((1, Command::SendMessage { thread_id: "jour-thread".into(), text: "hello".into() })).expect("send");
+        cmd_tx.send((2, Command::CancelTurn { thread_id: "other-thread".into() })).expect("send");
+        cmd_tx.send((3, Command::ResolveApproval { call_id: "call-x".into(), approved: true })).expect("send");
+
+        // Wait for the turn itself; later commands are processed by the same
+        // serial serve loop before/while it runs.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut started_turn_id = None;
+        loop {
+            assert!(std::time::Instant::now() < deadline, "turn did not finish in time");
+            match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(Event::TurnStarted { thread_id: t, turn_id }) if t == "jour-thread" => {
+                    started_turn_id = Some(turn_id);
+                }
+                Ok(Event::TurnFinished { ok: true, thread_id: t, .. }) if t == "jour-thread" => break,
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        drop(cmd_tx);
+        server.join().expect("serve loop must not panic");
+
+        let path = data_dir.join("journal").join("runtime.jsonl");
+        let records = Journal::replay(&path).expect("journal replayable");
+
+        // Sequence is contiguous starting at 1 — no gaps, no reuse.
+        let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, (1..=records.len() as u64).collect::<Vec<_>>());
+
+        // One CommandReceived per command sent, in dispatch order.
+        let received: Vec<&Record> = records.iter()
+            .filter(|r| r.kind == JournalKind::CommandReceived)
+            .collect();
+        assert_eq!(received.len(), 3, "one CommandReceived per command");
+        assert_eq!(received[0].payload["command"], "send_message");
+        assert_eq!(received[0].payload["thread_id"], "jour-thread");
+        assert_eq!(received[1].payload["command"], "cancel_turn");
+        assert_eq!(received[1].payload["thread_id"], "other-thread");
+        assert_eq!(received[2].payload["command"], "resolve_approval");
+
+        // Exactly one TurnStarted, matching the emitted event's turn_id.
+        let starts: Vec<&Record> = records.iter()
+            .filter(|r| r.kind == JournalKind::TurnStarted)
+            .collect();
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0].thread_id.as_deref(), Some("jour-thread"));
+        let turn_id = started_turn_id.expect("saw TurnStarted event");
+        assert_eq!(starts[0].payload["turn_id"], turn_id);
+
+        // Success path persisted exactly the new assistant message (the user
+        // message was appended in start_turn, BEFORE run_turn's baseline).
+        let persisted: Vec<&Record> = records.iter()
+            .filter(|r| r.kind == JournalKind::MessagePersisted)
+            .collect();
+        assert_eq!(persisted.len(), 1, "one MessagePersisted on the success path");
+        assert_eq!(persisted[0].thread_id.as_deref(), Some("jour-thread"));
+        assert_eq!(persisted[0].payload["count"], 1);
+        assert_eq!(persisted[0].payload["last_role"], "agent");
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn journal_sequence_continues_after_runtime_restart() {
+        let data_dir = unique_data_dir("restart");
+        let path = data_dir.join("journal").join("runtime.jsonl");
+
+        serve_one_turn(&data_dir, "restart-thread", "first");
+        let first_run_max = Journal::replay(&path)
+            .expect("replay first run")
+            .last()
+            .expect("non-empty journal")
+            .seq;
+        assert!(first_run_max >= 3);
+
+        // A SECOND Runtime over the same data dir resumes the sequence.
+        serve_one_turn(&data_dir, "restart-thread", "second");
+        let records = Journal::replay(&path).expect("replay both runs");
+        let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, (1..=records.len() as u64).collect::<Vec<_>>(), "no seq gap or reuse across restart");
+        assert_eq!(records[first_run_max as usize].seq, first_run_max + 1);
+        assert_eq!(
+            records.iter().filter(|r| r.kind == JournalKind::TurnStarted).count(),
+            2,
+            "each restart contributed its own TurnStarted"
+        );
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn configure_provider_is_journalled_as_shape_without_secrets() {
+        let data_dir = unique_data_dir("config-shape");
+        let (rt, cmd_tx, _event_rx) =
+            make_runtime_at(Arc::new(empty_shared()), data_dir.clone());
+        let server = std::thread::spawn(move || rt.serve());
+        cmd_tx
+            .send((1, Command::ConfigureProvider { config: ProviderConfig {
+                name: "main".into(),
+                kind: z_protocol::ProviderKind::OpenAi,
+                base_url: "https://api.example.test/v1".into(),
+                model: "model-x".into(),
+                api_key: "sk-SUPER-SECRET-VALUE".into(),
+            }}))
+            .expect("send ConfigureProvider");
+        drop(cmd_tx);
+        server.join().expect("serve loop must not panic");
+
+        let raw = std::fs::read_to_string(data_dir.join("journal").join("runtime.jsonl"))
+            .expect("journal exists");
+        assert!(!raw.contains("sk-SUPER-SECRET-VALUE"), "API key leaked into the journal");
+        assert!(raw.contains("\"configure_provider\""), "command recorded");
+        assert!(raw.contains("\"api_key\""), "field NAME recorded (shape only)");
+        assert!(!raw.contains("api.example.test"), "config values stay out of the payload");
+        assert!(!raw.contains("model-x"), "config values stay out of the payload");
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unwritable_journal_dir_never_breaks_a_turn() {
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Root ignores permission bits, so the scenario cannot be
+            // simulated — skip gracefully instead of failing.
+            if unsafe { libc::geteuid() } == 0 {
+                eprintln!("skipped: running as root ignores 0o000 permissions");
+                return;
+            }
+            let data_dir = unique_data_dir("locked");
+            let journal_dir = data_dir.join("journal");
+            std::fs::create_dir_all(&journal_dir).expect("mkdir journal");
+            std::fs::set_permissions(&journal_dir, std::fs::Permissions::from_mode(0o000))
+                .expect("chmod journal dir");
+
+            // Construction degrades to "no journal" instead of failing...
+            assert!(open_runtime_journal(&data_dir).is_none());
+
+            // ...and a full served turn completes normally without any
+            // journal records.
+            let (rt, cmd_tx, event_rx) = make_runtime_at(
+                Arc::new(scripted_shared("still works")),
+                data_dir.clone(),
+            );
+            assert!(rt.journal.is_none(), "journal must be disabled, not crashing");
+            let server = std::thread::spawn(move || rt.serve());
+            cmd_tx.send((1, Command::SendMessage { thread_id: "t".into(), text: "hi".into() })).expect("send");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                assert!(std::time::Instant::now() < deadline, "turn did not finish in time");
+                match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                    Ok(Event::TurnFinished { ok: true, .. }) => break,
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
+            }
+            drop(cmd_tx);
+            server.join().expect("serve loop must not panic");
+            assert!(!journal_dir.join("runtime.jsonl").exists());
+
+            // Restore permissions so cleanup succeeds.
+            std::fs::set_permissions(&journal_dir, std::fs::Permissions::from_mode(0o755))
+                .expect("restore perms");
+            let _ = std::fs::remove_dir_all(&data_dir);
         }
     }
 }

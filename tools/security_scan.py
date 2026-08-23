@@ -59,6 +59,11 @@ ALLOWLIST_SUBSTRINGS = [
     "ghp_0123456789abcdef",        # redact.rs test fixture (fake)
     "AKIAIOSFODNN7EXAMPLE",        # AWS documentation example key
     "AIzaSyA1234567890",           # redact.rs test fixture (fake)
+    "sk-pro...6789",               # redact.rs test placeholder (fake)
+    "ghp_01...wxyz",               # redact.rs test placeholder (fake)
+    "AKIAIO...MPLE",               # redact.rs test placeholder (fake)
+    "sk-SU",                       # runtime.rs journal test placeholder prefix
+                                   # (21-char fake; the test asserts it never persists)
 ]
 
 

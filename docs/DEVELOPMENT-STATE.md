@@ -6,6 +6,38 @@
 
 Last updated: 2026-08-23
 
+## Journal Wiring + ADR-0009 (2026-08-23) — COMPLETE
+
+1. ✅ **jour-024**: Runtime owns `journal: Mutex<Journal>` at
+   `data_dir/journal/runtime.jsonl`, opened with `open_resuming` from the
+   replayed max seq (restart-safe, no seq reuse). Every command received is
+   journalled as CommandReceived with a SHAPE-only payload — message text,
+   provider config values and API keys never enter the journal (enforced by
+   a dedicated test). TurnStarted records on SendMessage.
+2. ✅ **jour-029**: MessagePersisted records on every thread persist point
+   (success, cancel, and error paths) with new-message count + last role.
+   Journal append failures log a warning and never fail the turn.
+
+Verification: full workspace suite green — **302 tests, 0 failed**
+(298 → 302; journal wiring tests incl. restart seq continuity and
+secret-shape assertions). Security scan clean after allowlisting the
+journal test's synthetic placeholder (the test itself asserts the fake
+key never persists).
+
+Also this session:
+- ✅ **idx-001/002** (ADR): `docs/adr/0009-repository-index-actor.md` —
+  single owner thread (`z-index`) holding ALL mutable index state, fed via
+  std::sync::mpsc IndexCommand inbox; readers get immutable snapshots
+  through a Mutex<Arc<IndexSnapshot>> swap; crossbeam-channel evaluated
+  and declined (no new deps); watcher (notify) stays deferred to its own
+  evaluation; initial indexing moves off the command loop. Unblocks
+  idx-012/013, idx-026..029, idx-035, repo-map v2, go-to-def tools.
+- Ledger statuses updated through `tools/gen_tasks.py`: 17 IMPLEMENTED.
+
+Next work continues → idx-004 Rust grammar pack behind the idx-001 actor,
+or edit-001 fingerprint utilities (safe-editing foundation), in dependency
+order per the ledger.
+
 ## Journal Slice + ADR-0008 (2026-08-23) — COMPLETE
 
 Vertical slice "Exact Next Tasks #2" (JSONL task journal) shipped and verified:

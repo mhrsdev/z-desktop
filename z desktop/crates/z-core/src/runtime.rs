@@ -5,6 +5,7 @@
 //! responsive to cancellation and approvals while a turn streams.
 
 use crate::journal::{Journal, JournalKind, Record, RecordDraft};
+use crate::reducer::{TaskStatus, TaskStore};
 use crate::{provider, repo::RepoIndex, tools};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1821,5 +1822,234 @@ mod write_grant_tests {
         );
         let leftovers = debug_grants(&shared);
         assert!(leftovers.is_empty(), "no leftover grant after completion: {leftovers:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator skeleton (orch-003, ADR-0012): cap-limited nested-task runner.
+// ---------------------------------------------------------------------------
+
+/// ADR-0012 caps (orch-012 fixes the numbers): global 2 concurrent children,
+/// per-parent 1 and hard ceiling 4 land with the full spawn policy. Constants
+/// until orch-021 wires dev-mode settings.
+pub const ORCH_MAX_CONCURRENT: usize = 2;
+
+/// Nested task work for [`Orchestrator`]. Skeleton stand-in: orch-005 replaces
+/// this with a real ChildSpec driving one nested `run_turn` (ADR-0012 §3).
+pub type TaskBody = Box<dyn FnOnce() -> Result<(), String> + Send>;
+
+/// Inbox command for the orchestrator thread.
+pub enum OrchCommand {
+    EnqueueTask { id: String, body: TaskBody },
+    Shutdown,
+}
+
+/// Minimal orchestrator (ADR-0012 decision 2): one named `z-orchestrator`
+/// thread with an mpsc inbox; parks in `recv_timeout(1s)` so the deadline
+/// sweep fires without a timer thread. Admits up to [`ORCH_MAX_CONCURRENT`]
+/// tasks at once — overflow QUEUES as pending rather than being refused —
+/// each on a named `z-subagent` worker that journals Running → Done/Failed
+/// through the TaskStore journal segment.
+pub struct Orchestrator {
+    tx: Sender<OrchCommand>,
+}
+
+impl Orchestrator {
+    /// Spawns the orchestrator thread over `<tasks_dir>/tasks.jsonl`.
+    pub fn spawn(tasks_dir: PathBuf) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("z-orchestrator".into())
+            .spawn(move || orchestrator_loop(tasks_dir, rx))
+            .expect("could not spawn orchestrator thread");
+        Self { tx }
+    }
+
+    pub fn enqueue_task(&self, id: String, body: TaskBody) {
+        let _ = self.tx.send(OrchCommand::EnqueueTask { id, body });
+    }
+
+    pub fn shutdown(&self) {
+        let _ = self.tx.send(OrchCommand::Shutdown);
+    }
+}
+
+fn orchestrator_loop(tasks_dir: PathBuf, inbox: Receiver<OrchCommand>) {
+    // id -> its z-subagent worker; presence == currently Running.
+    let mut running: HashMap<String, std::thread::JoinHandle<()>> = HashMap::new();
+    let mut queued: VecDeque<(String, TaskBody)> = VecDeque::new();
+
+    loop {
+        match inbox.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(OrchCommand::EnqueueTask { id, body }) => queued.push_back((id, body)),
+            Ok(OrchCommand::Shutdown) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // TODO(orch-004, ADR-0012 §5c): sweep tasks past their
+                // wall-clock budget deadline here — set cancelled (same path
+                // as CancelTurn) and wait for the worker to exit. No budgets
+                // exist yet, so nothing to sweep.
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        // Reap finished workers (each already journaled its own Done/Failed),
+        // then admit queued tasks while slots remain under the global cap.
+        let finished: Vec<String> = running
+            .iter()
+            .filter(|(_, handle)| handle.is_finished())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in finished {
+            if let Some(handle) = running.remove(&id) {
+                let _ = handle.join();
+            }
+        }
+        while running.len() < ORCH_MAX_CONCURRENT {
+            let Some((id, body)) = queued.pop_front() else { break };
+            if let Err(e) = TaskStore::transition(&tasks_dir, &id, TaskStatus::Running) {
+                log::warn!("orchestrator: cannot mark {id} running: {e}");
+                continue;
+            }
+            let spawned = std::thread::Builder::new().name("z-subagent".into()).spawn({
+                let tasks_dir = tasks_dir.clone();
+                let id = id.clone();
+                move || {
+                    let status = match body() {
+                        Ok(()) => TaskStatus::Done,
+                        Err(_) => TaskStatus::Failed,
+                    };
+                    if let Err(e) = TaskStore::transition(&tasks_dir, &id, status) {
+                        log::warn!("orchestrator: task {id} final transition failed: {e}");
+                    }
+                }
+            });
+            match spawned {
+                Ok(handle) => {
+                    running.insert(id, handle);
+                }
+                Err(e) => {
+                    log::warn!("orchestrator: could not spawn worker for {id}: {e}");
+                    let _ = TaskStore::transition(&tasks_dir, &id, TaskStatus::Failed);
+                }
+            }
+        }
+    }
+    // Shutdown ordering per ADR-0012: stop admitting (caller drops its sender)
+    // → join outstanding children → exit; journal records survive for resume.
+    for (_, handle) in running.drain() {
+        let _ = handle.join();
+    }
+}
+
+#[cfg(test)]
+mod orchestrator_tests {
+    use super::*;
+    use crate::reducer::TasksView;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_tasks_dir(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("zdt-orch-{tag}-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp tasks dir");
+        dir
+    }
+
+    fn tasks_path(dir: &Path) -> PathBuf {
+        dir.join(format!("{}.jsonl", "tasks"))
+    }
+
+    /// Polls `f` until it returns true or the timeout elapses (last try wins).
+    fn wait_until(timeout_ms: u64, mut f: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        loop {
+            if f() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn three_enqueued_tasks_all_complete_under_global_cap_of_two() {
+        let dir = temp_tasks_dir("cap");
+        for i in 0..3 {
+            TaskStore::create(&dir, &format!("t{i}")).expect("create task");
+        }
+        let orch = Orchestrator::spawn(dir.clone());
+
+        // Guard: bodies track live concurrency and the max ever observed.
+        let concurrent = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        for i in 0..3 {
+            let concurrent = Arc::clone(&concurrent);
+            let max_seen = Arc::clone(&max_seen);
+            orch.enqueue_task(
+                format!("t{i}"),
+                Box::new(move || {
+                    let now = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_seen.fetch_max(now, Ordering::SeqCst);
+                    // Long enough that all 3 overlap without a cap; short
+                    // enough that the test stays fast under it.
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    concurrent.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                }),
+            );
+        }
+
+        let path = tasks_path(&dir);
+        assert!(
+            wait_until(10_000, || TasksView::fold(&path)
+                .ok()
+                .map_or(false, |v| v.tasks.values().all(|t| t.status == TaskStatus::Done))),
+            "all 3 tasks must reach Done"
+        );
+        orch.shutdown();
+
+        let view = TasksView::fold(&path).expect("fold");
+        for i in 0..3 {
+            assert_eq!(
+                view.tasks[&format!("t{i}")].status,
+                TaskStatus::Done,
+                "t{i} must be Done"
+            );
+        }
+        assert!(
+            max_seen.load(Ordering::SeqCst) <= ORCH_MAX_CONCURRENT,
+            "observed {} concurrent workers, cap is {}",
+            max_seen.load(Ordering::SeqCst),
+            ORCH_MAX_CONCURRENT
+        );
+        assert_eq!(concurrent.load(Ordering::SeqCst), 0, "no worker left running");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_body_transitions_task_to_failed() {
+        let dir = temp_tasks_dir("failed");
+        TaskStore::create(&dir, "bad").expect("create bad");
+
+        let orch = Orchestrator::spawn(dir.clone());
+        orch.enqueue_task(
+            "bad".into(),
+            Box::new(|| Err("boom".into())),
+        );
+
+        let path = tasks_path(&dir);
+        assert!(
+            wait_until(10_000, || TasksView::fold(&path)
+                .ok()
+                .and_then(|v| v.tasks.get("bad").map(|t| t.status == TaskStatus::Failed))
+                .unwrap_or(false)),
+            "task with failing body must reach Failed"
+        );
+        orch.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

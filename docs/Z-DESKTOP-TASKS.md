@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 40 |
+| IMPLEMENTED | 42 |
 | PARTIAL | 1 |
-| PLANNED | 682 |
+| PLANNED | 680 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -464,10 +464,10 @@
 ### [IMPLEMENTED] orch-001 — Task record store (create/transition/query)
 - depends: jour-008
 
-### [PLANNED] orch-002 — Task dependency resolution (ready-set computation)
+### [IMPLEMENTED] orch-002 — Task dependency resolution (ready-set computation)
 - depends: orch-001
 
-### [PLANNED] orch-003 — Orchestrator loop thread
+### [IMPLEMENTED] orch-003 — Orchestrator loop thread
 - depends: orch-002
 
 ### [PLANNED] orch-004 — Budget enforcer (tokens/time per task)

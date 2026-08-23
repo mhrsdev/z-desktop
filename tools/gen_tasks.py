@@ -167,8 +167,8 @@ DOMAINS = [
     ]),
     ("orch", "Orchestration & Sub-Agents", [
         ("001", "Task record store (create/transition/query)", ["jour-008"], "IMPLEMENTED"),
-        ("002", "Task dependency resolution (ready-set computation)", ["001"], "PLANNED"),
-        ("003", "Orchestrator loop thread", ["002"], "PLANNED"),
+        ("002", "Task dependency resolution (ready-set computation)", ["001"], "IMPLEMENTED"),
+        ("003", "Orchestrator loop thread", ["002"], "IMPLEMENTED"),
         ("004", "Budget enforcer (tokens/time per task)", ["001"], "PLANNED"),
         ("005", "Sub-agent spawn policy validation", ["003"], "PLANNED"),
         ("006", "Isolation ladder levels (context/scope/worktree/sandbox)", ["005"], "PLANNED"),

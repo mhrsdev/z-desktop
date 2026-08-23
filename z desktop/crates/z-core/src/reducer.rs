@@ -83,6 +83,10 @@ impl ThreadsView {
 pub struct TaskRecord {
     pub id: String,
     pub status: TaskStatus,
+    /// orch-002: declared dependency ids. A Pending task is ready only when
+    /// every dependency is Done; unknown dep ids block forever (safe default).
+    #[serde(default)]
+    pub deps: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,16 +126,43 @@ impl TasksView {
                         )
                     },
                 );
+            // orch-002: `deps` is declared once at creation and absent from
+            // later transition events — only overwrite it when carried.
+            let deps = match record.payload.get("deps") {
+                Some(v) => match serde_json::from_value::<Vec<String>>(v.clone()) {
+                    Ok(deps) => Some(deps),
+                    Err(e) => {
+                        bad_payload = Some(format!(
+                            "reducer {}: bad task deps payload in seq {}: {e}",
+                            path.display(),
+                            record.seq
+                        ));
+                        return;
+                    }
+                },
+                None => None,
+            };
             match parsed {
                 Ok(status) => {
                     if let Some(id) = record.payload["id"].as_str() {
-                        view.tasks.insert(
-                            id.to_string(),
-                            TaskRecord {
-                                id: id.to_string(),
-                                status,
-                            },
-                        );
+                        match view.tasks.get_mut(id) {
+                            Some(existing) => {
+                                existing.status = status;
+                                if let Some(deps) = deps {
+                                    existing.deps = deps;
+                                }
+                            }
+                            None => {
+                                view.tasks.insert(
+                                    id.to_string(),
+                                    TaskRecord {
+                                        id: id.to_string(),
+                                        status,
+                                        deps: deps.unwrap_or_default(),
+                                    },
+                                );
+                            }
+                        }
                     }
                 }
                 Err(e) => bad_payload = Some(e),
@@ -141,6 +172,25 @@ impl TasksView {
             Some(e) => Err(e),
             None => Ok(view),
         }
+    }
+
+    /// orch-002: tasks eligible to run — Pending with every declared
+    /// dependency already Done. Unknown dep ids block forever (safe default).
+    /// Sorted for deterministic order.
+    pub fn ready_set(&self) -> Vec<String> {
+        let mut ready: Vec<String> = self
+            .tasks
+            .values()
+            .filter(|t| t.status == TaskStatus::Pending)
+            .filter(|t| {
+                t.deps
+                    .iter()
+                    .all(|d| self.tasks.get(d).map_or(false, |dep| dep.status == TaskStatus::Done))
+            })
+            .map(|t| t.id.clone())
+            .collect();
+        ready.sort();
+        ready
     }
 }
 
@@ -153,7 +203,28 @@ pub struct TaskStore;
 impl TaskStore {
     /// Records task creation (`status = Pending`).
     pub fn create(dir: &Path, id: &str) -> Result<(), String> {
-        Self::transition(dir, id, TaskStatus::Pending)
+        Self::create_with_deps(dir, id, &[])
+    }
+
+    /// orch-002: records task creation with declared dependency ids.
+    pub fn create_with_deps(dir: &Path, id: &str, deps: &[String]) -> Result<(), String> {
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+        let last_seq = if path.exists() {
+            Journal::replay(&path)?.last().map(|r| r.seq).unwrap_or(0)
+        } else {
+            0
+        };
+        let mut journal = if last_seq == 0 {
+            Journal::open(dir, TASKS_SEGMENT)?
+        } else {
+            Journal::open_resuming(dir, TASKS_SEGMENT, last_seq)?
+        };
+        journal.append(RecordDraft::new(
+            JournalKind::TaskStateChanged,
+            None,
+            serde_json::json!({ "id": id, "status": TaskStatus::Pending, "deps": deps }),
+        ))?;
+        Ok(())
     }
 
     /// Appends one transition event for `id`.
@@ -253,7 +324,8 @@ mod reducer_tests {
             view.tasks["task-a"],
             TaskRecord {
                 id: "task-a".into(),
-                status: TaskStatus::Done
+                status: TaskStatus::Done,
+                deps: vec![]
             }
         );
 
@@ -332,6 +404,55 @@ mod reducer_tests {
         let err = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl")))
             .expect_err("bad status must fail loud");
         assert!(err.contains("bad task status payload"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // orch-002 ---------------------------------------------------------------
+
+    #[test]
+    fn ready_set_chain_only_dependency_free_then_unblocked_by_done() {
+        let dir = temp_dir("ready-chain");
+        // B depends on A; A has no deps.
+        TaskStore::create_with_deps(&dir, "b", &["a".into()]).expect("create b");
+        TaskStore::create(&dir, "a").expect("create a");
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+
+        let view = TasksView::fold(&path).expect("fold");
+        assert_eq!(view.ready_set(), vec!["a"], "initially only A is ready");
+
+        TaskStore::transition(&dir, "a", TaskStatus::Done).expect("a done");
+        let view = TasksView::fold(&path).expect("fold");
+        assert_eq!(view.ready_set(), vec!["b"], "A Done unblocks B");
+
+        // A later dep-less transition of B must NOT erase its declared deps.
+        TaskStore::transition(&dir, "b", TaskStatus::Running).expect("b running");
+        let view = TasksView::fold(&path).expect("fold");
+        assert_eq!(view.tasks["b"].deps, vec!["a"]);
+        assert!(view.ready_set().is_empty(), "running B is not ready");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_or_unknown_dependencies_block_forever() {
+        let dir = temp_dir("ready-blocked");
+        TaskStore::create_with_deps(&dir, "d", &["f".into()]).expect("create d");
+        TaskStore::create_with_deps(&dir, "u", &["ghost".into()]).expect("create u");
+        TaskStore::create_with_deps(&dir, "m", &["f".into(), "ghost".into()])
+            .expect("create m multi-dep");
+        TaskStore::create(&dir, "f").expect("create f");
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+
+        let view = TasksView::fold(&path).expect("fold");
+        assert_eq!(view.ready_set(), vec!["f"]);
+
+        // F Failed: d and m never become ready; u's dep does not exist at all.
+        TaskStore::transition(&dir, "f", TaskStatus::Failed).expect("f failed");
+        let view = TasksView::fold(&path).expect("fold");
+        assert!(
+            view.ready_set().is_empty(),
+            "failed/unknown deps must block forever: {:?}",
+            view.ready_set()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

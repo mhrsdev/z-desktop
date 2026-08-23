@@ -6,6 +6,27 @@
 
 Last updated: 2026-08-23
 
+## Orchestrator Skeleton + ADR-0015 (2026-08-23) — COMPLETE
+
+1. ✅ **orch-002**: TasksView::ready_set — Pending tasks whose deps are all
+   Done (deps field added additively to TaskRecord; unknown deps block
+   forever, safe default). Chain tests: A→B gating, Failed dep blocks.
+2. ✅ **orch-003 (skeleton)**: Orchestrator thread with mpsc inbox +
+   1s recv_timeout deadline-sweep placeholder per ADR-0012; EnqueueTask{id,
+   body} runs nested task bodies on named "z-subagent" workers under the
+   global cap of 2 concurrent (AtomicUsize test asserts the cap held);
+   body Ok → Done, Err → Failed via TaskStore.
+3. ✅ **ADR-0015** (`docs/adr/0015-token-economy.md`): stable prefix defined
+   byte-exactly as system string + serialized tools array with a guard
+   test; tool-output cache keyed by file fingerprints with invalidation on
+   mismatch; redundant-read detection rides the existing registry.
+
+Verification: full workspace suite green — **341 tests, 0 failed**
+(337 → 341). Ledger: 44 IMPLEMENTED.
+
+Next work continues → tok-003..005 cache implementation per ADR-0015, or
+orch-004 budget enforcer, or core-013/014 doom-loop breaker.
+
 ## Reducer API + Task Store + ADR-0014 (2026-08-23) — COMPLETE
 
 1. ✅ **jour-006**: `z-core/src/reducer.rs` — free `fold(path, init, f)`

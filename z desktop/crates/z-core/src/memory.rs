@@ -661,6 +661,23 @@ impl MemoryStore {
     }
 }
 
+/// One-line health summary (mem-022): journal replay counts plus per-layer
+/// view record counts. Views are caches, so the layer numbers reflect the
+/// last `rebuild_views`; the journal is truth.
+pub fn memory_health(store: &MemoryStore, journal_path: &Path) -> Result<String, String> {
+    let report = replay_summary(journal_path)?;
+    let count = |layer| store.read_layer(layer).map(|records| records.len());
+    Ok(format!(
+        "{} events, {} live ({} project/{} semantic/{} episodic), {} provisional",
+        report.total_events,
+        report.live_records,
+        count(Layer::Project)?,
+        count(Layer::Semantic)?,
+        count(Layer::Episodic)?,
+        report.provisional_records,
+    ))
+}
+
 /// One heuristic hit from post-turn text extraction (mem-005, ADR-0014 D5).
 /// Lands Provisional only; promotion is mem-007's job.
 #[derive(Debug, Clone, PartialEq)]
@@ -1895,6 +1912,63 @@ mod memory_tests {
                 "{layer:?}"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_health_seeded_store_matches_exact_summary() {
+        let dir = temp_dir("memory-health");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let mut a = rec("mem-a", Status::Promoted);
+        record(&journal, &a);
+        record(&journal, &rec("mem-b", Status::Promoted));
+        let semantic = MemoryRecord::new(
+            "mem-s",
+            Layer::Semantic,
+            "semantic note",
+            prov("pass-2"),
+            0.6,
+            Status::Promoted,
+        )
+        .expect("valid");
+        let episodic = MemoryRecord::new(
+            "mem-e",
+            Layer::Episodic,
+            "episodic note",
+            prov("pass-3"),
+            0.5,
+            Status::Provisional,
+        )
+        .expect("valid");
+        record(&journal, &semantic);
+        record(&journal, &episodic);
+        a.superseded_by = Some("mem-b".into());
+        record(&journal, &a);
+        drop(journal);
+
+        let store = MemoryStore::open(&dir);
+        store.rebuild_views(&path).expect("rebuild");
+
+        // Views hold live-only records per layer, so the provisional
+        // episodic record counts toward totals but not any layer view.
+        assert_eq!(
+            memory_health(&store, &path).expect("health"),
+            "4 events, 2 live (1 project/1 semantic/0 episodic), 1 provisional"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_health_empty_journal_is_zero_summary() {
+        let dir = temp_dir("memory-health-empty");
+        let path = dir.join("runtime.jsonl");
+        drop(Journal::open(&dir, "runtime").expect("open")); // empty segment
+
+        assert_eq!(
+            memory_health(&MemoryStore::open(&dir), &path).expect("health"),
+            "0 events, 0 live (0 project/0 semantic/0 episodic), 0 provisional"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

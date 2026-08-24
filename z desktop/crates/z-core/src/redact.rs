@@ -73,6 +73,28 @@ pub fn redact(input: &str) -> String {
     text
 }
 
+/// Strict gate for journal-bound payloads: [`redact`] the text, then re-run
+/// detection over the result. Redaction is sequential and heuristic — it may
+/// not catch every shape (and its own markers can re-trigger the assignment
+/// rule) — so if ANY secret-shaped pattern still matches, refuse rather than
+/// let the payload reach the journal.
+pub fn scan_json_value_strict(text: &str) -> Result<String, String> {
+    let redacted = redact(text);
+    let residual: Vec<&str> = rules()
+        .iter()
+        .filter(|r| r.regex.is_match(&redacted))
+        .map(|r| r.label)
+        .collect();
+    if residual.is_empty() {
+        Ok(redacted)
+    } else {
+        Err(format!(
+            "strict redaction gate: residual secret-shaped patterns remain after redaction: {}",
+            residual.join(", ")
+        ))
+    }
+}
+
 /// Run [`redact`] over `text`, recording one scan plus one hit per matched
 /// rule kind into `stats`. Returns the redacted text.
 pub fn scan_and_record(text: &str, stats: &RedactionStats, ts_ms: u128) -> String {
@@ -260,5 +282,24 @@ mod tests {
         assert_eq!(stats.snapshot().hits_by_kind, vec![("sk".to_string(), 2)]);
         assert_eq!(stats.snapshot().last_hit_at_ms, Some(99));
         assert_eq!(snap.last_hit_at_ms, Some(42));
+    }
+
+    #[test]
+    fn strict_gate_passes_clean_payload_through_unchanged() {
+        let src = r#"{"model":"gpt","messages":[{"role":"user","content":"hello world"}]}"#;
+        assert_eq!(scan_json_value_strict(src).unwrap(), src);
+    }
+
+    #[test]
+    fn strict_gate_refuses_payload_whose_redaction_leaves_residue() {
+        // Fake sk- key under a sensitive JSON field. `redact` masks the token,
+        // but its own `[redacted:…]` marker still matches the assignment rule
+        // (sequential heuristics aren't fixpoint-stable; redact may not catch
+        // all shapes). Strict mode refuses instead of journaling it.
+        let src = r#"{"api_key": "sk-fake1234567890abcdefghijklmn"}"#;
+        let out = scan_json_value_strict(src);
+        let err = out.unwrap_err();
+        assert!(err.contains("residual"), "{err}");
+        assert!(err.contains("assign"), "{err}");
     }
 }

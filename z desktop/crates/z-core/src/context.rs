@@ -141,6 +141,7 @@ pub fn compact_once(items: Vec<ContextItem>, budget_tokens: usize) -> Vec<Contex
 }
 
 /// ctx-010: journal record for one [`compact_with_journal`] pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionEvent {
     pub at_ms: u128,
     pub dropped: usize,
@@ -175,6 +176,28 @@ pub fn compact_with_journal(
             tokens_saved,
         }),
     )
+}
+
+/// ctx-003 ext: serialize events as JSONL (one event per line) for the caller
+/// to append to a journal-side log. Round-trips with [`parse_events_log`].
+pub fn compaction_events_log(events: &[CompactionEvent]) -> String {
+    let mut out = String::new();
+    for e in events {
+        if let Ok(line) = serde_json::to_string(e) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// ctx-003 ext: parse a JSONL events log back, skipping malformed lines
+/// (and blank lines). Never fails — partial logs still yield the good rows.
+pub fn parse_events_log(text: &str) -> Vec<CompactionEvent> {
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
 }
 
 /// mem-009 (ADR-0014): appends ranked memories as Turn-layer items
@@ -876,5 +899,52 @@ mod tests {
         assert_eq!(kept.len() + event.dropped, 4);
         let kept_tokens: usize = kept.iter().map(|i| i.est_tokens).sum();
         assert_eq!(kept_tokens + event.tokens_saved, 80);
+    }
+
+    #[test]
+    fn events_log_round_trips() {
+        let events = vec![
+            CompactionEvent {
+                at_ms: 1_700_000_000_123,
+                dropped: 2,
+                tokens_saved: 45,
+            },
+            CompactionEvent {
+                at_ms: 1_700_000_001_456,
+                dropped: 1,
+                tokens_saved: 30,
+            },
+        ];
+        let log = compaction_events_log(&events);
+        assert_eq!(log.lines().count(), 2, "one event per line");
+        assert_eq!(parse_events_log(&log), events);
+    }
+
+    #[test]
+    fn events_log_skips_malformed_lines() {
+        let good = serde_json::to_string(&CompactionEvent {
+            at_ms: 7,
+            dropped: 1,
+            tokens_saved: 9,
+        })
+        .unwrap();
+        let log = format!("not json\n{{\"broken\": true}}\n{good}\n\n{good}");
+        let parsed = parse_events_log(&log);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0],
+            CompactionEvent {
+                at_ms: 7,
+                dropped: 1,
+                tokens_saved: 9
+            }
+        );
+    }
+
+    #[test]
+    fn events_log_empty_inputs_are_empty() {
+        assert_eq!(compaction_events_log(&[]), "");
+        assert!(parse_events_log("").is_empty());
+        assert!(parse_events_log("\n\n").is_empty());
     }
 }

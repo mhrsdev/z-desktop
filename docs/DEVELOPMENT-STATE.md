@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 24 (sup-025 + ctx-018 + set-012) — 2026-08-24 COMPLETE
+
+1. ✅ **sup-025**: detector_noise_report one-line evidence summary.
+2. ✅ **ctx-018**: budget_report "{used}/{budget} ({pct}%)" formatting.
+3. ✅ **set-012**: export_schema_markdown table for docs embedding.
+
+Verification: full workspace suite green — **723 tests, 0 failed**
+(715 → 723). Ledger: 151 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 22 (orch-018 + tok-023 + edit-006) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-018**: task_state_events/task_state_json export for the UI.

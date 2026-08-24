@@ -388,6 +388,21 @@ pub fn weighted_tokens(items: &[ContextItem], w: &PriorityWeights) -> usize {
         .sum()
 }
 
+/// ctx-018: one-line budget report for the inspector. `used` is the
+/// [`weighted_tokens`] total at default weights; pct is clamped to 0-999.
+pub fn budget_report(items: &[ContextItem], budget_tokens: usize) -> String {
+    let used = weighted_tokens(items, &PriorityWeights::default());
+    let pct = if budget_tokens == 0 {
+        999 * usize::from(used > 0)
+    } else {
+        (used * 100 / budget_tokens).min(999)
+    };
+    format!(
+        "context {used}/{budget_tokens} tokens ({pct}%), {} items",
+        items.len()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -946,5 +961,47 @@ mod tests {
         assert_eq!(compaction_events_log(&[]), "");
         assert!(parse_events_log("").is_empty());
         assert!(parse_events_log("\n\n").is_empty());
+    }
+
+    #[test]
+    fn budget_report_exact_formatting() {
+        let items = vec![item(Layer::Prefix, "sys", 30), item(Layer::Turn, "now", 20)];
+        // default weights are 1.0 => used = 50 of 100 => 50%.
+        assert_eq!(
+            budget_report(&items, 100),
+            "context 50/100 tokens (50%), 2 items"
+        );
+    }
+
+    #[test]
+    fn budget_report_shows_over_budget_pct() {
+        let items = vec![item(Layer::Session, "big", 250)];
+        assert_eq!(
+            budget_report(&items, 100),
+            "context 250/100 tokens (250%), 1 items"
+        );
+    }
+
+    #[test]
+    fn budget_report_pct_is_clamped_to_999() {
+        let items = vec![item(Layer::Session, "huge", 10_000)];
+        assert_eq!(
+            budget_report(&items, 10),
+            "context 10000/10 tokens (999%), 1 items"
+        );
+    }
+
+    #[test]
+    fn budget_report_empty_items_are_zero_used_and_pct() {
+        assert_eq!(
+            budget_report(&[], 500),
+            "context 0/500 tokens (0%), 0 items"
+        );
+        // Degenerate zero budget: no division by zero; anything used pins at 999.
+        assert_eq!(budget_report(&[], 0), "context 0/0 tokens (0%), 0 items");
+        assert_eq!(
+            budget_report(&[item(Layer::Turn, "t", 5)], 0),
+            "context 5/0 tokens (999%), 1 items"
+        );
     }
 }

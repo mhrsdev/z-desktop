@@ -591,6 +591,33 @@ pub fn overall_ok_rate(view: &EvidenceView) -> Option<f32> {
     })
 }
 
+/// sup-025: one-line detector-noise summary over a folded view —
+/// `{n} evidence records, {ok_pct}% ok, {kinds} kinds`. An empty view
+/// reports just the record count (no rate/kind spread exists to show).
+/// `ok_pct` is integer-truncated; kinds counts only kinds with >=1 record.
+pub fn detector_noise_report(view: &EvidenceView) -> String {
+    let n = view.items.len();
+    if n == 0 {
+        return "0 evidence records".to_string();
+    }
+    // ponytail: exact integer percent (no rounding); f32 here risks
+    // off-by-one on values like 0.29*100 — upgrade to rounding when a
+    // consumer cares about the last digit.
+    let ok_pct = 100 * view.items.iter().filter(|e| e.ok).count() / n;
+    const ORDER: [EvidenceKind; 5] = [
+        EvidenceKind::Build,
+        EvidenceKind::Tests,
+        EvidenceKind::Diff,
+        EvidenceKind::Bench,
+        EvidenceKind::Regression,
+    ];
+    let kinds = ORDER
+        .iter()
+        .filter(|k| view.items.iter().any(|e| e.kind == **k))
+        .count();
+    format!("{n} evidence records, {ok_pct}% ok, {kinds} kinds")
+}
+
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
@@ -1371,5 +1398,37 @@ mod evidence_tests {
         // Failing Build/Diff records must not drag Tests' rate down.
         approx(ok_rate(&view, EvidenceKind::Tests), 1.0);
         approx(overall_ok_rate(&view), 0.5); // 2 of 4 across all kinds
+    }
+
+    // sup-025: one-line detector-noise report.
+
+    #[test]
+    fn detector_noise_report_formats_seeded_view_exactly() {
+        let mut view = EvidenceView::default();
+        view.items.extend([
+            Evidence::build("t", "u", Some(0), "make"),    // ok
+            Evidence::build("t", "u", Some(1), "make"),    // failed
+            Evidence::tests("t", "u", 3, 0, "cargo test"), // ok
+            Evidence::diff("t", "u", false, "wrote x"),    // failed
+        ]);
+        assert_eq!(
+            detector_noise_report(&view),
+            "4 evidence records, 50% ok, 3 kinds"
+        );
+        // All-ok single-kind view pins both extremes.
+        let mut view = EvidenceView::default();
+        view.items.push(Evidence::bench("t", "u", "b", 5));
+        assert_eq!(
+            detector_noise_report(&view),
+            "1 evidence records, 100% ok, 1 kinds"
+        );
+    }
+
+    #[test]
+    fn detector_noise_report_is_bare_count_for_an_empty_view() {
+        assert_eq!(
+            detector_noise_report(&EvidenceView::default()),
+            "0 evidence records"
+        );
     }
 }

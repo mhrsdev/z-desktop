@@ -366,6 +366,38 @@ pub fn export_schema_json() -> String {
     serde_json::to_string_pretty(&defs).expect("schema defs always serialize")
 }
 
+/// set-012: markdown table of [`schema_defs`] (`| key | kind | min | max |
+/// default |`) for docs embedding. Header row included, one row per def in
+/// schema order; bounds render as plain numbers (all current bounds are
+/// integral) and absent bounds render as an empty cell.
+pub fn export_schema_markdown() -> String {
+    let mut out = String::from("| key | kind | min | max | default |\n");
+    out.push_str("|---|---|---|---|---|\n");
+    for d in schema_defs() {
+        let bound = |b: Option<f64>| b.map(|v| v.to_string()).unwrap_or_default();
+        let default = match d.default {
+            SettingDefault::U64(v) => v.to_string(),
+            SettingDefault::F32(v) => v.to_string(),
+            SettingDefault::Bool(v) => v.to_string(),
+            SettingDefault::String(v) => v.to_string(),
+        };
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n",
+            d.key,
+            match d.kind {
+                DefKind::U64 => "u64",
+                DefKind::F32 => "f32",
+                DefKind::Bool => "bool",
+                DefKind::String => "string",
+            },
+            bound(d.min),
+            bound(d.max),
+            default
+        ));
+    }
+    out
+}
+
 /// set-006: each setting's documented default rendered as its string form
 /// (`"24"`, `"300"`, …), same order as [`schema_defs`]. For UIs and help text.
 pub fn defaults_map() -> Vec<(&'static str, String)> {
@@ -932,5 +964,38 @@ mod settings_tests {
         // Known key: key tokens split on '_' plus the kind name.
         let (_, max_rounds) = index.iter().find(|(k, _)| k == "max_tool_rounds").expect("known key present");
         assert_eq!(max_rounds, &["max", "tool", "rounds", "u64"]);
+    }
+
+    // ---- set-012: markdown schema table -----------------------------------
+
+    #[test]
+    fn export_schema_markdown_has_header_and_every_key_row() {
+        let md = export_schema_markdown();
+        assert!(
+            md.contains("| key | kind | min | max | default |"),
+            "header row present: {md}"
+        );
+        for def in schema_defs() {
+            assert!(md.contains(&format!("| {} |", def.key)), "{} has a row", def.key);
+        }
+        // Spot-check one full row renders bounds and default.
+        let row = md
+            .lines()
+            .find(|l| l.starts_with("| max_tool_rounds "))
+            .expect("max_tool_rounds row");
+        assert_eq!(row.trim(), "| max_tool_rounds | u64 | 1 | 200 | 24 |");
+    }
+
+    #[test]
+    fn export_schema_markdown_rows_have_five_columns() {
+        let md = export_schema_markdown();
+        let mut rows = 0;
+        for line in md.lines() {
+            let inner = line.trim().trim_start_matches('|').trim_end_matches('|');
+            assert_eq!(inner.split('|').count(), 5, "5 columns per row: {line}");
+            rows += 1;
+        }
+        // Header + separator + one row per def.
+        assert_eq!(rows, schema_defs().len() + 2);
     }
 }

@@ -61,6 +61,11 @@ pub enum Command {
     DeleteThread { thread_id: Id },
     /// Deep-copy a thread's messages under `new_id`.
     DuplicateThread { thread_id: Id, new_id: Id },
+    /// core-024 companion: make `thread_id` the UI's active thread. The
+    /// runtime validates existence (a corrupt ghost counts — its file exists)
+    /// and echoes [`Event::ThreadSwitched`]; unknown ids ride
+    /// [`Event::ProviderStatus`] as a rejection.
+    SwitchThread { thread_id: Id },
     /// Request the folded supervision-evidence summary (answered with
     /// [`Event::EvidenceSummary`]). `Some(turn_id)` limits to one turn.
     GetEvidence { turn_id: Option<Id> },
@@ -168,6 +173,9 @@ pub enum Event {
     /// Refreshed snapshot of all threads, most recent first. Emitted both on
     /// request and after every thread mutation so the UI stays consistent.
     ThreadList { threads: Vec<ThreadInfo> },
+    /// core-024 companion: the requested thread exists (or was a corrupt
+    /// ghost); echoes the id so the UI can mirror its active thread.
+    ThreadSwitched { thread_id: Id },
     /// Folded supervision-evidence summary (ui-040), journal order, capped to
     /// the most recent 50 rows. Answered on [`Command::GetEvidence`].
     EvidenceSummary { items: Vec<EvidenceInfo> },
@@ -314,5 +322,22 @@ mod tests {
         assert!(json.contains(r#""type":"verdict_overridden""#), "{json}");
         let back: Event = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, Event::VerdictOverridden { blocked_cleared: true, .. }));
+    }
+
+    // core-024 companion: switch command/event round-trip; snake_case-tagged
+    // like every other variant.
+    #[test]
+    fn switch_thread_round_trips_through_json() {
+        let cmd = Command::SwitchThread { thread_id: "t1".into() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""type":"switch_thread""#), "{json}");
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Command::SwitchThread { thread_id } if thread_id == "t1"));
+
+        let event = Event::ThreadSwitched { thread_id: "t1".into() };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""type":"thread_switched""#), "{json}");
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Event::ThreadSwitched { thread_id } if thread_id == "t1"));
     }
 }

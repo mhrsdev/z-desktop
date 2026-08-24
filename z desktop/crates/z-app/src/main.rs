@@ -139,6 +139,11 @@ impl App {
                 self.view.threads = threads;
                 true
             }
+            // core-024 companion: mirror the runtime-confirmed active thread.
+            Event::ThreadSwitched { thread_id } => {
+                self.view.active_thread_id = Some(thread_id);
+                true
+            }
             Event::EvidenceSummary { items } => {
                 // ui-040: dedupe to one badge per (kind, ok) — a badge answers
                 // "did build/tests pass", not how many runs happened.

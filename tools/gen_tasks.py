@@ -36,7 +36,7 @@ DOMAINS = [
         ("021", "Multi-thread UI wiring (thread list panel)", ["ui-030"], "IMPLEMENTED"),
         ("022", "Thread rename/delete/duplicate commands", ["021"], "IMPLEMENTED"),
         ("023", "Thread delete tombstone in journal", ["022", "jour-001"], "IMPLEMENTED"),
-        ("024", "Active-turn delete rejection", ["022"], "PLANNED"),
+        ("024", "Active-turn delete rejection", ["022"], "IMPLEMENTED"),
         ("025", "Startup auto-open most recent thread", ["021"], "PARTIAL"),
         ("026", "Corrupt-thread skip surfaced in thread list", ["021"], "IMPLEMENTED"),
         ("027", "build_request perf benchmark (1k-msg history)", [], "IMPLEMENTED"),

@@ -61,6 +61,9 @@ pub struct WorkspaceView {
     /// `(kind, ok)` rows mirrored from `EvidenceSummary` events. Empty until
     /// the runtime reports evidence; the view invents nothing.
     pub evidence_badges: Vec<(String, bool)>,
+    /// core-024 companion: the thread the runtime confirmed as active,
+    /// mirrored from `ThreadSwitched` events. None until a switch succeeds.
+    pub active_thread_id: Option<String>,
     /// Called when the user sends the composer text.
     pub on_send: Option<Box<dyn FnMut(String)>>,
     /// Called when the user resolves a pending approval.
@@ -191,6 +194,7 @@ impl WorkspaceView {
             sidebar_items: Vec::new(),
             threads: Vec::new(),
             evidence_badges: Vec::new(),
+            active_thread_id: None,
             on_send: None,
             on_resolve: None,
         }

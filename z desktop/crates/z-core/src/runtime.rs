@@ -128,6 +128,9 @@ struct Shared {
     // journal at startup so overrides survive restarts. Lives here rather
     // than on Runtime because run_turn workers reach Shared by Arc already.
     overridden_turns: Mutex<std::collections::HashSet<Id>>,
+    // core-024: thread ids whose turn worker is currently running. DeleteThread
+    // refuses these so a live turn cannot lose its history mid-flight.
+    active_turns: Mutex<std::collections::HashSet<Id>>,
 }
 
 /// Upper bound on queued steering texts per thread. Beyond this, the oldest
@@ -303,6 +306,7 @@ impl Runtime {
                 settings: Mutex::new(settings),
                 write_grants: Mutex::new(HashMap::new()),
                 overridden_turns,
+                active_turns: Mutex::new(std::collections::HashSet::new()),
             }),
             data_dir,
             threads: Mutex::new(threads),
@@ -360,6 +364,7 @@ impl Runtime {
                 Command::DuplicateThread { thread_id, new_id } => {
                     self.duplicate_thread(thread_id, new_id)
                 }
+                Command::SwitchThread { thread_id } => self.switch_thread(thread_id),
                 // ui-040: fold the journal's evidence for the UI badges.
                 Command::GetEvidence { turn_id } => self.send_evidence(turn_id),
                 // sup-017: user appeals a supervision verdict.
@@ -448,6 +453,10 @@ impl Runtime {
             Command::DuplicateThread { thread_id, new_id } => (
                 Some(thread_id.clone()),
                 json!({ "command": "duplicate_thread", "thread_id": thread_id, "new_id": new_id }),
+            ),
+            Command::SwitchThread { thread_id } => (
+                Some(thread_id.clone()),
+                json!({ "command": "switch_thread", "thread_id": thread_id }),
             ),
             Command::GetEvidence { .. } => (None, json!({ "command": "get_evidence" })),
             Command::AppealVerdict { turn_id, .. } => (
@@ -598,6 +607,10 @@ impl Runtime {
 
         let turn_id = crate::new_id("turn");
         let _ = self.event_tx.send(Event::TurnStarted { thread_id: thread.id.clone(), turn_id: turn_id.clone() });
+        // core-024: mark the thread as having a running turn until the worker
+        // finishes, so DeleteThread during the turn is rejected instead of
+        // yanking history out from under it.
+        self.shared.active_turns.lock().unwrap().insert(thread.id.clone());
         // jour-024: durable marker that this turn began executing. Written by
         // the command loop before the worker spawns, so its position relative
         // to CommandReceived/TurnFinished records is deterministic.
@@ -723,6 +736,15 @@ impl Runtime {
     /// core-026: a [corrupt] ghost is not in memory; deleting it removes the
     /// unreadable file itself, which also drops the ghost from future lists.
     fn delete_thread(&mut self, thread_id: Id) {
+        // core-024: a thread with a running turn keeps its history until the
+        // turn ends; reject instead of deleting under the worker's feet.
+        if self.shared.active_turns.lock().unwrap().contains(&thread_id) {
+            let _ = self.event_tx.send(Event::ProviderStatus {
+                ok: false,
+                message: "cannot delete a thread with a running turn".into(),
+            });
+            return;
+        }
         let known = self.threads.lock().unwrap().remove(&thread_id).is_some();
         if !known && !self.drop_corrupt_ghost(&thread_id) {
             return;
@@ -743,6 +765,29 @@ impl Runtime {
             json!({ "thread_id": thread_id }),
         );
         self.send_thread_list();
+    }
+
+    /// core-024 companion: validate the switch target and echo it. A corrupt
+    /// ghost is a valid target (its file exists); an unknown id is rejected
+    /// via ProviderStatus so the UI never switches to nothing.
+    fn switch_thread(&self, thread_id: Id) {
+        let known = self.threads.lock().unwrap().contains_key(&thread_id);
+        if !known && !self.is_corrupt_ghost(&thread_id) {
+            let _ = self.event_tx.send(Event::ProviderStatus {
+                ok: false,
+                message: format!("cannot switch to unknown thread: {thread_id}"),
+            });
+            return;
+        }
+        let _ = self.event_tx.send(Event::ThreadSwitched { thread_id });
+    }
+
+    /// core-026 read-only check: is `thread_id` a [corrupt] ghost row?
+    fn is_corrupt_ghost(&self, thread_id: &str) -> bool {
+        let fname = format!("{thread_id}.json");
+        self.corrupt_threads
+            .iter()
+            .any(|c| c.split_once(": ").map_or(false, |(f, _)| f == fname))
     }
 
     /// core-026: drop `thread_id`'s entry from the corrupt list (matched by
@@ -876,6 +921,9 @@ fn run_turn(
     let last_verdict =
         std::cell::RefCell::new(None::<z_protocol::SupervisionVerdictInfo>);
     let finish = |ok: bool, error: Option<String>| {
+        // core-024: every exit path funnels through `finish`, so clearing here
+        // un-blocks DeleteThread exactly when the turn is no longer running.
+        shared.active_turns.lock().unwrap().remove(&thread_id);
         let _ = event_tx.send(Event::TurnFinished {
             thread_id: thread_id.clone(),
             turn_id: turn_id.clone(),
@@ -1930,6 +1978,7 @@ mod budget_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let big = "word ".repeat(400); // ~100 tokens per message
         let thread = Thread {
@@ -2082,6 +2131,7 @@ mod capability_gate_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         shared.provider =
             Mutex::new(Some(Arc::new(provider::OpenAiProvider {
@@ -2123,6 +2173,7 @@ mod capability_gate_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let caps = model_caps(&empty);
         assert!(!caps.supports_tools);
@@ -2297,6 +2348,7 @@ mod steering_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         {
             let mut q = shared.steering.lock().unwrap();
@@ -2325,6 +2377,7 @@ mod steering_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
         for i in 0..(STEERING_QUEUE_CAP + 4) {
@@ -2350,6 +2403,7 @@ mod steering_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
         rt.enqueue_message("t".into(), "stale guidance".into());
@@ -2383,6 +2437,7 @@ mod steering_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
 
@@ -2515,6 +2570,7 @@ mod journal_wiring_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -2530,6 +2586,7 @@ mod journal_wiring_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -2867,6 +2924,7 @@ mod settings_wiring_tests {
             ))),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
         assert_eq!(
@@ -2980,6 +3038,7 @@ mod settings_command_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -3187,6 +3246,7 @@ mod doom_loop_retry_tests {
             ))),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _runtime_events) = make_runtime_at(Arc::new(shared), data_dir.clone());
 
@@ -3319,6 +3379,7 @@ mod doom_loop_retry_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _runtime_events) = make_runtime_at(Arc::new(shared), data_dir.clone());
 
@@ -3446,6 +3507,7 @@ mod supervision_verdict_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
         assert!(rt.journal.is_some(), "sup-007 gate requires a live journal");
@@ -3521,6 +3583,7 @@ mod supervision_verdict_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
 
@@ -3585,6 +3648,7 @@ mod supervision_verdict_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
 
@@ -3675,6 +3739,7 @@ mod appeal_override_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -3828,6 +3893,7 @@ mod write_grant_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -4461,6 +4527,7 @@ mod thread_management_tests {
                     settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
                     write_grants: Mutex::new(HashMap::new()),
                     overridden_turns: Mutex::new(std::collections::HashSet::new()),
+                    active_turns: Mutex::new(std::collections::HashSet::new()),
                 }),
                 data_dir: dir,
                 threads: Mutex::new(seed.into_iter().map(|t| (t.id.clone(), t)).collect()),
@@ -4862,6 +4929,7 @@ mod sup_e2e_tests {
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
             overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -5023,5 +5091,183 @@ mod sup_e2e_tests {
         );
         drop(warns);
         let _ = std::fs::remove_dir_all(&data_dir);
+    }
+}
+
+#[cfg(test)]
+mod active_turn_switch_tests {
+    //! core-024: DeleteThread is rejected while a turn runs on the thread and
+    //! allowed once it ends; SwitchThread echoes existing targets (including
+    //! corrupt ghosts) and rejects unknown ones.
+
+    use super::*;
+    use super::steering_tests::{make_runtime_at, ScriptedProvider};
+
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn unique_data_dir(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("zdt-c024-{tag}-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("threads")).expect("create temp data dir");
+        dir
+    }
+
+    fn scripted() -> Shared {
+        Shared {
+            provider: Mutex::new(Some(Arc::new(ScriptedProvider {
+                outcomes: std::sync::Mutex::new(vec![provider::StreamOutcome {
+                    text: "ok".into(),
+                    tool_calls: Vec::new(),
+                }]),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }) as Arc<dyn provider::Provider>)),
+            provider_label: Mutex::new("scripted".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
+            active_turns: Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+
+    /// Drain events until `pred` matches; fails on a 10s deadline.
+    fn run_until(event_rx: &std::sync::mpsc::Receiver<Event>, pred: impl Fn(&Event) -> bool) -> Event {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            assert!(std::time::Instant::now() < deadline, "expected event never arrived");
+            match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(e) if pred(&e) => return e,
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+    }
+
+    #[test]
+    fn switch_to_existing_thread_succeeds() {
+        let dir = unique_data_dir("switch-ok");
+        let (rt, cmd_tx, event_rx) = make_runtime_at(Arc::new(scripted()), dir.clone());
+        let server = std::thread::spawn(move || rt.serve());
+        cmd_tx.send((1, Command::SendMessage { thread_id: "t-a".into(), text: "hi".into() }))
+            .expect("send message");
+        run_until(&event_rx, |e| matches!(e, Event::TurnFinished { ok: true, .. }));
+
+        cmd_tx.send((2, Command::SwitchThread { thread_id: "t-a".into() })).expect("send switch");
+        let switched = run_until(&event_rx, |e| matches!(e, Event::ThreadSwitched { .. }));
+        assert!(
+            matches!(&switched, Event::ThreadSwitched { thread_id } if thread_id == "t-a"),
+            "echo must carry the requested id: {switched:?}"
+        );
+        drop(cmd_tx);
+        server.join().expect("serve must not panic");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn switch_to_unknown_thread_rejects_with_error_status() {
+        let dir = unique_data_dir("switch-bad");
+        let (rt, cmd_tx, event_rx) = make_runtime_at(Arc::new(scripted()), dir.clone());
+        let server = std::thread::spawn(move || rt.serve());
+
+        cmd_tx.send((1, Command::SwitchThread { thread_id: "ghost".into() })).expect("send switch");
+        let status = run_until(&event_rx, |e| matches!(e, Event::ProviderStatus { .. }));
+        match &status {
+            Event::ProviderStatus { ok: false, message } => {
+                assert!(message.contains("unknown thread"), "{message}");
+            }
+            other => panic!("expected rejection status, got {other:?}"),
+        }
+        drop(cmd_tx);
+        server.join().expect("serve must not panic");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_during_active_turn_is_rejected_and_keeps_history() {
+        let dir = unique_data_dir("delete-active");
+        let (rt, cmd_tx, event_rx) = make_runtime_at(
+            Arc::new({
+                let mut shared = scripted();
+                shared.active_turns.lock().unwrap().insert("busy".into());
+                shared
+            }),
+            dir.clone(),
+        );
+        rt.threads.lock().unwrap().insert(
+            "busy".into(),
+            Thread {
+                id: "busy".into(),
+                title: "t".into(),
+                messages: vec![user_msg("history that must survive")],
+                updated_ms: 1,
+            },
+        );
+        // Persist so we can prove the file survives the rejected delete.
+        let snapshot = rt.threads.lock().unwrap()["busy"].clone();
+        save_thread(&dir, &snapshot);
+        let server = std::thread::spawn(move || rt.serve());
+
+        cmd_tx.send((1, Command::DeleteThread { thread_id: "busy".into() })).expect("send delete");
+        let status =
+            run_until(&event_rx, |e| matches!(e, Event::ProviderStatus { ok: false, .. }));
+        match &status {
+            Event::ProviderStatus { message, .. } => {
+                assert_eq!(message, "cannot delete a thread with a running turn");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        cmd_tx.send((2, Command::ListThreads)).expect("send list");
+        let listed = run_until(&event_rx, |e| matches!(e, Event::ThreadList { .. }));
+        match listed {
+            Event::ThreadList { threads } => {
+                assert!(
+                    threads.iter().any(|t| t.id == "busy" && t.message_count == 1),
+                    "rejected delete must keep the thread: {threads:?}"
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        drop(cmd_tx);
+        server.join().expect("serve must not panic");
+        assert!(dir.join("threads").join("busy.json").exists(), "file kept on disk");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_after_turn_finishes_succeeds() {
+        let dir = unique_data_dir("delete-after");
+        let (rt, cmd_tx, event_rx) = make_runtime_at(Arc::new(scripted()), dir.clone());
+        let server = std::thread::spawn(move || rt.serve());
+        cmd_tx.send((1, Command::SendMessage { thread_id: "gone".into(), text: "hi".into() }))
+            .expect("send message");
+        run_until(&event_rx, |e| matches!(e, Event::TurnFinished { ok: true, .. }));
+
+        // finish() clears active_turns BEFORE TurnFinished is emitted, so the
+        // guard must be open by now — no sleep needed.
+        cmd_tx.send((2, Command::DeleteThread { thread_id: "gone".into() })).expect("send delete");
+        let listed = run_until(&event_rx, |e| matches!(e, Event::ThreadList { .. }));
+        match listed {
+            Event::ThreadList { threads } => {
+                assert!(
+                    !threads.iter().any(|t| t.id == "gone"),
+                    "thread must be gone after its turn finished: {threads:?}"
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        drop(cmd_tx);
+        server.join().expect("serve must not panic");
+        assert!(!dir.join("threads").join("gone.json").exists(), "file removed from disk");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn user_msg(text: &str) -> StoredMessage {
+        StoredMessage { role: z_protocol::Role::User, text: text.into(), tool_calls: Vec::new() }
     }
 }

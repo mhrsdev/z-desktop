@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 107 |
+| IMPLEMENTED | 108 |
 | PARTIAL | 2 |
-| PLANNED | 614 |
+| PLANNED | 613 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -87,7 +87,7 @@
 ### [IMPLEMENTED] core-023 — Thread delete tombstone in journal
 - depends: core-022, jour-001
 
-### [PLANNED] core-024 — Active-turn delete rejection
+### [IMPLEMENTED] core-024 — Active-turn delete rejection
 - depends: core-022
 
 ### [PARTIAL] core-025 — Startup auto-open most recent thread

@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-23
 
+## core-024 + SwitchThread — 2026-08-23 COMPLETE
+
+1. ✅ **core-024**: Shared.active_turns set in start_turn, cleared in
+   run_turn's finish; DeleteThread on an active turn emits the rejection
+   message instead of deleting (tested both paths).
+2. ✅ **SwitchThread**: additive command validates existence and echoes
+   ThreadSwitched; z-app mirrors active_thread_id.
+
+Verification: full workspace suite green — **492 tests, 0 failed**
+(487 → 492). Ledger: 110 IMPLEMENTED.
+
+Next work continues → ui thread selection click-through, sup-021
+benchmark recorder, or core-028 latency benchmark.
+
 ## prov-007 Fallback Chain — 2026-08-23 COMPLETE
 
 1. ✅ **prov-007**: fallback_chain(registry, requested, available) —

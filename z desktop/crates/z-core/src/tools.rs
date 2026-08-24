@@ -206,6 +206,21 @@ pub fn definitions() -> Vec<ToolDef> {
     ]
 }
 
+/// tok-021: per-turn lazy manifest filter. The caller passes the user's
+/// current request as `ctx_hint`; a tool whose name appears in the hint
+/// stays listed, and an empty hint lists every tool. Everything else is
+/// filtered out so irrelevant tool schemas never enter the prompt
+/// (token economy).
+pub fn should_list(tool_name: &str, ctx_hint: &str) -> bool {
+    ctx_hint.is_empty() || ctx_hint.to_lowercase().contains(&tool_name.to_lowercase())
+}
+
+/// tok-021: filter a manifest of tool names against `ctx_hint`,
+/// preserving input order.
+pub fn filter_manifest<'a>(tools: &[&'a str], ctx_hint: &str) -> Vec<&'a str> {
+    tools.iter().copied().filter(|t| should_list(t, ctx_hint)).collect()
+}
+
 /// Resolve `path` against the project root and refuse escapes. Symlinks that
 /// resolve outside the root are rejected too — the check runs after
 /// canonicalisation, not on the raw string.
@@ -1418,5 +1433,41 @@ mod tests {
         // The early entry did not survive the cap churn: it is re-read fresh.
         let again = execute(read_inv(&root, "f0.txt", ""));
         assert_eq!(again.text, "content-0", "{}", again.text);
+    }
+
+    // ---- tok-021: lazy tool manifest filtering ----
+
+    #[test]
+    fn hint_match_lists_tool_and_others_are_filtered() {
+        let hint = "run fs_read on config.toml";
+        assert!(should_list("fs_read", hint));
+        assert!(!should_list("terminal_exec", hint));
+        assert!(!should_list("fs_write", hint));
+    }
+
+    #[test]
+    fn empty_hint_lists_every_tool() {
+        for name in ["fs_read", "terminal_exec", "git_log"] {
+            assert!(should_list(name, ""), "{name}");
+        }
+    }
+
+    #[test]
+    fn filter_manifest_preserves_input_order() {
+        let tools = vec!["terminal_exec", "fs_read", "fs_write"];
+        assert_eq!(filter_manifest(&tools, "use fs_write"), vec!["fs_write"]);
+        // Multiple hits keep their relative order; empty hint keeps all.
+        assert_eq!(
+            filter_manifest(&tools, "fs_read and fs_write"),
+            vec!["fs_read", "fs_write"]
+        );
+        assert_eq!(filter_manifest(&tools, ""), vec!["terminal_exec", "fs_read", "fs_write"]);
+    }
+
+    #[test]
+    fn manifest_match_is_case_insensitive() {
+        let tools = vec!["fs_read"];
+        assert_eq!(filter_manifest(&tools, "please FS_READ it"), vec!["fs_read"]);
+        assert_eq!(filter_manifest(&tools, "FS_SEARCH it"), Vec::<&str>::new());
     }
 }

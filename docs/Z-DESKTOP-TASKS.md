@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 126 |
-| PARTIAL | 3 |
-| PLANNED | 594 |
+| IMPLEMENTED | 128 |
+| PARTIAL | 4 |
+| PLANNED | 591 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -663,7 +663,7 @@
 ### [PLANNED] tok-016 — Cost estimation from user-editable pricing table
 - depends: tok-015
 
-### [PLANNED] tok-017 — cache_hit_rate metric
+### [IMPLEMENTED] tok-017 — cache_hit_rate metric
 - depends: tok-012
 
 ### [RESEARCH] tok-018 — Context delta protocol research
@@ -675,7 +675,7 @@
 ### [IMPLEMENTED] tok-020 — Redundant-read detection (same file twice)
 - depends: tok-003
 
-### [PLANNED] tok-021 — Repo-map cache keyed by input fingerprints
+### [IMPLEMENTED] tok-021 — Repo-map cache keyed by input fingerprints
 - depends: tok-003
 
 ### [PLANNED] tok-022 — Estimator accuracy benchmark suite
@@ -1483,7 +1483,7 @@
 ### [PLANNED] red-001 — Rule coverage review (new provider formats)
 - depends: —
 
-### [PLANNED] red-002 — Central redaction funnel for all sinks
+### [PARTIAL] red-002 — Central redaction funnel for all sinks
 - depends: red-001
 
 ### [PLANNED] red-003 — Log sink integration

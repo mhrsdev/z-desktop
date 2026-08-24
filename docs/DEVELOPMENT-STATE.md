@@ -6,6 +6,23 @@
 
 Last updated: 2026-08-24
 
+## Wave 6 (retries + lazy manifests + symbol table) — 2026-08-24 COMPLETE
+
+1. ✅ **red-002** (retry OK): RedactionReport/RedactionStats counters —
+   per-kind hits, last-hit timestamp, snapshot isolation; funnel wiring
+   deferred (red-002 marked PARTIAL).
+2. ✅ **tok-017** (retry OK): cache_hit_rate + CacheStats.
+3. ✅ **tok-021**: should_list/filter_manifest — grok-build's per-turn
+   manifest filtering adapted sync (token economy).
+4. ✅ **idx-005**: SymbolTable cross-file index — add_file/lookup_name/
+   total over symbol ids.
+
+Verification: full workspace suite green — **587 tests, 0 failed**
+(573 → 587). Ledger: 130 IMPLEMENTED.
+
+Next work continues → prov-010 SSE cap retry, ui-050 usage dashboard, or
+term-006 VT parser research.
+
 ## 8-Agent Wave 5 (inspectors + tokens + schema + ADR-0022) — 2026-08-24 COMPLETE
 
 First 8-sibling fan-out. Landed:

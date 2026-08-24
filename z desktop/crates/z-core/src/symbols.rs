@@ -77,6 +77,38 @@ pub fn extract_with_ids(file_hash: &str, source: &str) -> Vec<(Symbol, String)> 
         .collect()
 }
 
+/// Minimal cross-file symbol index (idx-005): flat (file_hash, Symbol, id)
+/// rows. ponytail: O(n) scan per lookup; index by name only if lookups get hot.
+#[derive(Debug, Default)]
+pub struct SymbolTable {
+    entries: Vec<(String, Symbol, String)>,
+}
+
+impl SymbolTable {
+    /// Extract symbols from one file and append them to the table.
+    pub fn add_file(&mut self, file_hash: &str, source: &str) {
+        self.entries.extend(
+            extract_with_ids(file_hash, source)
+                .into_iter()
+                .map(|(s, id)| (file_hash.to_string(), s, id)),
+        );
+    }
+
+    /// Ids of every symbol named `name`, across all indexed files.
+    pub fn lookup_name(&self, name: &str) -> Vec<&str> {
+        self.entries
+            .iter()
+            .filter(|(_, s, _)| s.name == name)
+            .map(|(_, _, id)| id.as_str())
+            .collect()
+    }
+
+    /// Total number of indexed symbols across all files.
+    pub fn total(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 fn walk(node: tree_sitter::Node, src: &str, out: &mut Vec<Symbol>) {
     use tree_sitter::Node;
     fn kind_of(node: Node) -> Option<SymbolKind> {
@@ -189,6 +221,41 @@ fn helper() {}
         let a = symbol_id("hash", "dup", &SymbolKind::Function, 0);
         let b = symbol_id("hash", "dup", &SymbolKind::Function, 1);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn symbol_table_finds_same_name_across_two_files() {
+        let mut table = SymbolTable::default();
+        table.add_file("hash_a", "fn shared() {}");
+        table.add_file("hash_b", "fn shared() {}");
+        let hits = table.lookup_name("shared");
+        assert_eq!(hits.len(), 2);
+        assert!(hits.contains(&"hash_a:shared:function:0"));
+        assert!(hits.contains(&"hash_b:shared:function:0"));
+    }
+
+    #[test]
+    fn symbol_table_distinct_names_stay_isolated() {
+        let mut table = SymbolTable::default();
+        table.add_file("h1", "fn alpha() {}\nstruct Beta;");
+        table.add_file("h2", "fn gamma() {}");
+        assert!(table.lookup_name("alpha").len() == 1);
+        assert!(table.lookup_name("beta").is_empty(), "lookup is case-sensitive exact match");
+        assert!(table.lookup_name("missing").is_empty());
+        assert_eq!(table.lookup_name("gamma"), vec!["h2:gamma:function:0"]);
+    }
+
+    #[test]
+    fn symbol_table_total_counts_all_symbols() {
+        let mut table = SymbolTable::default();
+        assert_eq!(table.total(), 0);
+        table.add_file("h1", "fn a() {}\nstruct B;\nenum C {}");
+        assert_eq!(table.total(), 3);
+        table.add_file("h2", "trait D {}");
+        assert_eq!(table.total(), 4);
+        // Malformed source degrades to zero added symbols, no panic.
+        table.add_file("h3", "fn {{{ broken !!!");
+        assert_eq!(table.total(), 4);
     }
 
     #[test]

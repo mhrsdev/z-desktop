@@ -93,6 +93,40 @@ pub fn check_budget(estimated: usize, soft_target: usize, hard_limit: usize) -> 
     }
 }
 
+/// Cache hit rate as a fraction of total lookups.
+///
+/// Returns 0.0 when there were no lookups at all (nothing to be a ratio of),
+/// and the result is clamped to [0, 1] so pathological inputs can't leak out
+/// of range.
+pub fn cache_hit_rate(hits: u64, misses: u64) -> f32 {
+    let total = hits.saturating_add(misses);
+    if total == 0 {
+        return 0.0;
+    }
+    (hits as f32 / total as f32).clamp(0.0, 1.0)
+}
+
+/// Running tally of cache hits/misses with an on-demand hit-rate readout.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    pub hits: u64,
+    pub misses: u64,
+}
+
+impl CacheStats {
+    pub fn record_hit(&mut self) {
+        self.hits = self.hits.saturating_add(1);
+    }
+
+    pub fn record_miss(&mut self) {
+        self.misses = self.misses.saturating_add(1);
+    }
+
+    pub fn hit_rate(&self) -> f32 {
+        cache_hit_rate(self.hits, self.misses)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +198,35 @@ mod tests {
         let start = std::time::Instant::now();
         let _ = estimate(&text);
         assert!(start.elapsed().as_millis() < 100, "too slow");
+    }
+
+    #[test]
+    fn cache_hit_rate_zero_total_is_zero() {
+        assert_eq!(cache_hit_rate(0, 0), 0.0);
+    }
+
+    #[test]
+    fn cache_hit_rate_is_ratio_with_tolerance() {
+        // 1 hit out of 3 lookups.
+        let rate = cache_hit_rate(1, 2);
+        assert!((rate - 1.0 / 3.0).abs() < 1e-6, "got {rate}");
+    }
+
+    #[test]
+    fn cache_stats_accumulates_hits_and_misses() {
+        let mut stats = CacheStats::default();
+        assert_eq!(stats, CacheStats { hits: 0, misses: 0 });
+        stats.record_hit();
+        stats.record_hit();
+        stats.record_miss();
+        assert_eq!(stats.hits, 2);
+        assert_eq!(stats.misses, 1);
+        let rate = stats.hit_rate();
+        assert!((rate - 2.0 / 3.0).abs() < 1e-6, "got {rate}");
+    }
+
+    #[test]
+    fn cache_hit_rate_all_hits_is_one() {
+        assert_eq!(cache_hit_rate(5, 0), 1.0);
     }
 }

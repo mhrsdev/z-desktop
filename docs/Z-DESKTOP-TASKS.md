@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 102 |
+| IMPLEMENTED | 103 |
 | PARTIAL | 2 |
-| PLANNED | 619 |
+| PLANNED | 618 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -188,7 +188,7 @@
 ### [IMPLEMENTED] jour-011 — Corrupt tail truncation repair
 - depends: jour-005
 
-### [PLANNED] jour-012 — Deterministic double-replay equality test
+### [IMPLEMENTED] jour-012 — Deterministic double-replay equality test
 - depends: jour-007, jour-008
 
 ### [PLANNED] jour-013 — Background compaction (fold old segments)

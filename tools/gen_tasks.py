@@ -71,7 +71,7 @@ DOMAINS = [
         ("009", "Usage stats reducer", ["006"], "PLANNED"),
         ("010", "Seq gap tolerance + warning", ["005"], "IMPLEMENTED"),
         ("011", "Corrupt tail truncation repair", ["005"], "IMPLEMENTED"),
-        ("012", "Deterministic double-replay equality test", ["007", "008"], "PLANNED"),
+        ("012", "Deterministic double-replay equality test", ["007", "008"], "IMPLEMENTED"),
         ("013", "Background compaction (fold old segments)", ["004"], "PLANNED"),
         ("014", "Compaction snapshot hash verification", ["013"], "PLANNED"),
         ("015", "Journal redaction by construction", ["001", "red-002"], "PLANNED"),

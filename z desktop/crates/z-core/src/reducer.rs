@@ -534,4 +534,104 @@ mod reducer_tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // jour-012 ---------------------------------------------------------------
+    //
+    // Deterministic double-replay equality (ADR-0004): every view fold routes
+    // through fold() -> Journal::replay, so two View::fold calls are two fully
+    // separate replays of the same bytes; their folded views must be deeply
+    // equal, regardless of fold/construction order or prior process state.
+
+    #[test]
+    fn jour012_double_replay_threads_view_deeply_equal() {
+        let dir = temp_dir("jour012-threads");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"text": "title here"}),
+            );
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::TurnFinished, Some("t1"), json!({}));
+            append(&mut j, JournalKind::TurnStarted, Some("t2"), json!({}));
+        }
+        let path = dir.join("main.jsonl");
+        let first = ThreadsView::fold(&path).expect("replay 1");
+        let second = ThreadsView::fold(&path).expect("replay 2");
+        assert_eq!(first, second, "two separate replays must fold identically");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn jour012_double_replay_tasks_view_deeply_equal() {
+        let dir = temp_dir("jour012-tasks");
+        TaskStore::create(&dir, "task-a").expect("create");
+        TaskStore::transition(&dir, "task-a", TaskStatus::Running).expect("running");
+        TaskStore::create(&dir, "task-b").expect("create b");
+        TaskStore::transition(&dir, "task-a", TaskStatus::Done).expect("done");
+        TaskStore::transition(&dir, "task-b", TaskStatus::Failed).expect("failed");
+
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+        let first = TasksView::fold(&path).expect("replay 1");
+        let second = TasksView::fold(&path).expect("replay 2");
+        assert_eq!(first, second, "two separate replays must fold identically");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn jour012_double_replay_tasks_view_with_deps_deeply_equal() {
+        let dir = temp_dir("jour012-deps");
+        TaskStore::create_with_deps(&dir, "b", &["a".into(), "ghost".into()]).expect("create b");
+        TaskStore::create(&dir, "a").expect("create a");
+        TaskStore::transition(&dir, "a", TaskStatus::Done).expect("a done");
+        TaskStore::transition(&dir, "b", TaskStatus::Pending).expect("b pending keeps deps");
+
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+        let first = TasksView::fold(&path).expect("replay 1");
+        let second = TasksView::fold(&path).expect("replay 2");
+        assert_eq!(first, second, "two separate replays must fold identically");
+        assert_eq!(second.tasks["b"].deps, vec!["a", "ghost"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn jour012_reverse_construction_order_yields_identical_views() {
+        let dir = temp_dir("jour012-reverse");
+        {
+            let mut j = Journal::open(&dir, TASKS_SEGMENT).expect("open");
+            append(
+                &mut j,
+                JournalKind::TaskStateChanged,
+                None,
+                json!({"id": "x", "status": "pending", "deps": ["y"]}),
+            );
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"text": "hello"}),
+            );
+            append(
+                &mut j,
+                JournalKind::TaskStateChanged,
+                None,
+                json!({"id": "y", "status": "done"}),
+            );
+        }
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+        // Forward construction order ...
+        let tasks_forward = TasksView::fold(&path).expect("tasks fold");
+        let threads_forward = ThreadsView::fold(&path).expect("threads fold");
+        // ... then the exact reverse order, fresh folds over the same events.
+        let threads_reverse = ThreadsView::fold(&path).expect("threads fold");
+        let tasks_reverse = TasksView::fold(&path).expect("tasks fold");
+
+        assert_eq!(tasks_forward, tasks_reverse);
+        assert_eq!(threads_forward, threads_reverse);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

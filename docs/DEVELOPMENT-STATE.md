@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-23
 
+## jour-012 Deterministic Replay Proof — 2026-08-23 COMPLETE
+
+1. ✅ **jour-012**: double-replay equality tests for ThreadsView,
+   TasksView, and the deps variant; plus reverse-construction-order fold
+   proving identical views (ADR-0004 deterministic replay posture).
+
+Verification: full workspace suite green — **474 tests, 0 failed**
+(470 → 474). Ledger: 105 IMPLEMENTED.
+
+Next work continues → sup-016 requirement-skew detector, prov-007
+fallback chain, or jour-009 usage-stats reducer.
+
 ## core-027 Perf Benchmark — 2026-08-23 COMPLETE
 
 1. ✅ **core-027**: 1k-message perf test — build_request median of 5 runs

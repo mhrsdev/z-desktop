@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 145 |
+| IMPLEMENTED | 146 |
 | PARTIAL | 6 |
-| PLANNED | 572 |
+| PLANNED | 571 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -203,7 +203,7 @@
 ### [IMPLEMENTED] jour-016 — journal_lag_records metric
 - depends: jour-002
 
-### [PLANNED] jour-017 — Fixture journal-seq generation script
+### [IMPLEMENTED] jour-017 — Fixture journal-seq generation script
 - depends: —
 
 ### [RESEARCH] jour-018 — SQLite-vs-JSONL decision ADR with load data

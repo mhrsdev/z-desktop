@@ -499,6 +499,26 @@ pub fn bench_history(view: &EvidenceView, name: &str) -> Vec<BenchPoint> {
         .collect()
 }
 
+/// All Regression-kind records as `(test_name, passed)` parsed from summaries
+/// ("regression: {name} PASS|FAIL"), in journal replay order. Records with
+/// unparseable summaries are skipped (measurement, not verdict).
+pub fn regression_history(view: &EvidenceView) -> Vec<(String, bool)> {
+    const PREFIX: &str = "regression: ";
+    view.items
+        .iter()
+        .filter(|e| e.kind == EvidenceKind::Regression)
+        .filter_map(|e| {
+            let (name, verdict) = e.summary.strip_prefix(PREFIX)?.rsplit_once(' ')?;
+            let passed = match verdict {
+                "PASS" => true,
+                "FAIL" => false,
+                _ => return None,
+            };
+            Some((name.to_string(), passed))
+        })
+        .collect()
+}
+
 /// Percent change from first to last point (negative = faster). `None` when
 /// fewer than two points, or the baseline is zero (division undefined).
 pub fn trend(points: &[BenchPoint]) -> Option<f32> {
@@ -1143,6 +1163,68 @@ mod evidence_tests {
         let points = bench_history(&view, "x");
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].value_ms, 42);
+    }
+
+    // sup-021 ext: regression history over a folded view.
+
+    fn regression_with_summary(id: &str, summary: &str) -> Evidence {
+        let mut e = Evidence::regression("t", "u1", "seed", true);
+        e.id = id.to_string();
+        e.summary = summary.to_string();
+        e
+    }
+
+    #[test]
+    fn regression_history_parses_seeded_records_in_order() {
+        let mut view = EvidenceView::default();
+        view.items.push(Evidence::tests("t", "u2", 3, 0, "cargo test"));
+        view.items.extend([
+            Evidence::regression("t", "u1", "a_test", true),
+            Evidence::regression("t", "u1", "b_test", false),
+            Evidence::regression("t", "u3", "c_test", true),
+        ]);
+        // Same "regression:" text but wrong KIND must never appear.
+        view.items.push(Evidence::diff(
+            "t",
+            "u4",
+            true,
+            "regression: ghost FAIL",
+        ));
+        assert_eq!(
+            regression_history(&view),
+            vec![
+                ("a_test".to_string(), true),
+                ("b_test".to_string(), false),
+                ("c_test".to_string(), true),
+            ]
+        );
+        // Empty view -> empty history.
+        assert!(regression_history(&EvidenceView::default()).is_empty());
+    }
+
+    #[test]
+    fn regression_history_skips_malformed_summaries() {
+        let mut view = EvidenceView::default();
+        let malformed = [
+            "ev-a-1|no prefix at all",
+            "ev-b-2|regression: ",
+            "ev-c-3|regression: no_space_verdict",
+            "ev-d-4|regression: x MAYBE",
+            "ev-e-5|regression: x pass",
+        ];
+        for row in malformed {
+            let (id, summary) = row.split_once('|').expect("test row shape");
+            view.items.push(regression_with_summary(id, summary));
+        }
+        // One good record proves skipping is selective, not total.
+        view.items.push(regression_with_summary(
+            "ev-f-6",
+            "regression: good_test FAIL",
+        ));
+        assert_eq!(
+            regression_history(&view),
+            vec![("good_test".to_string(), false)]
+        );
     }
 
     #[test]

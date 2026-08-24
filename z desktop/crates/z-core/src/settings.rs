@@ -293,6 +293,35 @@ pub fn search_defs(query: &str) -> Vec<&'static SettingDef> {
         .collect()
 }
 
+/// set-008 (ext): pretty JSON export of [`schema_defs`] — one object per
+/// setting with `key`, `kind`, `min`, `max`, `default`. Single source for
+/// external UIs/validators; shape mirrors [`SettingDef`] exactly.
+pub fn export_schema_json() -> String {
+    let defs: Vec<serde_json::Value> = schema_defs()
+        .iter()
+        .map(|d| {
+            json!({
+                "key": d.key,
+                "kind": match d.kind {
+                    DefKind::U64 => "u64",
+                    DefKind::F32 => "f32",
+                    DefKind::Bool => "bool",
+                    DefKind::String => "string",
+                },
+                "min": d.min,
+                "max": d.max,
+                "default": match d.default {
+                    SettingDefault::U64(v) => json!(v),
+                    SettingDefault::F32(v) => json!(v),
+                    SettingDefault::Bool(v) => json!(v),
+                    SettingDefault::String(v) => json!(v),
+                },
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&defs).expect("schema defs always serialize")
+}
+
 /// set-006: each setting's documented default rendered as its string form
 /// (`"24"`, `"300"`, …), same order as [`schema_defs`]. For UIs and help text.
 pub fn defaults_map() -> Vec<(&'static str, String)> {
@@ -757,5 +786,51 @@ mod settings_tests {
         let err = remap_check("nope", 5.0).unwrap_err();
         assert!(err.contains("unknown setting"), "got: {err}");
         assert!(err.contains("nope"), "error names the bad key: {err}");
+    }
+
+    // ---- set-008 (ext): schema JSON export -------------------------------
+
+    #[test]
+    fn export_schema_json_is_valid_json_array() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&export_schema_json()).expect("export parses as JSON");
+        let arr = doc.as_array().expect("export is a JSON array");
+        assert_eq!(arr.len(), schema_defs().len(), "one object per def");
+        for obj in arr {
+            for field in ["key", "kind", "min", "max", "default"] {
+                assert!(obj.get(field).is_some(), "each entry has \"{field}\"");
+            }
+        }
+    }
+
+    #[test]
+    fn export_schema_json_contains_every_key_and_bounds() {
+        let raw = export_schema_json();
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        for def in schema_defs() {
+            let entry = doc
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|o| o["key"] == def.key)
+                .unwrap_or_else(|| panic!("{} missing from export", def.key));
+            assert_eq!(entry["kind"], "u64", "{} kind rendered", def.key);
+            assert_eq!(entry["min"], json!(def.min), "{} min", def.key);
+            assert_eq!(entry["max"], json!(def.max), "{} max", def.key);
+        }
+    }
+
+    #[test]
+    fn export_schema_json_renders_documented_defaults() {
+        let doc: serde_json::Value = serde_json::from_str(&export_schema_json()).unwrap();
+        let expected = [
+            ("max_tool_rounds", 24),
+            ("approval_timeout_secs", 300),
+            ("doom_threshold", 3),
+        ];
+        for (key, default) in expected {
+            let entry = doc.as_array().unwrap().iter().find(|o| o["key"] == key).unwrap();
+            assert_eq!(entry["default"], json!(default), "{key} default rendered");
+        }
     }
 }

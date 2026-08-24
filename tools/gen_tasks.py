@@ -76,7 +76,7 @@ DOMAINS = [
         ("014", "Compaction snapshot hash verification", ["013"], "PLANNED"),
         ("015", "Journal redaction by construction", ["001", "red-002"], "PLANNED"),
         ("016", "journal_lag_records metric", ["002"], "IMPLEMENTED"),
-        ("017", "Fixture journal-seq generation script", [], "PLANNED"),
+        ("017", "Fixture journal-seq generation script", [], "IMPLEMENTED"),
         ("018", "SQLite-vs-JSONL decision ADR with load data", ["027"], "RESEARCH"),
         ("019", "Journal perf benchmark (10k records append+replay)", ["003"], "PLANNED"),
         ("020", "Crash-injection test: kill during append", ["002"], "PLANNED"),

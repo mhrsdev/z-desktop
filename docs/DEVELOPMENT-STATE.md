@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-24
 
+## Wave 17 (jour-017 + set-008 export + regression history) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-017**: write_fixture deterministic journal generator
+   (byte-identical for identical params).
+2. ✅ **set-008 ext**: export_schema_json pretty schema dump.
+3. ✅ **sup-021 ext**: regression_history parser over Regression-kind
+   evidence.
+
+Verification: full workspace suite green — **678 tests, 0 failed**
+(670 → 678). Ledger: 148 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 16 (ctx-006 + set-009 + sup-019) — 2026-08-24 COMPLETE
 
 1. ✅ **ctx-006**: oldest_message_age_ms freshness helper over the

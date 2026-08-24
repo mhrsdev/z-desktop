@@ -155,6 +155,71 @@ pub fn redacted_summary(path: &Path) -> Result<usize, String> {
         .count())
 }
 
+/// jour-017: generates a synthetic, deterministic journal segment at `path`.
+///
+/// Each of `turns` turns contributes one `turn_started` record followed by
+/// `msgs_per_turn` `message_persisted` records, with sequential seqs from 1
+/// and one thread per turn. Unlike [`Journal::append`] the timestamps are
+/// fixed constants, not wall-clock, so two calls with the same parameters
+/// produce byte-identical files. Returns the total record count
+/// (`turns * (1 + msgs_per_turn)`).
+pub fn write_fixture(path: &Path, turns: usize, msgs_per_turn: usize) -> Result<usize, String> {
+    // Fixed timestamp base: determinism beats realism for fixtures.
+    const FIXTURE_BASE_TS_MS: u128 = 1_770_000_000_000;
+
+    // Serializes exactly like Journal::append does (same `Record` shape).
+    fn line(
+        seq: u64,
+        kind: JournalKind,
+        thread: String,
+        payload: Value,
+        out: &mut String,
+    ) -> Result<(), String> {
+        let mut s = serde_json::to_string(&Record {
+            seq,
+            ts_ms: FIXTURE_BASE_TS_MS + u128::from(seq),
+            kind,
+            thread_id: Some(thread),
+            payload,
+        })
+        .map_err(|e| format!("reducer: fixture record {seq}: {e}"))?;
+        s.push('\n');
+        out.push_str(&s);
+        Ok(())
+    }
+
+    let mut body = String::new();
+    let mut seq: u64 = 0;
+    for turn in 1..=turns {
+        let thread = format!("fixture-turn-{turn}");
+        seq += 1;
+        line(
+            seq,
+            JournalKind::TurnStarted,
+            thread.clone(),
+            serde_json::json!({}),
+            &mut body,
+        )?;
+        for msg in 1..=msgs_per_turn {
+            seq += 1;
+            line(
+                seq,
+                JournalKind::MessagePersisted,
+                thread.clone(),
+                serde_json::json!({ "text": format!("fixture message {turn}-{msg}") }),
+                &mut body,
+            )?;
+        }
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("reducer: cannot create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(path, body)
+        .map_err(|e| format!("reducer: cannot write fixture {}: {e}", path.display()))?;
+    Ok(seq as usize)
+}
+
 /// UTC calendar day ("YYYY-MM-DD") of a wall-clock millisecond timestamp.
 /// Days-since-epoch → civil date (Howard Hinnant's algorithm); no chrono dep.
 fn utc_day(ts_ms: u128) -> String {
@@ -1128,6 +1193,79 @@ pub(crate) mod reducer_tests {
             oldest_message_age_ms(&dir.join("main.jsonl"), MSG_OLD_MS + 5_000).expect("fold"),
             Some(5_000)
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-017 ---------------------------------------------------------------
+
+    #[test]
+    fn write_fixture_record_count_shape_and_replay() {
+        let dir = temp_dir("fixture-count");
+        let path = dir.join("fixture.jsonl");
+        let count = write_fixture(&path, 3, 4).expect("write");
+        assert_eq!(count, 3 * (1 + 4));
+
+        // Replay succeeds; seqs are sequential from 1.
+        let records = Journal::replay(&path).expect("replay");
+        assert_eq!(records.len(), count);
+        assert_eq!(
+            records.iter().map(|r| r.seq).collect::<Vec<_>>(),
+            (1..=count as u64).collect::<Vec<_>>()
+        );
+        // Shape: each turn is TurnStarted followed by exactly msgs_per_turn
+        // MessagePersisted records sharing one thread id.
+        assert_eq!(records[0].kind, JournalKind::TurnStarted);
+        assert_eq!(records[1].kind, JournalKind::MessagePersisted);
+        for turn in 0..3 {
+            let start = turn * (1 + 4);
+            assert_eq!(records[start].kind, JournalKind::TurnStarted);
+            assert_eq!(
+                records[start].thread_id,
+                Some(format!("fixture-turn-{}", turn + 1))
+            );
+            for msg in 1..=4 {
+                let record = &records[start + msg];
+                assert_eq!(record.kind, JournalKind::MessagePersisted);
+                assert_eq!(record.thread_id, records[start].thread_id);
+                assert_eq!(
+                    record.payload["text"],
+                    format!("fixture message {}-{msg}", turn + 1)
+                );
+            }
+        }
+        // Views fold it like any real segment.
+        let usage = usage_fold(&path).expect("usage fold");
+        assert_eq!(usage.turns_started, 3);
+        assert_eq!(usage.messages_persisted, 12);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_fixture_same_params_are_byte_identical() {
+        let dir = temp_dir("fixture-determinism");
+        let a = dir.join("a.jsonl");
+        let b = dir.join("b.jsonl");
+        write_fixture(&a, 2, 3).expect("write a");
+        write_fixture(&b, 2, 3).expect("write b");
+        assert_eq!(
+            std::fs::read(&a).expect("read a"),
+            std::fs::read(&b).expect("read b")
+        );
+        // Different params produce different bytes.
+        write_fixture(&a, 2, 4).expect("write a2");
+        assert_ne!(
+            std::fs::read(&a).expect("read a2"),
+            std::fs::read(&b).expect("read b")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_fixture_zero_turns_is_empty_and_replays() {
+        let dir = temp_dir("fixture-empty");
+        let path = dir.join("empty-fixture.jsonl");
+        assert_eq!(write_fixture(&path, 0, 5).expect("write"), 0);
+        assert_eq!(Journal::replay(&path).expect("replay").len(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

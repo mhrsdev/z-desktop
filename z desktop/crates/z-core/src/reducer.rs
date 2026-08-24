@@ -290,6 +290,9 @@ pub struct TasksView {
     /// the folded state and what the journal last said (they only diverge
     /// when a caller mutates `tasks` out-of-band, e.g. from a snapshot).
     pub(crate) last_event_status: HashMap<String, TaskStatus>,
+    /// orch-019: per-task status history `(status, ts_ms)` in journal order,
+    /// appended during fold so [`task_timeline`] can report it.
+    timeline: HashMap<String, Vec<(String, Option<u128>)>>,
 }
 
 /// Segment name used by [`TaskStore`] and orch-024 recovery (`runtime.rs`).
@@ -352,6 +355,14 @@ impl TasksView {
                             }
                         }
                         view.last_event_status.insert(id.to_string(), status);
+                        let status_str = serde_json::to_value(&status)
+                            .ok()
+                            .and_then(|v| v.as_str().map(str::to_string))
+                            .unwrap_or_default();
+                        view.timeline
+                            .entry(id.to_string())
+                            .or_default()
+                            .push((status_str, Some(record.ts_ms)));
                     }
                 }
                 Err(e) => bad_payload = Some(e),
@@ -429,6 +440,13 @@ pub fn task_state_json(view: &TasksView) -> String {
         .map(|(id, status)| serde_json::json!({ "id": id, "status": status }))
         .collect();
     serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".into())
+}
+
+/// orch-019: one task's ordered status history as `(status, ts_ms)` pairs in
+/// journal order. Unknown ids return an empty vec. Status strings use the
+/// journal's snake_case spelling.
+pub fn task_timeline(view: &TasksView, id: &str) -> Vec<(String, Option<u128>)> {
+    view.timeline.get(id).cloned().unwrap_or_default()
 }
 
 /// jour-022: idempotent re-sync batch — one shape-only draft per task whose
@@ -702,6 +720,39 @@ pub(crate) mod reducer_tests {
         let view = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl"))).expect("fold");
         assert_eq!(view.tasks["a"].status, TaskStatus::Running);
         assert_eq!(view.tasks["b"].status, TaskStatus::Failed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_timeline_returns_ordered_status_history() {
+        let dir = temp_dir("timeline");
+        TaskStore::create(&dir, "t").expect("create");
+        TaskStore::transition(&dir, "t", TaskStatus::Running).expect("running");
+        TaskStore::transition(&dir, "t", TaskStatus::Done).expect("done");
+
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+        let view = TasksView::fold(&path).expect("fold");
+        // Expected timestamps come from the same records the fold saw.
+        let stamps: Vec<Option<u128>> = Journal::replay(&path)
+            .expect("replay")
+            .iter()
+            .map(|r| Some(r.ts_ms))
+            .collect();
+        assert_eq!(
+            task_timeline(&view, "t"),
+            vec![
+                ("pending".to_string(), stamps[0]),
+                ("running".to_string(), stamps[1]),
+                ("done".to_string(), stamps[2]),
+            ]
+        );
+
+        // Interleaved tasks stay independent; unknown ids are empty.
+        TaskStore::transition(&dir, "other", TaskStatus::Failed).expect("failed");
+        let view = TasksView::fold(&path).expect("refold");
+        assert_eq!(task_timeline(&view, "other").len(), 1);
+        assert!(task_timeline(&view, "unknown").is_empty());
+        assert!(task_timeline(&TasksView::default(), "any").is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

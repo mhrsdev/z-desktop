@@ -46,6 +46,16 @@ pub fn estimate(text: &str) -> usize {
     base.saturating_sub(correction) + cjk_tokens
 }
 
+/// Estimate tokens for each text in a batch.
+pub fn estimate_batch(texts: &[String]) -> Vec<usize> {
+    texts.iter().map(|t| estimate(t)).collect()
+}
+
+/// Sum of [`estimate_batch`] — total tokens for a batch of texts.
+pub fn batch_total(texts: &[String]) -> usize {
+    texts.iter().map(|t| estimate(t)).sum()
+}
+
 /// A chat message as the providers see it.
 #[derive(Debug, Clone)]
 pub struct Message<'a> {
@@ -344,6 +354,29 @@ mod tests {
         assert!(report.contains("62.5"), "got {report}");
         assert!(report.contains("75.0"), "got {report}");
         assert!(report.contains("worst: hello world"), "got {report}");
+    }
+
+    #[test]
+    fn estimate_batch_maps_estimate_over_texts() {
+        let texts = vec![
+            "hello world".to_string(), // estimate = 3
+            "hi".to_string(),
+            String::new(),
+        ];
+        assert_eq!(estimate_batch(&texts), vec![3, 1, 0]);
+    }
+
+    #[test]
+    fn estimate_batch_empty_is_empty() {
+        assert_eq!(estimate_batch(&[]), Vec::<usize>::new());
+        assert_eq!(batch_total(&[]), 0);
+    }
+
+    #[test]
+    fn batch_total_equals_sum_of_estimate_batch() {
+        let texts = vec!["hello world".to_string(), "你好世界".to_string()];
+        assert_eq!(batch_total(&texts), estimate_batch(&texts).iter().sum::<usize>());
+        assert_eq!(batch_total(&texts), 3 + 4); // known estimates
     }
 
     #[test]

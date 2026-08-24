@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-24
 
+## Wave 28 (orch-019 + ctx-019 + tok-024) — 2026-08-24 COMPLETE
+
+1. ✅ **orch-019**: task_timeline per-task status history (TasksView
+   retains event log during fold).
+2. ✅ **ctx-019**: items_by_layer ordered counts.
+3. ✅ **tok-024**: estimate_batch/batch_total conveniences.
+
+Verification: full workspace suite green — **751 tests, 0 failed**
+(744 → 751). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 27 (jour-021 + mem-023 + idx-022) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-021**: checkpoint_draft — snapshot RecordDraft with

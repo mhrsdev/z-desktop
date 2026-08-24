@@ -436,6 +436,24 @@ pub fn budget_report(items: &[ContextItem], budget_tokens: usize) -> String {
     )
 }
 
+/// ctx-019: per-layer item counts in enum order (prefix, session, turn,
+/// ephemeral), zero-count layers skipped. Pure inspector helper.
+pub fn items_by_layer(items: &[ContextItem]) -> Vec<(Layer, usize)> {
+    let mut counts = [0usize; 4];
+    for i in items {
+        counts[i.layer as usize] += 1;
+    }
+    [
+        (Layer::Prefix, counts[0]),
+        (Layer::Session, counts[1]),
+        (Layer::Turn, counts[2]),
+        (Layer::Ephemeral, counts[3]),
+    ]
+    .into_iter()
+    .filter(|&(_, n)| n > 0)
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1058,5 +1076,41 @@ mod tests {
             budget_report(&[item(Layer::Turn, "t", 5)], 0),
             "context 5/0 tokens (999%), 1 items"
         );
+    }
+
+    // ctx-019
+    #[test]
+    fn items_by_layer_seeded_mix_counts_in_enum_order() {
+        let items = vec![
+            item(Layer::Turn, "t1", 1),
+            item(Layer::Prefix, "sys", 1),
+            item(Layer::Ephemeral, "e1", 1),
+            item(Layer::Session, "s1", 1),
+            item(Layer::Turn, "t2", 1),
+            item(Layer::Ephemeral, "e2", 1),
+        ];
+        assert_eq!(
+            items_by_layer(&items),
+            vec![
+                (Layer::Prefix, 1),
+                (Layer::Session, 1),
+                (Layer::Turn, 2),
+                (Layer::Ephemeral, 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn items_by_layer_empty_input_is_empty() {
+        assert!(items_by_layer(&[]).is_empty());
+    }
+
+    #[test]
+    fn items_by_layer_single_layer_yields_one_row() {
+        let items = vec![
+            item(Layer::Ephemeral, "e", 1),
+            item(Layer::Ephemeral, "f", 1),
+        ];
+        assert_eq!(items_by_layer(&items), vec![(Layer::Ephemeral, 2)]);
     }
 }

@@ -299,6 +299,28 @@ pub fn detect_fake_completion(
         && scan_markers(final_text, &MARKERS)
 }
 
+/// sup-013: one item of a caller-supplied completion checklist — how many
+/// evidence records of `kind` the task demanded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChecklistExpectation {
+    pub kind: EvidenceKind,
+    pub count: usize,
+}
+
+/// sup-013 premature-stop detector: fires when ANY checklist expectation's
+/// same-kind evidence count falls short (e.g. expected 1 test run, zero
+/// found) — the turn stopped before covering its checklist. Coverage check
+/// against an explicit checklist only; claims are not consulted.
+pub fn detect_premature_stop(
+    _claims: &[ClaimSpan],
+    evidence: &[Evidence],
+    expectations: &[ChecklistExpectation],
+) -> bool {
+    expectations
+        .iter()
+        .any(|exp| evidence.iter().filter(|e| e.kind == exp.kind).count() < exp.count)
+}
+
 /// Best-effort append of one evidence record. Journal failures are warned
 /// and dropped (same policy as every other lifecycle append).
 pub fn record(journal: &Mutex<Journal>, e: &Evidence) {
@@ -647,6 +669,44 @@ mod evidence_tests {
         assert!(!detect_fake_completion(&claims, &[], "undone business abounds"));
         // Clean text, no claims -> quiet.
         assert!(!detect_fake_completion(&[], &[], "All done."));
+    }
+
+    #[test]
+    fn premature_stop_fires_only_on_checklist_shortfall() {
+        let claims = vec![ClaimSpan {
+            text: "tests pass".into(),
+            kind: EvidenceKind::Tests,
+        }];
+        let evidence = vec![
+            Evidence::tests("t", "u", 5, 0, "cargo test"),
+            Evidence::build("t", "u", Some(0), "cargo build"),
+        ];
+        // Every expectation met -> quiet (claims irrelevant by design).
+        assert!(!detect_premature_stop(
+            &claims,
+            &evidence,
+            &[
+                ChecklistExpectation { kind: EvidenceKind::Tests, count: 1 },
+                ChecklistExpectation { kind: EvidenceKind::Build, count: 1 },
+            ]
+        ));
+        // Shortfall: expected a test run, none recorded -> fires.
+        assert!(detect_premature_stop(
+            &claims,
+            &[],
+            &[ChecklistExpectation { kind: EvidenceKind::Tests, count: 1 }]
+        ));
+        // Kinds are independent: met Tests does not cover missing Bench.
+        assert!(detect_premature_stop(
+            &claims,
+            &evidence,
+            &[
+                ChecklistExpectation { kind: EvidenceKind::Tests, count: 1 },
+                ChecklistExpectation { kind: EvidenceKind::Bench, count: 2 },
+            ]
+        ));
+        // Empty checklist = nothing demanded -> never fires.
+        assert!(!detect_premature_stop(&claims, &[], &[]));
     }
 
     #[test]

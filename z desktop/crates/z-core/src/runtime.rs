@@ -1081,6 +1081,11 @@ fn run_turn(
                             &turn_evidence,
                             &outcome.text,
                         );
+                        // sup-013 TODO (orch-001): once task checklists exist,
+                        // feed them to
+                        // crate::evidence::detect_premature_stop(&claims,
+                        // &turn_evidence, &expectations) here alongside the
+                        // other observability detectors.
                         let mut fired: Vec<&str> = Vec::new();
                         if unexecuted_tests {
                             fired.push("unexecuted-tests");

@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## sup-013 Premature-Stop Detector — 2026-08-23 COMPLETE
+
+1. ✅ **sup-013**: ChecklistExpectation + detect_premature_stop — pure
+   coverage check of same-kind evidence counts against an explicit
+   checklist; TODO marks the run_turn slot for orch-001 checklist
+   integration.
+
+Verification: full workspace suite green — **458 tests, 0 failed**
+(457 → 458). Ledger: 99 IMPLEMENTED.
+
+Next work continues → prov-006 decision logging, mem-013 recency decay,
+or core-027 build_request perf benchmark.
+
 ## set-004 Live Settings — 2026-08-23 COMPLETE
 
 1. ✅ **set-004**: additive Command::SetSetting → Event::SettingChanged;

@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 96 |
+| IMPLEMENTED | 97 |
 | PARTIAL | 2 |
-| PLANNED | 625 |
+| PLANNED | 624 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -574,7 +574,7 @@
 ### [IMPLEMENTED] sup-012 — fake-completion detector
 - depends: sup-006
 
-### [PLANNED] sup-013 — premature-stop detector (checklist coverage)
+### [IMPLEMENTED] sup-013 — premature-stop detector (checklist coverage)
 - depends: sup-006
 
 ### [IMPLEMENTED] sup-014 — placeholder-code detector (diff scan)

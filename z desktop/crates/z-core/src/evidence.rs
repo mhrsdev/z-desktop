@@ -242,6 +242,48 @@ pub fn detect_ignored_failures(evidence: &[Evidence], final_text: &str) -> bool 
         && !extract_claims(final_text).is_empty()
 }
 
+/// sup-014: placeholder-code detector (diff scan). Fires when written content
+/// contains ANY classic placeholder marker — deliberately any-single-marker
+/// (documented tradeoff: legitimate TODO comments will trip it; ADR-0016 says
+/// these are tripwires, not verdicts, and callers decide severity).
+pub fn detect_placeholder_code(new_text: &str) -> bool {
+    const MARKERS: [&str; 7] = [
+        "todo: implement",
+        "fixme",
+        "not implemented",
+        "unimplemented!",
+        "todo!()",
+        "<insert",
+        "...rest of implementation",
+    ];
+    scan_markers(new_text, &MARKERS)
+}
+
+/// sup-015: mock-in-prod detector. Fires on mock/stub/dummy identifier
+/// markers in written content. Approximation by design: no `#[cfg(test)]`
+/// scoping, just the identifier list — same warn-first policy as above.
+pub fn detect_mock_in_prod(new_text: &str) -> bool {
+    const MARKERS: [&str; 4] = ["mock_response", "dummy_data", "stub_impl", "fake_"];
+    scan_markers(new_text, &MARKERS)
+}
+
+/// Case-insensitive any-marker match at identifier boundaries: neither side
+/// may glue to `[A-Za-z0-9_]`, except prefix-style markers (trailing `_`,
+/// e.g. `fake_`) which only need a clean left edge (`fake_data` yes,
+/// `refake_data` no).
+fn scan_markers(text: &str, markers: &[&str]) -> bool {
+    let lowered = text.to_lowercase();
+    markers.iter().any(|m| {
+        lowered.match_indices(m).any(|(i, found)| {
+            let glued = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+            let left_ok = !glued(lowered[..i].chars().next_back());
+            let right_ok =
+                found.ends_with('_') || !glued(lowered[i + found.len()..].chars().next());
+            left_ok && right_ok
+        })
+    })
+}
+
 /// Best-effort append of one evidence record. Journal failures are warned
 /// and dropped (same policy as every other lifecycle append).
 pub fn record(journal: &Mutex<Journal>, e: &Evidence) {
@@ -522,6 +564,46 @@ mod evidence_tests {
         ));
         // Clean turn (no evidence, no phrase) -> no false positive.
         assert!(!detect_ignored_failures(&[], ""));
+    }
+
+    #[test]
+    fn placeholder_detector_fires_on_each_marker_class() {
+        assert!(detect_placeholder_code("// TODO: implement pagination"));
+        assert!(detect_placeholder_code("// FIXME: racy under load"));
+        assert!(detect_placeholder_code("return not implemented yet"));
+        assert!(detect_placeholder_code("fn f() { unimplemented!() }"));
+        assert!(detect_placeholder_code("let x = todo!();"));
+        assert!(detect_placeholder_code("<insert your API key here>"));
+        assert!(detect_placeholder_code("// ...rest of implementation"));
+    }
+
+    #[test]
+    fn clean_content_does_not_trip_placeholder_detector() {
+        assert!(!detect_placeholder_code("fn main() { println!(\"hi\"); }"));
+        assert!(!detect_placeholder_code(""), "empty write");
+        assert!(
+            !detect_placeholder_code("todo app readme"),
+            "plain 'todo' prose is not a marker"
+        );
+    }
+
+    #[test]
+    fn mock_detector_fires_on_identifier_markers_at_boundaries() {
+        assert!(detect_mock_in_prod("let r = mock_response();"));
+        assert!(detect_mock_in_prod("const D: u8 = dummy_data;"));
+        assert!(detect_mock_in_prod("fn stub_impl() {}"));
+        assert!(detect_mock_in_prod("fn fake_user() {}"), "fake_ prefix");
+        // Boundary rules keep prose and glued identifiers quiet.
+        assert!(
+            !detect_mock_in_prod("// a mock comment"),
+            "bare 'mock' is not a marker"
+        );
+        assert!(
+            !detect_mock_in_prod("counterfeit_fake_thing"),
+            "glued left edge"
+        );
+        assert!(!detect_mock_in_prod("fn real_response() {}"));
+        assert!(!detect_mock_in_prod(""));
     }
 
     #[test]

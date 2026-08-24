@@ -1175,6 +1175,43 @@ fn run_turn(
             if let (Some(evidence), Some(journal)) = (evidence, journal.as_deref()) {
                 crate::evidence::record(journal, &evidence);
             }
+            // sup-014/015: placeholder/mock detectors over successful
+            // write-class calls — observability warnings only, they never
+            // gate the tool result.
+            if output.ok && matches!(call.name.as_str(), "fs_write" | "edit_patch") {
+                if let Ok(args) =
+                    serde_json::from_str::<serde_json::Value>(&call.arguments_json)
+                {
+                    let path = args
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    let written = match args.get("content").and_then(serde_json::Value::as_str)
+                    {
+                        Some(c) => Some(c.to_string()),
+                        None => args
+                            .get("blocks")
+                            .and_then(serde_json::Value::as_array)
+                            .map(|blocks| {
+                                blocks
+                                    .iter()
+                                    .filter_map(|b| {
+                                        b.get("new").and_then(serde_json::Value::as_str)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            }),
+                    };
+                    if let Some(written) = written {
+                        if crate::evidence::detect_placeholder_code(&written) {
+                            log::warn!("sup-014 placeholder-code marker written to {path}");
+                        }
+                        if crate::evidence::detect_mock_in_prod(&written) {
+                            log::warn!("sup-015 mock-in-prod marker written to {path}");
+                        }
+                    }
+                }
+            }
             // Full output goes back to the model as the tool result.
             thread.messages.push(StoredMessage {
                 role: z_protocol::Role::User,

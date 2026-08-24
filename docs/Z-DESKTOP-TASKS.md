@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 85 |
+| IMPLEMENTED | 87 |
 | PARTIAL | 2 |
-| PLANNED | 636 |
+| PLANNED | 634 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -577,10 +577,10 @@
 ### [PLANNED] sup-013 — premature-stop detector (checklist coverage)
 - depends: sup-006
 
-### [PLANNED] sup-014 — placeholder-code detector (diff scan)
+### [IMPLEMENTED] sup-014 — placeholder-code detector (diff scan)
 - depends: sup-004
 
-### [PLANNED] sup-015 — mock-in-prod detector
+### [IMPLEMENTED] sup-015 — mock-in-prod detector
 - depends: sup-004
 
 ### [PLANNED] sup-016 — requirement-skew detector

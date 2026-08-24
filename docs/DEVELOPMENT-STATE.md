@@ -6,6 +6,22 @@
 
 Last updated: 2026-08-23
 
+## sup-014/015 Write Detectors — 2026-08-23 COMPLETE
+
+1. ✅ **sup-014**: detect_placeholder_code — 7 marker classes (todo:
+   implement, fixme, not implemented, unimplemented!(), todo!(), <insert,
+   ...rest of), any-single-marker policy documented.
+2. ✅ **sup-015**: detect_mock_in_prod — identifier markers
+   mock_response/dummy_data/stub_impl/fake_ with word-boundary awareness.
+3. Capture hook runs both on successful fs_write/edit_patch content,
+   warn-only, naming detector + path.
+
+Verification: full workspace suite green — **441 tests, 0 failed**
+(438 → 441). Ledger: 89 IMPLEMENTED.
+
+Next work continues → sup-012 fake-completion detector, sup-017 appeal
+flow, or jour-010 seq-gap UI.
+
 ## core-023 Delete Tombstones — 2026-08-23 COMPLETE
 
 1. ✅ **core-023**: additive JournalKind::ThreadDeleted; delete_thread

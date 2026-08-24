@@ -445,6 +445,18 @@ pub fn settings_summary(current: &Settings) -> String {
     )
 }
 
+/// set-016: one-line health readout — [`settings_summary`] + validation
+/// status from [`validate_all`]: `"{summary} | {n} validation errors"`
+/// (`"0 validation errors"` when everything is in bounds). Both halves reuse
+/// their single sources, so this cannot drift from the schema.
+pub fn settings_health_line(current: &Settings) -> String {
+    format!(
+        "{} | {} validation errors",
+        settings_summary(current),
+        validate_all(current).len()
+    )
+}
+
 /// Validate a numeric value against the schema bounds for `key`. The unknown-
 /// key path never silently ignores: an unrecognized key is rejected with an
 /// "unknown setting \\"key\\"" message so hand-edited typos surface instead of
@@ -1138,5 +1150,37 @@ mod settings_tests {
         s.approval_timeout_secs = 60;
         let out = settings_summary(&s);
         assert_eq!(out, "3 settings, 1 changed from default");
+    }
+
+    // ---- set-016: health line ----------------------------------------------
+
+    #[test]
+    fn settings_health_line_defaults_report_zero_errors() {
+        let line = settings_health_line(&Settings::default());
+        assert_eq!(
+            line,
+            format!(
+                "{} | 0 validation errors",
+                settings_summary(&Settings::default())
+            )
+        );
+        assert!(line.ends_with(" | 0 validation errors"), "{line}");
+        assert!(line.starts_with("3 settings"), "{line}");
+    }
+
+    #[test]
+    fn settings_health_line_counts_broken_fields() {
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 3601;
+        assert_eq!(
+            settings_health_line(&s),
+            "3 settings, 1 changed from default | 1 validation errors"
+        );
+        // Two broken fields => count tracks validate_all.
+        s.doom_threshold = 11;
+        assert_eq!(
+            settings_health_line(&s),
+            "3 settings, 2 changed from default | 2 validation errors"
+        );
     }
 }

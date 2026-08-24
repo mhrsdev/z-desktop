@@ -474,6 +474,16 @@ pub fn context_export_json(items: &[ContextItem]) -> String {
     serde_json::to_string_pretty(items).unwrap_or_default()
 }
 
+/// ctx-022: one-line combined health report for the inspector —
+/// [`budget_report`] and [`stale_report`] joined with " | ". Pure.
+pub fn context_health_line(items: &[ContextItem], budget_tokens: usize, now_ms: u128) -> String {
+    format!(
+        "{} | {}",
+        budget_report(items, budget_tokens),
+        stale_report(items, now_ms)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1189,5 +1199,24 @@ mod tests {
     #[test]
     fn context_export_json_empty_is_empty_array() {
         assert_eq!(context_export_json(&[]), "[]");
+    }
+
+    // ctx-022
+    #[test]
+    fn context_health_line_seeded_combines_both_halves() {
+        let mut items = vec![item(Layer::Prefix, "sys", 10), item(Layer::Session, "hi", 2)];
+        items[1].stale = true;
+        assert_eq!(
+            context_health_line(&items, 20, 0),
+            "context 12/20 tokens (60%), 2 items | 2 items, 1 stale (50%)"
+        );
+    }
+
+    #[test]
+    fn context_health_line_empty_is_zeros_line() {
+        assert_eq!(
+            context_health_line(&[], 100, 0),
+            "context 0/100 tokens (0%), 0 items | 0 items, 0 stale (0%)"
+        );
     }
 }

@@ -195,6 +195,16 @@ pub fn seq_health(path: &Path) -> Result<String, String> {
     ))
 }
 
+/// jour-025: combined journal health line — [`seq_health`] and
+/// [`journal_size_report`] joined with " | ".
+pub fn journal_health_line(path: &Path) -> Result<String, String> {
+    Ok(format!(
+        "{} | {}",
+        seq_health(path)?,
+        journal_size_report(path)?
+    ))
+}
+
 /// jour-017: generates a synthetic, deterministic journal segment at `path`.
 ///
 /// Each of `turns` turns contributes one `turn_started` record followed by
@@ -1805,6 +1815,29 @@ pub(crate) mod reducer_tests {
             seq_health(&path).expect("report"),
             "3 records, 2 gaps, last_seq 5"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_health_line_seeded_contains_both_halves() {
+        let dir = temp_dir("jour-025");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        let line = journal_health_line(&dir.join("main.jsonl")).expect("line");
+        let halves: Vec<&str> = line.split(" | ").collect();
+        assert_eq!(halves.len(), 2);
+        assert_eq!(halves[0], "2 records, 0 gaps, last_seq 2");
+        assert!(halves[1].starts_with("2 records, ") && halves[1].contains(" bytes ("));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_health_line_missing_file_is_err() {
+        let dir = temp_dir("jour-025-missing");
+        assert!(journal_health_line(&dir.join("nope.jsonl")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

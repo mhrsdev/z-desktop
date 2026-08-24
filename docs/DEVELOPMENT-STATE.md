@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-24
 
+## Wave 33 (jour-025 + ctx-022 + set-016) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-025**: journal_health_line — seq_health | size combined.
+2. ✅ **ctx-022**: context_health_line — budget | stale combined.
+3. ✅ **set-016**: settings_health_line — summary | validation combined.
+
+These are the StatusPanel data sources — UI wiring next phase.
+
+Verification: full workspace suite green — **782 tests, 0 failed**
+(776 → 782). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 32 (orch-020 + ctx-021 + set-015) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-020**: tasks_export_json — id/status/timeline rows.

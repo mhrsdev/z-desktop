@@ -287,7 +287,7 @@ DOMAINS = [
     ]),
     ("prov", "Providers & Router", [
         ("001", "Retry/backoff policy module", ["core-016"], "PLANNED"),
-        ("002", "Provider health check probe", [], "PLANNED"),
+        ("002", "Provider health check probe", [], "IMPLEMENTED"),
         ("003", "Connection reuse tuning benchmarks", [], "PLANNED"),
         ("004", "Model capability registry", [], "IMPLEMENTED"),
         ("005", "Router policy DSL parser", ["004"], "PLANNED"),

@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-24
 
+## Wave 12 (sup-023 verify + prov-002 + edit-005 backup) — 2026-08-24 COMPLETE
+
+1. ✅ **sup-023**: verified EvidenceRecorded wiring complete; added
+   evidence_for_turn(view, turn_id) filtered helper.
+2. ✅ **prov-002**: HealthProbe types + probe_verdict latency bands
+   (fast/normal/slow); network probing stays runtime-side.
+3. ✅ **edit-005 hardening**: write_with_backup — rolling .bak before
+   overwrite, skip-identical semantics preserved.
+
+Verification: full workspace suite green — **639 tests, 0 failed**
+(633 → 639). Ledger: 140 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 11 (set-007 + tok-022 + term-017) — 2026-08-24 COMPLETE
 
 1. ✅ **set-007**: SETTINGS_VERSION + migrate() — passthrough/upgrade/

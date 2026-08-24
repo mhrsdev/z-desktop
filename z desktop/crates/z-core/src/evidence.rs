@@ -450,6 +450,11 @@ impl EvidenceView {
     }
 }
 
+/// All evidence produced during `turn_id`, in journal replay order.
+pub fn evidence_for_turn<'a>(view: &'a EvidenceView, turn_id: &str) -> Vec<&'a Evidence> {
+    view.items.iter().filter(|e| e.turn_id == turn_id).collect()
+}
+
 // ---------------------------------------------------------------------------
 // sup-021 extension: bench history + trend analysis over a folded view.
 // ---------------------------------------------------------------------------
@@ -592,6 +597,22 @@ mod evidence_tests {
             EvidenceView::fold(&dir.join("runtime.jsonl")).expect_err("bad payload must fail loud");
         assert!(err.contains("bad evidence payload"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn evidence_for_turn_filters_by_turn_in_replay_order() {
+        let mut view = EvidenceView::default();
+        let a = Evidence::build("t", "u1", Some(0), "make");
+        let b = Evidence::tests("t", "u2", 3, 0, "cargo test");
+        let c = Evidence::diff("t", "u1", true, "wrote x");
+        view.items.extend([a.clone(), b, c.clone()]);
+        let u1 = evidence_for_turn(&view, "u1");
+        assert_eq!(u1.len(), 2);
+        assert!(u1.iter().all(|e| e.turn_id == "u1"));
+        assert_eq!(u1[0].id, a.id);
+        assert_eq!(u1[1].id, c.id);
+        // Unknown turn -> empty, not an error.
+        assert!(evidence_for_turn(&view, "missing").is_empty());
     }
 
     #[test]

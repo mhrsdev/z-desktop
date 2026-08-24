@@ -87,6 +87,34 @@ pub fn write_if_changed(path: &Path, contents: &[u8]) -> Result<bool, String> {
     }
 }
 
+/// Like [`write_if_changed`] but keeps a single rolling `.bak` of the previous
+/// contents (edit-005). Before overwriting an existing, differing file, the old
+/// bytes are copied to `<name>.<ext>.bak` (or `<name>.bak` when extensionless);
+/// each change overwrites the prior backup. A missing target is written plain
+/// with no backup; identical contents still skip without refreshing the backup.
+pub fn write_with_backup(path: &Path, contents: &[u8]) -> Result<bool, String> {
+    let backup = match path.extension() {
+        Some(ext) => {
+            let mut e = ext.to_os_string();
+            e.push(".bak");
+            path.with_extension(e)
+        }
+        None => {
+            let mut p = path.as_os_str().to_os_string();
+            p.push(".bak");
+            std::path::PathBuf::from(p)
+        }
+    };
+    match std::fs::read(path) {
+        Ok(existing) if existing == contents => Ok(false),
+        Ok(_) => {
+            std::fs::copy(path, &backup).map_err(|e| format!("backup write failed: {e}"))?;
+            atomic_write(path, contents).map(|()| true)
+        }
+        Err(_) => atomic_write(path, contents).map(|()| true),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +256,60 @@ mod tests {
         assert_eq!(write_if_changed(&target, b"").unwrap(), false);
         assert!(std::fs::read(&target).unwrap().is_empty());
         assert_eq!(mtime_secs(&target), before);
+    }
+
+    #[test]
+    fn backup_created_on_change_and_holds_previous_content() {
+        let dir = temp_dir("wb-change");
+        let target = dir.join("cfg.toml");
+        std::fs::write(&target, b"v1").unwrap();
+        let bak = dir.join("cfg.toml.bak");
+
+        assert!(!bak.exists());
+        assert_eq!(write_with_backup(&target, b"v2").unwrap(), true);
+        assert_eq!(std::fs::read(&target).unwrap(), b"v2");
+        assert_eq!(
+            std::fs::read(&bak).unwrap(),
+            b"v1",
+            ".bak must hold previous content"
+        );
+
+        // Rolling: a second change refreshes the single .bak.
+        assert_eq!(write_with_backup(&target, b"v3").unwrap(), true);
+        assert_eq!(std::fs::read(&bak).unwrap(), b"v2");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn backup_identical_content_skips_without_refreshing_backup() {
+        let dir = temp_dir("wb-same");
+        let target = dir.join("same.txt");
+        let bak = dir.join("same.txt.bak");
+        std::fs::write(&target, b"older").unwrap();
+        // Change once: bak now holds "older", target holds "current".
+        assert_eq!(write_with_backup(&target, b"current").unwrap(), true);
+        assert_eq!(std::fs::read(&bak).unwrap(), b"older");
+
+        // Identical-content call must skip without refreshing the backup.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let before = mtime_secs(&bak);
+
+        assert_eq!(write_with_backup(&target, b"current").unwrap(), false);
+        assert_eq!(std::fs::read(&target).unwrap(), b"current");
+        assert_eq!(std::fs::read(&bak).unwrap(), b"older");
+        assert_eq!(mtime_secs(&bak), before, "skip must not refresh the backup");
+    }
+
+    #[test]
+    fn backup_first_write_makes_no_bak() {
+        let dir = temp_dir("wb-first");
+        let target = dir.join("fresh.txt");
+
+        assert_eq!(write_with_backup(&target, b"created").unwrap(), true);
+        assert_eq!(std::fs::read(&target).unwrap(), b"created");
+        assert!(
+            !dir.join("fresh.txt.bak").exists(),
+            "missing target must not produce a backup"
+        );
     }
 }

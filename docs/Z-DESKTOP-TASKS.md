@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 137 |
+| IMPLEMENTED | 138 |
 | PARTIAL | 5 |
-| PLANNED | 581 |
+| PLANNED | 580 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -804,7 +804,7 @@
 ### [PLANNED] prov-001 — Retry/backoff policy module
 - depends: core-016
 
-### [PLANNED] prov-002 — Provider health check probe
+### [IMPLEMENTED] prov-002 — Provider health check probe
 - depends: —
 
 ### [PLANNED] prov-003 — Connection reuse tuning benchmarks

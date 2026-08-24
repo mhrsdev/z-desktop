@@ -161,6 +161,28 @@ pub fn fallback_chain_filtered(
     fallback_chain(registry, requested_model, &kept)
 }
 
+/// prov-002: result of one provider health probe. Pure data — the runtime
+/// performs the actual network probing and fills this in; nothing here does IO.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HealthProbe {
+    pub model: String,
+    pub ok: bool,
+    pub latency_ms: u64,
+    pub checked_at_ms: u128,
+}
+
+/// prov-002: latency bucket for a successful probe. "fast" <500ms,
+/// "normal" <2000ms, otherwise "slow".
+pub fn probe_verdict(latency_ms: u64) -> &'static str {
+    if latency_ms < 500 {
+        "fast"
+    } else if latency_ms < 2_000 {
+        "normal"
+    } else {
+        "slow"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +337,28 @@ mod tests {
         let avail = vec!["plain-chat".to_string(), "llama-3-8b".to_string()];
         let req = HardRequirement { min_context: 500_000, needs_tools: true };
         assert!(fallback_chain_filtered(&r, "gpt-4o", &avail, &req).is_empty());
+    }
+
+    #[test]
+    fn probe_verdict_thresholds() {
+        assert_eq!(probe_verdict(0), "fast");
+        assert_eq!(probe_verdict(499), "fast");
+        assert_eq!(probe_verdict(500), "normal");
+        assert_eq!(probe_verdict(1_999), "normal");
+        assert_eq!(probe_verdict(2_000), "slow");
+        assert_eq!(probe_verdict(u64::MAX), "slow");
+    }
+
+    #[test]
+    fn health_probe_construction() {
+        let p = HealthProbe {
+            model: "gpt-4o".into(),
+            ok: true,
+            latency_ms: 320,
+            checked_at_ms: 1_724_500_000_000,
+        };
+        assert_eq!(p.model, "gpt-4o");
+        assert!(p.ok);
+        assert_eq!(probe_verdict(p.latency_ms), "fast");
     }
 }

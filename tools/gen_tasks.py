@@ -777,7 +777,7 @@ DOMAINS = [
         ("021", "Component library: tooltip/badge/empty/skeleton/toast", ["020"], "PLANNED"),
         ("022", "Component library: splitter", ["020"], "PLANNED"),
         ("030", "Sidebar panel scaffold", ["020"], "IMPLEMENTED"),
-        ("040", "Evidence badge components", ["020", "sup-018"], "PLANNED"),
+        ("040", "Evidence badge components", ["020", "sup-018"], "IMPLEMENTED"),
         ("050", "Usage dashboard panel", ["020", "tok-015"], "PLANNED"),
         ("060", "Memory inspector panel", ["020", "mem-012"], "PLANNED"),
         ("070", "Context inspector panel", ["020", "ctx-008"], "PLANNED"),

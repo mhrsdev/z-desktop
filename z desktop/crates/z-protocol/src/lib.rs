@@ -61,6 +61,9 @@ pub enum Command {
     DeleteThread { thread_id: Id },
     /// Deep-copy a thread's messages under `new_id`.
     DuplicateThread { thread_id: Id, new_id: Id },
+    /// Request the folded supervision-evidence summary (answered with
+    /// [`Event::EvidenceSummary`]). `Some(turn_id)` limits to one turn.
+    GetEvidence { turn_id: Option<Id> },
 }
 
 /// One row of a thread listing (core-021): cheap projection, never carries
@@ -105,6 +108,17 @@ pub struct SupervisionVerdictInfo {
     pub reason: Option<String>,
 }
 
+/// One folded evidence row for the UI badge strip (ui-040). A projection of
+/// z-core's journal evidence — never the full records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceInfo {
+    pub id: Id,
+    /// snake_case evidence kind ("build", "tests", …).
+    pub kind: String,
+    pub ok: bool,
+    pub summary: String,
+}
+
 /// An event from the Agent Runtime to the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -147,6 +161,9 @@ pub enum Event {
     /// Refreshed snapshot of all threads, most recent first. Emitted both on
     /// request and after every thread mutation so the UI stays consistent.
     ThreadList { threads: Vec<ThreadInfo> },
+    /// Folded supervision-evidence summary (ui-040), journal order, capped to
+    /// the most recent 50 rows. Answered on [`Command::GetEvidence`].
+    EvidenceSummary { items: Vec<EvidenceInfo> },
 }
 
 #[cfg(test)]
@@ -233,5 +250,33 @@ mod tests {
         let legacy = r#"{"type":"turn_finished","thread_id":"t1","turn_id":"u3","ok":true,"error":null}"#;
         let back: Event = serde_json::from_str(legacy).unwrap();
         assert!(matches!(back, Event::TurnFinished { verdict: None, .. }));
+    }
+
+    // ui-040: GetEvidence/EvidenceSummary round-trip; kind stays a plain
+    // snake_case string so the UI never needs the z-core type.
+    #[test]
+    fn get_evidence_round_trips_through_json() {
+        let command = Command::GetEvidence { turn_id: Some("u1".into()) };
+        let back: Command =
+            serde_json::from_str(&serde_json::to_string(&command).unwrap()).unwrap();
+        assert!(matches!(back, Command::GetEvidence { turn_id: Some(t) } if t == "u1"));
+
+        let event = Event::EvidenceSummary {
+            items: vec![EvidenceInfo {
+                id: "ev-1".into(),
+                kind: "tests".into(),
+                ok: false,
+                summary: "3 failed".into(),
+            }],
+        };
+        let back: Event = serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap();
+        match back {
+            Event::EvidenceSummary { items } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].kind, "tests");
+                assert!(!items[0].ok);
+            }
+            other => panic!("wrong event: {other:?}"),
+        }
     }
 }

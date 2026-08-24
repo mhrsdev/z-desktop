@@ -321,6 +321,8 @@ impl Runtime {
                 Command::DuplicateThread { thread_id, new_id } => {
                     self.duplicate_thread(thread_id, new_id)
                 }
+                // ui-040: fold the journal's evidence for the UI badges.
+                Command::GetEvidence { turn_id } => self.send_evidence(turn_id),
             }
         }
         log::info!("command channel closed; runtime stopping");
@@ -384,6 +386,7 @@ impl Runtime {
                 Some(thread_id.clone()),
                 json!({ "command": "duplicate_thread", "thread_id": thread_id, "new_id": new_id }),
             ),
+            Command::GetEvidence { .. } => (None, json!({ "command": "get_evidence" })),
             Command::ConfigureProvider { config } => (
                 None,
                 // Shape only: which configuration fields were sent, never
@@ -561,6 +564,48 @@ impl Runtime {
         }
         infos.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
         let _ = self.event_tx.send(Event::ThreadList { threads: infos });
+    }
+
+    /// ui-040: fold the journal's evidence records into an EvidenceSummary for
+    /// the UI badge strip. Read-only and best-effort: an unreadable journal is
+    /// an empty summary, never an error — same degrade philosophy as every
+    /// other journal consumer.
+    fn send_evidence(&self, turn_id: Option<Id>) {
+        let mut items = match crate::evidence::EvidenceView::fold(
+            &self.data_dir.join("journal").join("runtime.jsonl"),
+        ) {
+            Ok(view) => view
+                .items
+                .into_iter()
+                .filter(|e| match &turn_id {
+                    Some(t) => e.turn_id == *t,
+                    None => true,
+                })
+                .map(|e| z_protocol::EvidenceInfo {
+                    id: e.id,
+                    kind: match e.kind {
+                        crate::evidence::EvidenceKind::Build => "build",
+                        crate::evidence::EvidenceKind::Tests => "tests",
+                        crate::evidence::EvidenceKind::Diff => "diff",
+                        crate::evidence::EvidenceKind::Bench => "bench",
+                        crate::evidence::EvidenceKind::Regression => "regression",
+                    }
+                    .to_string(),
+                    ok: e.ok,
+                    summary: e.summary,
+                })
+                .collect::<Vec<_>>(),
+            Err(err) => {
+                log::warn!("evidence: fold failed for GetEvidence: {err}");
+                Vec::new()
+            }
+        };
+        // Cap to the most recent 50 rows so a long-lived journal can't grow
+        // this event without bound.
+        if items.len() > 50 {
+            items.drain(..items.len() - 50);
+        }
+        let _ = self.event_tx.send(Event::EvidenceSummary { items });
     }
 
     /// core-022: set a thread title (clamped to 120 chars), persist it.
@@ -3701,6 +3746,56 @@ mod thread_management_tests {
         let dir = temp_data_dir("clean");
         let (rt, _cmd_tx, _event_rx) = runtime_with(dir.clone(), Vec::new());
         assert!(rt.corrupt_threads().is_empty(), "clean dir has no corrupt files");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ui-040: GetEvidence folds the journal's evidence records; the optional
+    // turn_id narrows to one turn.
+    #[test]
+    fn get_evidence_folds_journal_evidence_into_a_summary() {
+        let dir = temp_data_dir("evidence");
+        // Seed the journal through the same record path the execution
+        // chokepoint uses, so the fold sees real EvidenceRecorded records.
+        let journal = std::sync::Mutex::new(
+            Journal::open(&dir.join("journal"), "runtime").expect("open journal"),
+        );
+        crate::evidence::record(
+            &journal,
+            &crate::evidence::Evidence::tests("t", "u1", 5, 0, "cargo test"),
+        );
+        crate::evidence::record(
+            &journal,
+            &crate::evidence::Evidence::build("t", "u2", Some(1), "make"),
+        );
+        drop(journal); // release the handle before the runtime reopens it
+
+        let (rt, cmd_tx, event_rx) = runtime_with(dir.clone(), Vec::new());
+        let events = run(
+            rt,
+            cmd_tx,
+            event_rx,
+            vec![
+                (1, Command::GetEvidence { turn_id: None }),
+                (2, Command::GetEvidence { turn_id: Some("u2".into()) }),
+            ],
+        );
+
+        let mut summaries = events.iter().filter_map(|e| match e {
+            Event::EvidenceSummary { items } => Some(items.as_slice()),
+            _ => None,
+        });
+        let all = summaries.next().expect("an EvidenceSummary for GetEvidence");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].kind, "tests");
+        assert!(all[0].ok);
+        assert_eq!(all[0].summary, "cargo test");
+        assert_eq!(all[1].kind, "build");
+        assert!(!all[1].ok);
+
+        let filtered =
+            summaries.next().expect("one summary per GetEvidence command");
+        assert_eq!(filtered.len(), 1, "turn_id filter keeps only that turn");
+        assert_eq!(filtered[0].kind, "build");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

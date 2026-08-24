@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 82 |
+| IMPLEMENTED | 83 |
 | PARTIAL | 2 |
-| PLANNED | 639 |
+| PLANNED | 638 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -2122,7 +2122,7 @@
 ### [IMPLEMENTED] ui-030 — Sidebar panel scaffold
 - depends: ui-020
 
-### [PLANNED] ui-040 — Evidence badge components
+### [IMPLEMENTED] ui-040 — Evidence badge components
 - depends: ui-020, sup-018
 
 ### [PLANNED] ui-050 — Usage dashboard panel

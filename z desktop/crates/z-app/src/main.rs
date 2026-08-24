@@ -139,6 +139,19 @@ impl App {
                 self.view.threads = threads;
                 true
             }
+            Event::EvidenceSummary { items } => {
+                // ui-040: dedupe to one badge per (kind, ok) — a badge answers
+                // "did build/tests pass", not how many runs happened.
+                let mut badges: Vec<(String, bool)> = Vec::new();
+                for item in items {
+                    let badge = (item.kind, item.ok);
+                    if !badges.contains(&badge) {
+                        badges.push(badge);
+                    }
+                }
+                self.view.evidence_badges = badges;
+                true
+            }
             Event::SteeringQueued { depth, .. } => {
                 self.view.steering_depth = depth as u32;
                 self.view.status_line = if depth > 0 {
@@ -914,5 +927,32 @@ mod access_tests {
         assert_eq!(app.view.threads.len(), 1);
         assert_eq!(app.view.threads[0].title, "Refactor tokens");
         assert_eq!(app.view.threads[0].message_count, 7);
+    }
+
+    #[test]
+    fn an_evidence_summary_populates_deduped_badges_and_triggers_a_frame() {
+        let mut app = App::new();
+
+        app.events.lock().unwrap().push(Event::EvidenceSummary {
+            items: vec![
+                z_protocol::EvidenceInfo { id: "ev-1".into(), kind: "tests".into(), ok: true, summary: "5 passed".into() },
+                z_protocol::EvidenceInfo { id: "ev-2".into(), kind: "build".into(), ok: false, summary: "exit code 1".into() },
+                z_protocol::EvidenceInfo { id: "ev-3".into(), kind: "tests".into(), ok: true, summary: "duplicate run".into() },
+            ],
+        });
+        assert!(
+            app.drain_events(),
+            "an EvidenceSummary event must trigger a re-render"
+        );
+        // Deduped by (kind, ok): the second green tests row collapses.
+        assert_eq!(
+            app.view.evidence_badges,
+            vec![("tests".to_string(), true), ("build".to_string(), false)]
+        );
+
+        // And the badges reach the scene as words in the chat panel.
+        let scene = app.build(app.viewport, 1.0);
+        assert!(scene.texts().any(|t| t.text == "[Tests ok]"), "ok badge missing");
+        assert!(scene.texts().any(|t| t.text == "[Build FAIL]"), "failed badge missing");
     }
 }

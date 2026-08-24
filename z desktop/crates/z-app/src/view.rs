@@ -57,6 +57,10 @@ pub struct WorkspaceView {
     /// Thread rows for the sidebar (core-021), mirrored verbatim from
     /// `ThreadList` events. Display-only for now; selection is a later task.
     pub threads: Vec<z_protocol::ThreadInfo>,
+    /// Supervision-evidence badges for the chat header (ui-040): deduped
+    /// `(kind, ok)` rows mirrored from `EvidenceSummary` events. Empty until
+    /// the runtime reports evidence; the view invents nothing.
+    pub evidence_badges: Vec<(String, bool)>,
     /// Called when the user sends the composer text.
     pub on_send: Option<Box<dyn FnMut(String)>>,
     /// Called when the user resolves a pending approval.
@@ -186,6 +190,7 @@ impl WorkspaceView {
             pending_approval: None,
             sidebar_items: Vec::new(),
             threads: Vec::new(),
+            evidence_badges: Vec::new(),
             on_send: None,
             on_resolve: None,
         }
@@ -1336,11 +1341,14 @@ impl WorkspaceView {
 
         let input_height = INPUT_BAR_HEIGHT;
         let gutter = CHAT_GUTTER;
+        // ui-040: evidence badges claim a strip under the panel's top edge when
+        // present; with none, geometry is byte-identical to before.
+        let badge_height = self.evidence_badge_row(scene, surface);
         let content = Rect::new(
             surface.x + gutter,
-            surface.y + gutter,
+            surface.y + gutter + badge_height,
             (surface.width - gutter * 2.0).max(0.0),
-            (surface.height - gutter * 2.0 - input_height).max(0.0),
+            (surface.height - gutter * 2.0 - input_height - badge_height).max(0.0),
         );
 
         // Only the messages overlapping the viewport are built. Without this a
@@ -1408,6 +1416,44 @@ impl WorkspaceView {
                 input_height,
             ),
         );
+    }
+
+    /// ui-040: the evidence badge strip across the top of the chat panel —
+    /// "[Tests ok]" / "[Build FAIL]" words in status colours, never colour
+    /// alone. Returns the vertical space it occupies: zero (nothing drawn)
+    /// when there is no evidence, so an evidence-free workspace keeps today's
+    /// geometry exactly.
+    fn evidence_badge_row(&self, scene: &mut Scene, surface: Rect) -> f32 {
+        if self.evidence_badges.is_empty() {
+            return 0.0;
+        }
+        const ROW_HEIGHT: f32 = 20.0;
+        let c = self.colors();
+        let mut x = surface.x + CHAT_GUTTER;
+        let y = surface.y + CHAT_GUTTER / 2.0;
+        for (kind, ok) in &self.evidence_badges {
+            let mut chars = kind.chars();
+            let titled = match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            };
+            let label = format!("[{titled} {}]", if *ok { "ok" } else { "FAIL" });
+            // ponytail: ~7px/glyph slot estimate for layout only — text is
+            // left-aligned so an underestimate just eats padding, and kinds
+            // come from a fixed five-word set.
+            let width = label.chars().count() as f32 * 7.0;
+            scene.push_text(
+                Layer::Content,
+                TextRun::new(
+                    &label,
+                    Rect::new(x, y, width, ROW_HEIGHT),
+                    Typography::XS,
+                    if *ok { c.status_success } else { c.status_danger },
+                ),
+            );
+            x += width + Spacing::S3;
+        }
+        ROW_HEIGHT
     }
 
     /// A slim indicator of position within the conversation.
@@ -2855,6 +2901,38 @@ mod tests {
             .get(NodeId::new(ns::SHELL, 1))
             .expect("the empty conversation region should still be declared");
         assert_eq!(conversation.description.as_deref(), Some("0 messages"));
+    }
+
+    #[test]
+    fn an_evidence_free_workspace_draws_no_badges() {
+        let viewport = Rect::new(0.0, 0.0, 1536.0, 1024.0);
+        let mut view = reference_view();
+        assert!(view.evidence_badges.is_empty());
+        let scene = view.build(viewport);
+        assert!(
+            !scene.texts().any(|t| t.text.starts_with('[')),
+            "no evidence means no badges — the strip must stay hidden"
+        );
+    }
+
+    #[test]
+    fn evidence_badges_draw_as_labelled_text_rows() {
+        let viewport = Rect::new(0.0, 0.0, 1536.0, 1024.0);
+        let mut view = reference_view();
+        view.evidence_badges =
+            vec![("tests".to_string(), true), ("build".to_string(), false)];
+        let scene = view.build(viewport);
+
+        // Words first — colour is only the second signal.
+        let ok = scene.texts().find(|t| t.text == "[Tests ok]").expect("ok badge drawn");
+        assert_eq!(ok.color, view.theme.colors.status_success);
+        let failed =
+            scene.texts().find(|t| t.text == "[Build FAIL]").expect("failed badge drawn");
+        assert_eq!(failed.color, view.theme.colors.status_danger);
+        assert!(
+            failed.bounds.x > ok.bounds.x,
+            "badges lay out left to right in journal order"
+        );
     }
 
     #[test]

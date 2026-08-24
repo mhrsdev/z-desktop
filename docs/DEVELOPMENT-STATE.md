@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-23
 
+## ui-040 Evidence Badges — 2026-08-23 COMPLETE
+
+1. ✅ **ui-040**: additive Command::GetEvidence {turn_id} → Event::
+   EvidenceSummary {items: Vec<EvidenceInfo>} (cap 50, best-effort fold);
+   z-app mirrors deduped (kind, ok) badges; Chat header draws
+   "[Build ok]"/"[Tests FAIL]" style badges, hidden when empty. Visual
+   suite green.
+
+Verification: full workspace suite green — **429 tests, 0 failed**
+(424 → 429). Ledger: 85 IMPLEMENTED.
+
+Next work continues → sup-012..015 detectors, prov-005 capability
+registry, or core-023 delete tombstones.
+
 ## core-026 Corrupt-Thread Ghosts — 2026-08-23 COMPLETE
 
 1. ✅ **core-026**: restore_threads reports unreadable .json files

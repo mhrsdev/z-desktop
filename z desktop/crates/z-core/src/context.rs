@@ -502,6 +502,12 @@ pub fn context_layer_report(items: &[ContextItem]) -> String {
     .join("\n")
 }
 
+/// ctx-024: the items of one layer, in input order — the slice behind
+/// [`items_by_layer`]'s per-layer counts. Pure inspector helper.
+pub fn context_by_layer(items: &[ContextItem], layer: Layer) -> Vec<&ContextItem> {
+    items.iter().filter(|i| i.layer == layer).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1256,5 +1262,36 @@ mod tests {
     #[test]
     fn context_layer_report_empty_is_empty_string() {
         assert_eq!(context_layer_report(&[]), "");
+    }
+
+    // ctx-024
+    #[test]
+    fn context_by_layer_seeded_multi_layer_returns_only_matching_in_order() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 1),
+            item(Layer::Turn, "t1", 1),
+            item(Layer::Session, "s1", 1),
+            item(Layer::Turn, "t2", 1),
+            item(Layer::Ephemeral, "e1", 1),
+        ];
+        let turns = context_by_layer(&items, Layer::Turn);
+        assert_eq!(
+            turns.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(),
+            vec!["t1", "t2"]
+        );
+        assert!(turns.iter().all(|i| i.layer == Layer::Turn));
+        // Other layers still filter cleanly from the same seed.
+        assert_eq!(
+            context_by_layer(&items, Layer::Prefix)
+                .iter()
+                .map(|i| i.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["sys"]
+        );
+    }
+
+    #[test]
+    fn context_by_layer_empty_input_is_empty() {
+        assert!(context_by_layer(&[], Layer::Session).is_empty());
     }
 }

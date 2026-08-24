@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 37 (jour-027 + ctx-024 + set-018) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-027**: journal_kind_counts sorted desc.
+2. ✅ **ctx-024**: context_by_layer item filter.
+3. ✅ **set-018**: settings_by_prefix case-insensitive key search.
+
+Verification: full workspace suite green — **806 tests, 0 failed**
+(799 → 806). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 36 (orch-022 + sup-030 + mem-027) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-022**: tasks_by_status id filter.

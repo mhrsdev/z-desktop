@@ -463,6 +463,17 @@ pub fn settings_health_line(current: &Settings) -> String {
     )
 }
 
+/// set-018: schema keys starting with `prefix` (case-insensitive), in schema
+/// order. Empty prefix ⇒ every key.
+pub fn settings_by_prefix(prefix: &str) -> Vec<&'static str> {
+    let p = prefix.to_lowercase();
+    schema_defs()
+        .iter()
+        .filter(|d| d.key.to_lowercase().starts_with(&p))
+        .map(|d| d.key)
+        .collect()
+}
+
 /// Validate a numeric value against the schema bounds for `key`. The unknown-
 /// key path never silently ignores: an unrecognized key is rejected with an
 /// "unknown setting \\"key\\"" message so hand-edited typos surface instead of
@@ -1221,5 +1232,28 @@ mod settings_tests {
             settings_health_line(&s),
             "3 settings, 2 changed from default | 2 validation errors"
         );
+    }
+
+    // ---- set-018: settings by prefix ---------------------------------------
+
+    #[test]
+    fn settings_by_prefix_matches_known_prefixes_case_insensitively() {
+        assert_eq!(settings_by_prefix("max_"), vec!["max_tool_rounds"]);
+        assert_eq!(settings_by_prefix("doom"), vec!["doom_threshold"]);
+        assert_eq!(
+            settings_by_prefix("APPROVAL"),
+            vec!["approval_timeout_secs"],
+            "uppercase prefix still matches"
+        );
+    }
+
+    #[test]
+    fn settings_by_prefix_empty_prefix_returns_all_keys() {
+        assert_eq!(settings_by_prefix(""), known_keys(), "empty prefix ⇒ every key");
+    }
+
+    #[test]
+    fn settings_by_prefix_no_match_is_empty() {
+        assert!(settings_by_prefix("zzz_").is_empty());
     }
 }

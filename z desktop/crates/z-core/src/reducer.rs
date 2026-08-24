@@ -229,6 +229,26 @@ pub fn journal_export_json(path: &Path) -> Result<String, String> {
     serde_json::to_string_pretty(&entries).map_err(|e| format!("reducer: export json: {e}"))
 }
 
+/// jour-027: per-kind record counts for one segment, sorted by count
+/// descending (ties broken by kind name ascending). Replays the same
+/// [`Journal::replay`] segment the [`lag_stats`] reports consume, so totals
+/// stay consistent with them.
+pub fn journal_kind_counts(path: &Path) -> Result<Vec<(String, usize)>, String> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for record in Journal::replay(path)? {
+        // JournalKind::as_str is private to journal.rs; its Serialize impl
+        // emits the same string, so round-trip through JSON for the name.
+        let name = serde_json::to_string(&record.kind)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
+        *counts.entry(name).or_insert(0) += 1;
+    }
+    let mut pairs: Vec<(String, usize)> = counts.into_iter().collect();
+    pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(pairs)
+}
+
 /// jour-017: generates a synthetic, deterministic journal segment at `path`.
 ///
 /// Each of `turns` turns contributes one `turn_started` record followed by
@@ -716,6 +736,39 @@ pub(crate) mod reducer_tests {
         journal
             .append(RecordDraft::new(kind, thread.map(str::to_string), payload))
             .expect("append");
+    }
+
+    #[test]
+    fn journal_kind_counts_seeded_mixed_kinds_sorted_desc() {
+        let dir = temp_dir("kind-counts");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::CommandReceived, None, json!({}));
+        }
+        assert_eq!(
+            journal_kind_counts(&dir.join("main.jsonl")).expect("counts"),
+            vec![
+                ("message_persisted".to_string(), 3),
+                ("command_received".to_string(), 1), // tie with turn_started: name asc
+                ("turn_started".to_string(), 1),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_kind_counts_empty_segment_is_empty() {
+        let dir = temp_dir("kind-counts-empty");
+        // Create the segment file with no records (drop flushes/closes it).
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert!(journal_kind_counts(&dir.join("main.jsonl"))
+            .expect("counts")
+            .is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

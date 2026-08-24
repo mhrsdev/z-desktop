@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 35 (jour-026 + ctx-023 + set-017) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-026**: journal_export_json — metadata-only record dump.
+2. ✅ **ctx-023**: context_layer_report — per-layer items/tokens lines.
+3. ✅ **set-017**: settings_export_json — versioned export alias.
+
+Verification: full workspace suite green — **794 tests, 0 failed**
+(788 → 794). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 34 (orch-021 + sup-029 + mem-026) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-021**: task_health_line — status breakdown line.

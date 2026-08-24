@@ -484,6 +484,24 @@ pub fn context_health_line(items: &[ContextItem], budget_tokens: usize, now_ms: 
     )
 }
 
+/// ctx-023: one line per non-empty layer for the inspector —
+/// "{layer}: {n} items, {tok} tokens" in enum order via [`stats`].by_layer,
+/// zero-count layers skipped. Pure.
+pub fn context_layer_report(items: &[ContextItem]) -> String {
+    let s = stats(items);
+    [
+        (Layer::Prefix, s.by_layer[0]),
+        (Layer::Session, s.by_layer[1]),
+        (Layer::Turn, s.by_layer[2]),
+        (Layer::Ephemeral, s.by_layer[3]),
+    ]
+    .into_iter()
+    .filter(|&(_, (n, _))| n > 0)
+    .map(|(l, (n, tok))| format!("{}: {} items, {} tokens", layer_name(l), n, tok))
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1218,5 +1236,25 @@ mod tests {
             context_health_line(&[], 100, 0),
             "context 0/100 tokens (0%), 0 items | 0 items, 0 stale (0%)"
         );
+    }
+
+    // ctx-023
+    #[test]
+    fn context_layer_report_seeded_is_exact_lines() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Turn, "t1", 3),
+            item(Layer::Turn, "t2", 4),
+            item(Layer::Ephemeral, "e1", 5),
+        ];
+        assert_eq!(
+            context_layer_report(&items),
+            "prefix: 1 items, 10 tokens\nturn: 2 items, 7 tokens\nephemeral: 1 items, 5 tokens"
+        );
+    }
+
+    #[test]
+    fn context_layer_report_empty_is_empty_string() {
+        assert_eq!(context_layer_report(&[]), "");
     }
 }

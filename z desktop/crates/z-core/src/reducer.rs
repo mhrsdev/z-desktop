@@ -205,6 +205,30 @@ pub fn journal_health_line(path: &Path) -> Result<String, String> {
     ))
 }
 
+/// jour-026: metadata-only JSON export — pretty-printed JSON array of
+/// `{seq, kind, thread_id, ts_ms}` for every record in the segment.
+/// Payloads are deliberately excluded: this export is metadata-only.
+pub fn journal_export_json(path: &Path) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct Entry<'a> {
+        seq: u64,
+        kind: &'a JournalKind,
+        thread_id: &'a Option<String>,
+        ts_ms: u128,
+    }
+    let records = Journal::replay(path)?;
+    let entries: Vec<Entry> = records
+        .iter()
+        .map(|r| Entry {
+            seq: r.seq,
+            kind: &r.kind,
+            thread_id: &r.thread_id,
+            ts_ms: r.ts_ms,
+        })
+        .collect();
+    serde_json::to_string_pretty(&entries).map_err(|e| format!("reducer: export json: {e}"))
+}
+
 /// jour-017: generates a synthetic, deterministic journal segment at `path`.
 ///
 /// Each of `turns` turns contributes one `turn_started` record followed by
@@ -1886,6 +1910,43 @@ pub(crate) mod reducer_tests {
     fn journal_health_line_missing_file_is_err() {
         let dir = temp_dir("jour-025-missing");
         assert!(journal_health_line(&dir.join("nope.jsonl")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_export_json_seeded_has_metadata_no_payload() {
+        let dir = temp_dir("jour-026");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(
+                &mut j,
+                JournalKind::TurnStarted,
+                Some("t1"),
+                json!({"x": 1}),
+            );
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        let out = journal_export_json(&dir.join("main.jsonl")).expect("export");
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).expect("valid json array");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0]["seq"], 1);
+        assert_eq!(parsed[0]["kind"], "turn_started");
+        assert_eq!(parsed[0]["thread_id"], "t1");
+        assert!(parsed[0]["ts_ms"].is_u64());
+        // Metadata-only: payloads must not leak into the export.
+        assert!(parsed[0].get("payload").is_none());
+        assert_eq!(parsed[1]["kind"], "message_persisted");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_export_json_empty_segment_is_empty_array() {
+        let dir = temp_dir("jour-026-empty");
+        Journal::open(&dir, "main").expect("open"); // creates an empty segment
+        assert_eq!(
+            journal_export_json(&dir.join("main.jsonl")).expect("export"),
+            "[]"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

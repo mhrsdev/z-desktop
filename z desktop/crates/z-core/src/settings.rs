@@ -197,6 +197,12 @@ pub fn export_user_json(current: &Settings) -> String {
         .expect("settings always serialize")
 }
 
+/// set-017: versioned export for external UIs. Same document as
+/// [`export_user_json`] — alias kept so callers read by intent.
+pub fn settings_export_json(current: &Settings) -> String {
+    export_user_json(current)
+}
+
 /// set-007: migrate raw `settings.json` text up to [`SETTINGS_VERSION`],
 /// returning the (possibly rewritten) payload and its new version.
 ///
@@ -1038,6 +1044,39 @@ mod settings_tests {
         assert_eq!(doc["values"]["max_tool_rounds"], json!(d.max_tool_rounds));
         assert_eq!(doc["values"]["approval_timeout_secs"], json!(d.approval_timeout_secs));
         assert_eq!(doc["values"]["doom_threshold"], json!(d.doom_threshold));
+    }
+
+    // ---- set-017: settings_export_json ------------------------------------
+
+    #[test]
+    fn settings_export_json_round_trips_through_migrate() {
+        let s = Settings {
+            max_tool_rounds: 9,
+            approval_timeout_secs: 120,
+            doom_threshold: 4,
+        };
+        let raw = settings_export_json(&s);
+        let (out, v) = migrate(&raw).expect("export is a valid versioned document");
+        assert_eq!(v, SETTINGS_VERSION);
+        assert_eq!(out, raw, "current-version export passes through byte-for-byte");
+        let doc: serde_json::Value =
+            serde_json::from_str(&out).expect("migrated payload parses as valid JSON");
+        assert_eq!(doc["version"], json!(SETTINGS_VERSION));
+        assert_eq!(doc["values"]["max_tool_rounds"], json!(9));
+        assert_eq!(doc["values"]["approval_timeout_secs"], json!(120));
+        assert_eq!(doc["values"]["doom_threshold"], json!(4));
+    }
+
+    #[test]
+    fn settings_export_json_is_pretty_and_identical_to_export_user_json() {
+        let raw = settings_export_json(&Settings::default());
+        assert_eq!(raw, export_user_json(&Settings::default()), "alias parity");
+        let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+        assert_eq!(
+            doc["values"].as_object().map(|o| o.len()),
+            Some(schema_defs().len()),
+            "one value entry per schema def"
+        );
     }
 
     #[test]

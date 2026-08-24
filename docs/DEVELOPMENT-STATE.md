@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 31 (sup-028 + mem-025 + term-020) — 2026-08-24 COMPLETE
+
+1. ✅ **sup-028**: evidence_export_json — full-record pretty dump.
+2. ✅ **mem-025**: memory_export_report live/total/pct line.
+3. ✅ **term-020**: timeout_report formatted line.
+
+Verification: full workspace suite green — **770 tests, 0 failed**
+(765 → 770). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 30 (jour-023 + ctx-020 + set-014) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-023**: seq_health — records/gaps/last_seq line.

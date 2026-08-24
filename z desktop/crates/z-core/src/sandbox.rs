@@ -105,6 +105,18 @@ pub fn exec_report(result: &RunResult, wall_ms: u64) -> String {
     )
 }
 
+/// term-020: one-line report for a run killed at its wall-clock limit, e.g.
+/// `TIMEOUT sleep 30 after 1000ms (limit 500ms)`. Command text is truncated
+/// to 40 characters (char-safe), matching [`exec_report`].
+pub fn timeout_report(cmd: &str, limit_ms: u64, elapsed_ms: u64) -> String {
+    format!(
+        "TIMEOUT {} after {}ms (limit {}ms)",
+        cmd.chars().take(40).collect::<String>(),
+        elapsed_ms,
+        limit_ms
+    )
+}
+
 /// Spawn `command` in `cwd`, drain its pipes, enforce the timeout, kill the
 /// whole tree on expiry. Shell selection matches the platform convention:
 /// `cmd /d /s /c` on Windows (skips AutoRun), `sh -c` elsewhere.
@@ -735,5 +747,26 @@ mod tests {
             exec_report(&outcome, 5),
             "echo hi -> exit 0, 5ms, 3B stdout"
         );
+    }
+
+    // -- term-020: timeout report formatting -----------------------------------
+
+    #[test]
+    fn timeout_report_formats_cmd_elapsed_and_limit() {
+        assert_eq!(
+            timeout_report("sleep 30", 500, 1000),
+            "TIMEOUT sleep 30 after 1000ms (limit 500ms)"
+        );
+    }
+
+    #[test]
+    fn timeout_report_truncates_cmd_to_40_chars() {
+        let long = "abcdefghij".repeat(6); // 60 chars
+        let report = timeout_report(&long, 400, 401);
+        assert_eq!(report, format!("TIMEOUT {} after 401ms (limit 400ms)", &long[..40]));
+        // Char-safe: multibyte text must not panic on a char boundary.
+        let report = timeout_report(&"é".repeat(45), 1, 2);
+        assert!(report.starts_with(&format!("TIMEOUT {}", "é".repeat(40))));
+        assert!(report.ends_with("after 2ms (limit 1ms)"));
     }
 }

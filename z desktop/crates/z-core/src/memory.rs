@@ -467,6 +467,15 @@ pub fn export_json(view: &MemoryView) -> String {
     serde_json::to_string_pretty(&live).unwrap_or_else(|_| "[]".to_string())
 }
 
+/// One-line human summary of a folded view (mem-025):
+/// "{live} live / {total} records ({pct}% live)".
+pub fn memory_export_report(view: &MemoryView) -> String {
+    let total = view.records.len();
+    let live = view.live().len();
+    let pct = if total == 0 { 0 } else { live * 100 / total };
+    format!("{live} live / {total} records ({pct}% live)")
+}
+
 /// Imports an array of MemoryRecord-shaped JSON objects (mem-019): each entry
 /// is validated through [`MemoryRecord::new`] (provenance + confidence rules)
 /// and recorded best-effort via [`record`]. Malformed entries are skipped with
@@ -2124,6 +2133,26 @@ mod memory_tests {
         churned.records.push(sup);
         churned.records.push(rec("m4", Status::Provisional));
         assert_eq!(memory_diff(&base, &churned), (0, 0));
+    }
+
+    #[test]
+    fn memory_export_report_counts_live_and_total_with_empty_guard() {
+        assert_eq!(
+            memory_export_report(&MemoryView::default()),
+            "0 live / 0 records (0% live)"
+        );
+
+        let mut view = MemoryView::default();
+        view.records.push(rec("mem-live", Status::Promoted));
+        let mut sup = rec("mem-sup", Status::Promoted);
+        sup.superseded_by = Some("mem-live".into());
+        view.records.push(sup);
+        view.records.push(rec("mem-prov", Status::Provisional));
+        // 1 live of 3 total → 33%.
+        assert_eq!(memory_export_report(&view), "1 live / 3 records (33% live)");
+
+        view.records.push(rec("mem-two", Status::Promoted));
+        assert_eq!(memory_export_report(&view), "2 live / 4 records (50% live)");
     }
 
     #[test]

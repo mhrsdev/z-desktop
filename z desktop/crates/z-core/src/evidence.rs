@@ -633,6 +633,26 @@ pub fn detector_noise_report(view: &EvidenceView) -> String {
     format!("{n} evidence records, {ok_pct}% ok, {kinds} kinds")
 }
 
+/// sup-028: pretty JSON array of every record in the view, projected to
+/// `{kind, ok, thread_id, turn_id, summary}` (the record id is internal and
+/// stays out of exports).
+pub fn evidence_export_json(view: &EvidenceView) -> String {
+    let rows: Vec<serde_json::Value> = view
+        .items
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "kind": e.kind,
+                "ok": e.ok,
+                "thread_id": e.thread_id,
+                "turn_id": e.turn_id,
+                "summary": e.summary,
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string())
+}
+
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
@@ -1485,5 +1505,35 @@ mod evidence_tests {
             detector_noise_report(&EvidenceView::default()),
             "0 evidence records"
         );
+    }
+
+    // sup-028: pretty JSON export.
+
+    #[test]
+    fn evidence_export_json_emits_all_fields_per_record() {
+        let mut view = EvidenceView::default();
+        view.items.extend([
+            Evidence::tests("t1", "u1", 3, 0, "cargo test"),
+            Evidence::diff("t2", "u2", false, "wrote x"),
+        ]);
+        let out = evidence_export_json(&view);
+        // Round-trips as valid JSON with all five fields on every row.
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).expect("valid JSON");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0]["kind"], "tests");
+        assert_eq!(parsed[0]["ok"], true);
+        assert_eq!(parsed[0]["thread_id"], "t1");
+        assert_eq!(parsed[0]["turn_id"], "u1");
+        assert_eq!(parsed[0]["summary"], "cargo test");
+        assert_eq!(parsed[1]["kind"], "diff");
+        assert_eq!(parsed[1]["ok"], false);
+        assert_eq!(parsed[1]["thread_id"], "t2");
+        assert_eq!(parsed[1]["turn_id"], "u2");
+        assert_eq!(parsed[1]["summary"], "wrote x");
+    }
+
+    #[test]
+    fn evidence_export_json_empty_view_is_bare_array() {
+        assert_eq!(evidence_export_json(&EvidenceView::default()), "[]");
     }
 }

@@ -13,10 +13,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod dock_indicators;
 pub mod layout;
 pub mod panel;
 pub mod region;
 pub mod view;
+
+pub use dock_indicators::{compute_drop_indicator, DropIndicator, DropZone};
 
 pub use layout::{LayoutError, LayoutState, Origin, PanelPlacement, Preset};
 pub use panel::{Capabilities, Constraints, Dock, PanelId, PanelRegistry, PanelSpec};

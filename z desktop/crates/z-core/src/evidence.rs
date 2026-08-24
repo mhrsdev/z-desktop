@@ -83,6 +83,19 @@ impl Evidence {
             summary: summary.into(),
         }
     }
+
+    /// Bench evidence from a timing capture (sup-021). Always ok — a recorded
+    /// duration is a measurement, not a pass/fail verdict.
+    pub fn bench(thread_id: &str, turn_id: &str, name: &str, value_ms: u64) -> Evidence {
+        Evidence {
+            id: crate::new_id("ev"),
+            kind: EvidenceKind::Bench,
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            ok: true,
+            summary: format!("{name}: {value_ms}ms"),
+        }
+    }
 }
 
 /// sup-003 (partial): a terminal_exec command that looks like a test run
@@ -837,6 +850,33 @@ mod evidence_tests {
             "wrote 42 bytes to src/lib.rs"
         );
         assert_eq!(view.items[1].kind, EvidenceKind::Tests);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // sup-021: Bench constructor shape — kind, always-ok, "{name}: {ms}ms".
+    #[test]
+    fn bench_evidence_has_bench_kind_and_ms_summary() {
+        let e = Evidence::bench("t", "u1", "provider_first_round", 1234);
+        assert_eq!(e.kind, EvidenceKind::Bench);
+        assert!(e.ok);
+        assert_eq!(e.summary, "provider_first_round: 1234ms");
+        let zero = Evidence::bench("t", "u2", "x", 0);
+        assert_eq!(zero.summary, "x: 0ms");
+        assert!(zero.ok, "a recorded duration is a measurement, not a verdict");
+    }
+
+    #[test]
+    fn bench_evidence_round_trips_through_the_fold() {
+        let dir = temp_dir("sup-021");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let b = Evidence::bench("t", "u1", "provider_first_round", 42);
+        record(&journal, &b);
+        drop(journal);
+
+        let view = EvidenceView::fold(&path).expect("fold");
+        assert_eq!(view.items, vec![b]);
+        assert_eq!(view.items[0].kind, EvidenceKind::Bench);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

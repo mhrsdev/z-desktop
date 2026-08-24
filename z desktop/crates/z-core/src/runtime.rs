@@ -1004,6 +1004,9 @@ fn run_turn(
     // sup-007: did this turn execute ANY tool call? A final text claiming
     // success after real execution should have left ok evidence behind.
     let mut turn_had_tool_call = false;
+    // sup-021: one Bench record per turn — the first successful provider
+    // round's wall time.
+    let mut bench_recorded = false;
     // core-018 (ADR-0017 D4): when set, the next loop round replays this
     // exact ChatRequest object instead of rebuilding it, so the retry
     // payload is byte-identical to the failed one.
@@ -1044,6 +1047,9 @@ fn run_turn(
             pending_retry.take().unwrap_or_else(|| build_request(provider.as_ref(), &thread, &shared, &root));
         let outcome = {
             let tx = event_tx.clone();
+            // sup-021: wall time of the provider round; the first successful
+            // one lands a Bench evidence record below.
+            let started = std::time::Instant::now();
             let result = provider.stream(&request, &mut |item| {
                 if let provider::StreamItem::TextDelta(delta) = item {
                     let _ = tx.send(Event::TextDelta {
@@ -1053,8 +1059,25 @@ fn run_turn(
                     });
                 }
             });
+            let stream_ms = started.elapsed().as_millis() as u64;
             match result {
-                Ok(o) => o,
+                Ok(o) => {
+                    if !bench_recorded {
+                        bench_recorded = true;
+                        if let Some(journal) = journal.as_deref() {
+                            crate::evidence::record(
+                                journal,
+                                &crate::evidence::Evidence::bench(
+                                    &thread_id,
+                                    &turn_id,
+                                    "provider_first_round",
+                                    stream_ms,
+                                ),
+                            );
+                        }
+                    }
+                    o
+                }
                 Err(e) => {
                     // core-016 partial (ADR-0017 D2): classified single retry,
                     // round 0 only. Network retries immediately; rate-limit/
@@ -1125,7 +1148,13 @@ fn run_turn(
                         let report = crate::evidence::link_claims(&claims, &turn_evidence);
                         let verdict = crate::evidence::evaluate_claims(
                             &report,
-                            turn_evidence.iter().filter(|e| e.ok).count(),
+                            // sup-021: Bench is a timing measurement, not
+                            // execution evidence — it must never satisfy the
+                            // gate's "some ok evidence exists" escape hatch.
+                            turn_evidence
+                                .iter()
+                                .filter(|e| e.ok && e.kind != crate::evidence::EvidenceKind::Bench)
+                                .count(),
                         );
                         // sup-009/010/011 (ADR-0016): extra detectors, pure
                         // observability — firing never gates by itself here.
@@ -5021,12 +5050,18 @@ mod sup_e2e_tests {
         }
         assert!(finished, "turn never emitted TurnFinished");
 
-        // Capture-hook proof of the setup: exactly one same-turn evidence
-        // item, and it is a GREEN BUILD — no Tests execution ever recorded.
+        // Capture-hook proof of the setup: the Bench timing record (sup-021)
+        // plus exactly one execution item, a GREEN BUILD — no Tests
+        // execution ever recorded.
         let mine = same_turn_evidence(&data_dir, "turn-sup020-a");
-        assert_eq!(mine.len(), 1, "only the build ran: {mine:?}");
-        assert_eq!(mine[0].kind, crate::evidence::EvidenceKind::Build);
-        assert!(mine[0].ok, "echo exits 0, so the Build evidence is green");
+        assert_eq!(mine.len(), 2, "bench + build only: {mine:?}");
+        let exec: Vec<_> = mine
+            .iter()
+            .filter(|e| e.kind != crate::evidence::EvidenceKind::Bench)
+            .collect();
+        assert_eq!(exec.len(), 1);
+        assert_eq!(exec[0].kind, crate::evidence::EvidenceKind::Build);
+        assert!(exec[0].ok, "echo exits 0, so the Build evidence is green");
 
         // sup-009 fired: a warn names THIS turn and the detector.
         let warns = WARN_LOG.lock().expect("warn log lock");
@@ -5080,9 +5115,14 @@ mod sup_e2e_tests {
         assert!(finished, "turn never emitted TurnFinished");
 
         let mine = same_turn_evidence(&data_dir, "turn-sup020-b");
-        assert_eq!(mine.len(), 1, "only the test run ran: {mine:?}");
-        assert_eq!(mine[0].kind, crate::evidence::EvidenceKind::Tests);
-        assert!(mine[0].ok, "exit code 0 makes the Tests evidence green");
+        assert_eq!(mine.len(), 2, "bench + test run only: {mine:?}");
+        let exec: Vec<_> = mine
+            .iter()
+            .filter(|e| e.kind != crate::evidence::EvidenceKind::Bench)
+            .collect();
+        assert_eq!(exec.len(), 1);
+        assert_eq!(exec[0].kind, crate::evidence::EvidenceKind::Tests);
+        assert!(exec[0].ok, "exit code 0 makes the Tests evidence green");
 
         let warns = WARN_LOG.lock().expect("warn log lock");
         assert!(

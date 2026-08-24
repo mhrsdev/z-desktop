@@ -20,6 +20,7 @@ pub mod runtime;
 pub mod settings;
 pub mod tools;
 pub mod fingerprint;
+pub mod usage_stats;
 pub mod atomic_write;
 pub mod symbols;
 

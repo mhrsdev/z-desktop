@@ -6,6 +6,27 @@
 
 Last updated: 2026-08-23
 
+## Parallel Fan-Out Wave (sup-021 + layout-002 + term-005/018 + tok-019) — 2026-08-24 COMPLETE
+
+First wave dispatched via the user-provided 3-key OpenRouter credential
+pool (keys stored in /root/.secrets/, never echoed):
+
+1. ✅ **sup-021**: Evidence::bench + first-round provider timing captured
+   once per turn. Found+fixed a real bug: always-ok Bench records were
+   whitewashing the sup-007 gate — Bench excluded from the ok-count.
+2. ✅ **layout-002**: dock_indicators.rs — DropZone/DropIndicator +
+   compute_drop_indicator over ShellFrame rects (pure geometry).
+3. ✅ **term-005/018**: Scrollback ring buffer with 10 MiB cap + 64 MiB
+   push safety test proving bounded memory.
+4. ✅ **tok-019**: usage_stats.rs TokenLedger — per-task charge/total/
+   top_n + ORCH_TOKEN_BUDGET_PER_TASK enforcement helper.
+
+Verification: full workspace suite green — **510 tests, 0 failed**
+(492 → 510). Ledger: 115 IMPLEMENTED.
+
+Next work continues → ui thread selection, sup-022 regression recorder,
+or term-006 VT parser.
+
 ## core-024 + SwitchThread — 2026-08-23 COMPLETE
 
 1. ✅ **core-024**: Shared.active_turns set in start_turn, cleared in

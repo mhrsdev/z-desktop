@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 108 |
+| IMPLEMENTED | 113 |
 | PARTIAL | 2 |
-| PLANNED | 613 |
+| PLANNED | 608 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -598,7 +598,7 @@
 ### [IMPLEMENTED] sup-020 — Scripted dishonest-agent integration test
 - depends: sup-009, sup-010
 
-### [PLANNED] sup-021 — Benchmark evidence recorder
+### [IMPLEMENTED] sup-021 — Benchmark evidence recorder
 - depends: sup-001
 
 ### [PLANNED] sup-022 — Regression-test linkage recorder
@@ -669,7 +669,7 @@
 ### [RESEARCH] tok-018 — Context delta protocol research
 - depends: —
 
-### [PLANNED] tok-019 — Token-per-task accounting in orchestrator
+### [IMPLEMENTED] tok-019 — Token-per-task accounting in orchestrator
 - depends: tok-012, orch-004
 
 ### [IMPLEMENTED] tok-020 — Redundant-read detection (same file twice)
@@ -937,8 +937,8 @@
 ### [PLANNED] term-004 — Kill-on-close via job/group guards
 - depends: term-002, term-003
 
-### [PLANNED] term-005 — Ring buffer scrollback (10 MB cap)
-- depends: term-001
+### [IMPLEMENTED] term-005 — Ring buffer scrollback (10 MB cap)
+- depends: term-004
 
 ### [PLANNED] term-006 — VT sequence parser (vte-class)
 - depends: term-005
@@ -976,7 +976,7 @@
 ### [PLANNED] term-017 — Terminal throughput benchmark
 - depends: term-007
 
-### [PLANNED] term-018 — Unbounded-output memory safety test
+### [IMPLEMENTED] term-018 — Unbounded-output memory safety test
 - depends: term-005
 
 ### [PLANNED] term-019 — Panel close kills tree test
@@ -1667,7 +1667,7 @@
 ### [PLANNED] layout-001 — Region tree operations (pure)
 - depends: —
 
-### [PLANNED] layout-002 — Drag-to-dock with drop indicators
+### [IMPLEMENTED] layout-002 — Drag-to-dock drop indicators
 - depends: layout-001
 
 ### [PLANNED] layout-003 — Escape cancels drag

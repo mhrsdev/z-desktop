@@ -13,6 +13,7 @@
 //! - **Bounded wait** — a wall-clock timeout is mandatory in practice; the
 //!   caller passes `None` only for trusted interactive flows.
 
+use std::collections::VecDeque;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -23,6 +24,53 @@ use std::time::{Duration, Instant};
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// Hard ceiling — even an explicit request cannot exceed this.
 pub const MAX_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// term-005: hard cap on retained scrollback bytes (10 MiB).
+pub const SCROLLBACK_CAP: usize = 10 * 1024 * 1024;
+
+/// Bounded FIFO byte ring for terminal scrollback. Pushing beyond
+/// `max_bytes` evicts oldest bytes from the front; memory never grows
+/// past the cap regardless of how much a command emits.
+#[derive(Debug)]
+pub struct Scrollback {
+    buf: VecDeque<u8>,
+    max_bytes: usize,
+}
+
+impl Scrollback {
+    pub fn new(max_bytes: usize) -> Self {
+        Scrollback { buf: VecDeque::new(), max_bytes }
+    }
+
+    /// Append bytes, evicting oldest bytes beyond the cap.
+    pub fn push(&mut self, bytes: &[u8]) {
+        if bytes.len() >= self.max_bytes {
+            // Chunk alone fills (or exceeds) the buffer: keep its tail only.
+            self.buf.clear();
+            self.buf.extend(&bytes[bytes.len() - self.max_bytes..]);
+            return;
+        }
+        let drop_n = (self.buf.len() + bytes.len()).saturating_sub(self.max_bytes);
+        for _ in 0..drop_n {
+            self.buf.pop_front();
+        }
+        self.buf.extend(bytes);
+    }
+
+    /// Current retained byte count.
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    /// Lossy UTF-8 read-out of everything currently retained.
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.buf.iter().copied().collect::<Vec<u8>>()).into_owned()
+    }
+}
 
 /// Outcome of a sandboxed run. Partial output is preserved when the run is
 /// killed, so the model sees what happened before the timeout.
@@ -426,6 +474,78 @@ mod tests {
             outcome.stdout.len() <= 8 * 1024 * 1024 + 4096,
             "stdout cap violated: {} bytes",
             outcome.stdout.len()
+        );
+    }
+
+    // -- term-005: scrollback ring buffer -----------------------------------
+
+    #[test]
+    fn scrollback_under_cap_preserves_everything() {
+        let mut sb = Scrollback::new(1024);
+        sb.push(b"hello ");
+        sb.push(b"world");
+        assert_eq!(sb.len(), 11);
+        assert_eq!(sb.text(), "hello world");
+    }
+
+    #[test]
+    fn scrollback_overflow_evicts_from_front() {
+        let mut sb = Scrollback::new(10);
+        sb.push(b"0123456789"); // fills exactly
+        assert_eq!(sb.text(), "0123456789");
+        sb.push(b"abc"); // evicts 3 oldest
+        assert_eq!(sb.len(), 10);
+        assert_eq!(sb.text(), "3456789abc");
+    }
+
+    #[test]
+    fn scrollback_single_chunk_larger_than_cap_keeps_tail() {
+        let mut sb = Scrollback::new(4);
+        sb.push(b"abcdefgh");
+        assert_eq!(sb.len(), 4);
+        assert_eq!(sb.text(), "efgh");
+    }
+
+    #[test]
+    fn scrollback_zero_cap_stays_empty() {
+        let mut sb = Scrollback::new(0);
+        sb.push(b"data");
+        assert!(sb.is_empty());
+        assert_eq!(sb.text(), "");
+    }
+
+    #[test]
+    fn scrollback_text_is_lossy_on_invalid_utf8() {
+        let mut sb = Scrollback::new(16);
+        sb.push(&[b'a', b'b', 0xFF, b'c']);
+        assert_eq!(sb.text(), "ab\u{FFFD}c");
+    }
+
+    /// term-018: unbounded-output memory safety. 64 MiB streamed through the
+    /// ring in 4 KiB chunks must stay pinned at the cap and finish fast,
+    /// proving the buffer never grows without bound.
+    #[test]
+    fn scrollback_never_grows_unbounded_under_64mib_stream() {
+        const CHUNK: usize = 4096;
+        let started = Instant::now();
+        let mut sb = Scrollback::new(SCROLLBACK_CAP);
+        let chunk = [b'A'; CHUNK];
+        for _ in 0..(64 * 1024 * 1024 / CHUNK) {
+            sb.push(&chunk);
+            debug_assert!(sb.len() <= SCROLLBACK_CAP);
+        }
+        assert!(
+            sb.len() <= SCROLLBACK_CAP + CHUNK, // small slack for one chunk boundary
+            "ring grew past cap: {} bytes",
+            sb.len()
+        );
+        // Oldest data was evicted; only 'A's remain, so text is all A.
+        assert_eq!(sb.text().len(), sb.len());
+        assert!(sb.text().chars().all(|c| c == 'A'));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "64 MiB push took too long: {:?}",
+            started.elapsed()
         );
     }
 }

@@ -39,6 +39,7 @@ fn bound(text: String) -> String {
 const TOOL_CACHE_CAP: usize = 128;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 type ToolCacheKey = (String, String, u64); // (tool, root+raw-path arg, fingerprint)
@@ -46,6 +47,23 @@ type ToolCacheKey = (String, String, u64); // (tool, root+raw-path arg, fingerpr
 fn tool_cache() -> &'static Mutex<HashMap<ToolCacheKey, String>> {
     static CACHE: OnceLock<Mutex<HashMap<ToolCacheKey, String>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// tok-012: cumulative fs_read cache hit/miss counters (monotonic, lock-free).
+#[derive(Debug)]
+pub struct CacheMetrics {
+    pub hits: u64,
+    pub misses: u64,
+}
+
+static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+
+pub fn cache_metrics() -> CacheMetrics {
+    CacheMetrics {
+        hits: CACHE_HITS.load(Ordering::Relaxed),
+        misses: CACHE_MISSES.load(Ordering::Relaxed),
+    }
 }
 
 /// A resolved tool execution request.
@@ -344,8 +362,12 @@ fn fs_read(inv: &ToolInvocation) -> ToolOutput {
         // miss path's re-lock below.
         let cached = tool_cache().lock().unwrap().get(&key).cloned();
         let mut text = match cached {
-            Some(cached) => format!("[cached] {cached}"),
+            Some(cached) => {
+                CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                format!("[cached] {cached}")
+            }
             None => {
+                CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
                 let content =
                     bound(std::fs::read_to_string(&path).map_err(|e| e.to_string())?);
                 let mut cache = tool_cache().lock().unwrap();
@@ -1378,6 +1400,26 @@ mod tests {
         let second = execute(read_inv(&root, "c.txt", ""));
         assert!(second.ok);
         assert_eq!(second.text, "[cached] cache me", "{}", second.text);
+    }
+
+    // tok-012: counters are process-global and only grow; assert monotonic
+    // deltas around a known miss→hit pair (exact equality would flake against
+    // sibling tests' concurrent fs_reads in the same process).
+    #[test]
+    fn cache_metrics_reflect_a_known_miss_then_hit() {
+        let _g = cache_test_lock().lock().unwrap();
+        let root = temp_root("tok-metrics");
+        std::fs::write(root.join("k.txt"), "metrics").unwrap();
+
+        let before = cache_metrics();
+        let first = execute(read_inv(&root, "k.txt", ""));
+        let second = execute(read_inv(&root, "k.txt", ""));
+        let after = cache_metrics();
+
+        assert_eq!(first.text, "metrics", "unique path must be a miss");
+        assert_eq!(second.text, "[cached] metrics", "second read must hit");
+        assert!(after.misses >= before.misses + 1, "{before:?} -> {after:?}");
+        assert!(after.hits >= before.hits + 1, "{before:?} -> {after:?}");
     }
 
     #[test]

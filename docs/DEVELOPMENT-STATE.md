@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-24
 
+## Wave 14 (ctx-015 + mem-020 + tok-012) — 2026-08-24 COMPLETE
+
+1. ✅ **ctx-015**: save/load_session_layer — Session-layer JSONL
+   persistence (round-trip incl. pinned flag).
+2. ✅ **mem-020**: consolidation bounds dry-run (would_promote vs total
+   provisional) for pre-flight cap checks.
+3. ✅ **tok-012**: CacheMetrics atomic counters wired into the fs_read
+   cache hit/miss points.
+
+Verification: full workspace suite green — **655 tests, 0 failed**
+(648 → 655). Ledger: 144 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 13 (ctx-012 + set-005 + idx-019) — 2026-08-24 COMPLETE
 
 1. ✅ **ctx-012**: fold_twice_equal runtime determinism check +

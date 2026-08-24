@@ -701,6 +701,26 @@ const CONSOLIDATION_PROMOTE_CONFIDENCE: f32 = 0.75;
 /// Hard bound on promotions per consolidation pass (ADR-0014 caps ≤100/pass).
 const MAX_PROMOTIONS_PER_PASS: usize = 100;
 
+/// mem-020 dry run of [`consolidate`]'s promotion step: folds the journal
+/// (no writes) and returns `(would_promote, total_provisional)` — Provisional
+/// records at [`CONSOLIDATION_PROMOTE_CONFIDENCE`] or higher vs all Provisional
+/// records — so callers can budget a pass against the daily cap first.
+pub fn consolidation_bounds_check(journal: &Mutex<Journal>) -> Result<(usize, usize), String> {
+    let path = journal.lock().unwrap().path().to_path_buf();
+    let view = MemoryView::fold(&path)?;
+    let mut would_promote = 0usize;
+    let mut total_provisional = 0usize;
+    for r in &view.records {
+        if r.status == Status::Provisional {
+            total_provisional += 1;
+            if r.confidence >= CONSOLIDATION_PROMOTE_CONFIDENCE {
+                would_promote += 1;
+            }
+        }
+    }
+    Ok((would_promote, total_provisional))
+}
+
 /// One consolidation pass (mem-006, ADR-0014): folds the journal, promotes
 /// Provisional records at [`CONSOLIDATION_PROMOTE_CONFIDENCE`] or higher, and
 /// supersedes duplicate contents within a layer (keeping the highest-confidence
@@ -1315,6 +1335,81 @@ mod memory_tests {
             1,
             "{project:?}"
         );
+        drop(journal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn consolidation_bounds_check_reports_exact_dry_run_counts() {
+        let dir = temp_dir("bounds-check-seeded");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        record(
+            &journal,
+            &rec_conf("hi-1", "fact one", 0.9, Status::Provisional),
+        );
+        record(
+            &journal,
+            &rec_conf("lo-1", "fact two", 0.5, Status::Provisional),
+        );
+        record(
+            &journal,
+            &rec_conf("edge-1", "exactly at threshold", 0.75, Status::Provisional),
+        );
+        record(
+            &journal,
+            &rec_conf("live-1", "already promoted", 0.4, Status::Promoted),
+        );
+
+        assert_eq!(
+            consolidation_bounds_check(&journal).expect("check"),
+            (2, 3),
+            "hi-1 and edge-1 (>= 0.75) would promote; live-1 is not provisional"
+        );
+
+        // Dry run: nothing written, statuses unchanged.
+        let view = MemoryView::fold(&path).expect("fold");
+        assert_eq!(view.records.len(), 4);
+        for id in ["hi-1", "lo-1", "edge-1"] {
+            assert_eq!(
+                view.records.iter().find(|r| r.id == id).unwrap().status,
+                Status::Provisional
+            );
+        }
+        drop(journal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn consolidation_bounds_check_returns_zeros_without_provisional() {
+        let dir = temp_dir("bounds-check-empty");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        // Only promoted records: no provisional candidates at all.
+        record(
+            &journal,
+            &rec_conf("live-1", "already promoted", 0.9, Status::Promoted),
+        );
+        assert_eq!(consolidation_bounds_check(&journal).expect("check"), (0, 0));
+        drop(journal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn consolidation_bounds_check_all_above_threshold() {
+        let dir = temp_dir("bounds-check-all-hi");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        for i in 0..4 {
+            record(
+                &journal,
+                &rec_conf(
+                    &format!("hi-{i}"),
+                    &format!("fact {i}"),
+                    0.76 + i as f32 * 0.05,
+                    Status::Provisional,
+                ),
+            );
+        }
+        assert_eq!(consolidation_bounds_check(&journal).expect("check"), (4, 4));
         drop(journal);
         let _ = std::fs::remove_dir_all(&dir);
     }

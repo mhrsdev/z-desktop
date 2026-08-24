@@ -10,6 +10,7 @@
 
 use crate::memory::RankedMemory;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// Context layer, snake_case on the wire for journal/inspector export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,7 +23,7 @@ pub enum Layer {
 }
 
 /// One candidate unit of model context.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextItem {
     pub layer: Layer,
     pub text: String,
@@ -30,10 +31,11 @@ pub struct ContextItem {
     pub est_tokens: usize,
     /// ctx-007: set by demote_if_stale when an Ephemeral body quotes a path
     /// whose on-disk contents changed after the thread last read it. Stale
-    /// Ephemeral items are the FIRST thing assemble drops. Defaults false;
-    /// nothing serializes ContextItem today, so no #[serde(default)] needed.
+    /// Ephemeral items are the FIRST thing assemble drops. Defaults false.
+    #[serde(default)]
     pub stale: bool,
     /// ctx-004: pinned Session items are never drop candidates in assemble.
+    #[serde(default)]
     pub pinned: bool,
 }
 
@@ -143,6 +145,37 @@ pub fn inject_memories(
             pinned: false,
         });
     }
+}
+
+/// ctx-015: persist Session-layer items as JSON lines (one item per line),
+/// overwriting `path`. Round-trips with [`load_session_layer`].
+pub fn save_session_layer(path: &Path, items: &[ContextItem]) -> Result<(), String> {
+    let mut body = String::new();
+    for item in items {
+        let line = serde_json::to_string(item)
+            .map_err(|e| format!("save_session_layer {}: {e}", path.display()))?;
+        body.push_str(&line);
+        body.push('\n');
+    }
+    std::fs::write(path, body).map_err(|e| format!("save_session_layer {}: {e}", path.display()))
+}
+
+/// ctx-015: load Session-layer items written by [`save_session_layer`].
+/// A missing file is a fresh session: Ok(vec![]). Any unparsable line is a
+/// corrupted history: Err (never silently truncated).
+pub fn load_session_layer(path: &Path) -> Result<Vec<ContextItem>, String> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("load_session_layer {}: {e}", path.display())),
+    };
+    raw.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str(line)
+                .map_err(|e| format!("load_session_layer {}: {e}", path.display()))
+        })
+        .collect()
 }
 
 /// ctx-008: read-only inspector snapshot over a candidate-item slice.
@@ -634,5 +667,52 @@ mod tests {
     #[test]
     fn weighted_tokens_empty_input_is_zero() {
         assert_eq!(weighted_tokens(&[], &PriorityWeights::default()), 0);
+    }
+
+    // ctx-015
+    #[test]
+    fn session_layer_round_trips_content_layer_tokens_pinned() {
+        let path =
+            std::env::temp_dir().join(format!("zdt-ctx015-roundtrip-{}.jsonl", std::process::id()));
+        let items = vec![
+            item(Layer::Session, "history line", 12),
+            ContextItem {
+                layer: Layer::Session,
+                text: "pinned fact".into(),
+                est_tokens: 7,
+                stale: false,
+                pinned: true,
+            },
+        ];
+        save_session_layer(&path, &items).unwrap();
+        let loaded = load_session_layer(&path).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].text, "history line");
+        assert_eq!(loaded[0].layer, Layer::Session);
+        assert_eq!(loaded[0].est_tokens, 12);
+        assert!(!loaded[0].stale && !loaded[0].pinned);
+        assert_eq!(loaded[1].text, "pinned fact");
+        assert_eq!(loaded[1].est_tokens, 7);
+        assert!(loaded[1].pinned);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_missing_session_layer_is_empty() {
+        let path = std::env::temp_dir().join("zdt-ctx015-missing-never-created.jsonl");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            load_session_layer(&path).unwrap(),
+            Vec::<ContextItem>::new()
+        );
+    }
+
+    #[test]
+    fn corrupted_session_layer_errors() {
+        let path =
+            std::env::temp_dir().join(format!("zdt-ctx015-corrupt-{}.jsonl", std::process::id()));
+        std::fs::write(&path, "{\"layer\":\"session\",\"text\":\n{not json}\n").unwrap();
+        assert!(load_session_layer(&path).is_err());
+        let _ = std::fs::remove_file(&path);
     }
 }

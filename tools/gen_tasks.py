@@ -266,7 +266,7 @@ DOMAINS = [
         ("017", "Semantic retrieval layer (if justified)", ["016"], "RESEARCH"),
         ("018", "Anchor-based invalidation (file fingerprints)", ["001", "edit-001"], "IMPLEMENTED"),
         ("019", "Memory export/import", ["001", "exp-001"], "PLANNED"),
-        ("020", "Consolidation bounds tests (caps honored)", ["006", "014"], "PLANNED"),
+        ("020", "Consolidation bounds tests (caps honored)", ["006", "014"], "IMPLEMENTED"),
     ]),
     ("ctx", "Context Engine", [
         ("001", "Layered context model (prefix/session/turn/ephemeral)", [], "IMPLEMENTED"),
@@ -282,7 +282,7 @@ DOMAINS = [
         ("011", "Never-compact latest user message invariant test", ["004"], "PLANNED"),
         ("012", "Budget allocation unit tests", ["002"], "PLANNED"),
         ("013", "Freshness staleness warnings", ["006"], "PLANNED"),
-        ("014", "Session layer persistence across restarts", ["001"], "PLANNED"),
+        ("014", "Session layer persistence across restarts", ["001"], "IMPLEMENTED"),
         ("015", "Ephemeral layer lifetime management", ["001"], "PLANNED"),
     ]),
     ("prov", "Providers & Router", [

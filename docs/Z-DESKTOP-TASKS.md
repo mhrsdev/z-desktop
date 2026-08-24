@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 140 |
+| IMPLEMENTED | 142 |
 | PARTIAL | 5 |
-| PLANNED | 578 |
+| PLANNED | 576 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -749,7 +749,7 @@
 ### [PLANNED] mem-019 — Memory export/import
 - depends: mem-001, exp-001
 
-### [PLANNED] mem-020 — Consolidation bounds tests (caps honored)
+### [IMPLEMENTED] mem-020 — Consolidation bounds tests (caps honored)
 - depends: mem-006, mem-014
 
 ## Context Engine (`ctx-*`)
@@ -793,7 +793,7 @@
 ### [PLANNED] ctx-013 — Freshness staleness warnings
 - depends: ctx-006
 
-### [PLANNED] ctx-014 — Session layer persistence across restarts
+### [IMPLEMENTED] ctx-014 — Session layer persistence across restarts
 - depends: ctx-001
 
 ### [PLANNED] ctx-015 — Ephemeral layer lifetime management

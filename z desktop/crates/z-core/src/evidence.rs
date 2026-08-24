@@ -567,6 +567,30 @@ pub fn evidence_summary(view: &EvidenceView) -> Vec<(EvidenceKind, usize, usize)
     summary
 }
 
+/// sup-026: fraction of `ok == true` records among `kind` records.
+/// `None` when no `kind` records exist — an absent kind is "no data",
+/// not a 0% rate.
+pub fn ok_rate(view: &EvidenceView, kind: EvidenceKind) -> Option<f32> {
+    let mut total = 0usize;
+    let mut ok = 0usize;
+    for e in &view.items {
+        if e.kind == kind {
+            total += 1;
+            ok += e.ok as usize;
+        }
+    }
+    (total > 0).then(|| ok as f32 / total as f32)
+}
+
+/// sup-026: [`ok_rate`] across all kinds at once. `None` when the view
+/// holds no records at all.
+pub fn overall_ok_rate(view: &EvidenceView) -> Option<f32> {
+    (!view.items.is_empty()).then(|| {
+        let ok = view.items.iter().filter(|e| e.ok).count() as f32;
+        ok / view.items.len() as f32
+    })
+}
+
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
@@ -1297,5 +1321,55 @@ mod evidence_tests {
     #[test]
     fn evidence_summary_is_empty_for_an_empty_view() {
         assert!(evidence_summary(&EvidenceView::default()).is_empty());
+    }
+
+    // sup-026: ok-rate metrics.
+
+    #[test]
+    fn ok_rate_matches_known_ratios() {
+        let mut view = EvidenceView::default();
+        view.items.extend([
+            Evidence::build("t", "u", Some(0), "make"),
+            Evidence::build("t", "u", Some(1), "make"),
+            Evidence::diff("t", "u", false, "wrote x"),
+            Evidence::bench("t", "u", "b", 5),
+        ]);
+        let approx = |got: Option<f32>, want: f32| {
+            assert!((got.expect("some") - want).abs() < 1e-4);
+        };
+        approx(ok_rate(&view, EvidenceKind::Build), 0.5);
+        approx(ok_rate(&view, EvidenceKind::Diff), 0.0);
+        approx(ok_rate(&view, EvidenceKind::Bench), 1.0);
+    }
+
+    #[test]
+    fn ok_rate_is_none_without_records_of_the_kind() {
+        let mut view = EvidenceView::default();
+        // Empty view: None for any kind.
+        assert_eq!(ok_rate(&view, EvidenceKind::Tests), None);
+        assert_eq!(overall_ok_rate(&view), None);
+        // Records exist, but none of the asked kind -> still None.
+        view.items.push(Evidence::build("t", "u", Some(0), "make"));
+        assert_eq!(ok_rate(&view, EvidenceKind::Tests), None);
+        assert_eq!(ok_rate(&view, EvidenceKind::Regression), None);
+        // Overall has data now.
+        assert_eq!(overall_ok_rate(&view), Some(1.0));
+    }
+
+    #[test]
+    fn ok_rate_isolates_kinds_while_overall_spans_them() {
+        let mut view = EvidenceView::default();
+        view.items.extend([
+            Evidence::tests("t", "u", 3, 0, "cargo test"),
+            Evidence::build("t", "u", Some(1), "make"), // failed
+            Evidence::diff("t", "u", false, "wrote x"), // failed
+            Evidence::bench("t", "u", "b", 5),
+        ]);
+        let approx = |got: Option<f32>, want: f32| {
+            assert!((got.expect("some") - want).abs() < 1e-4);
+        };
+        // Failing Build/Diff records must not drag Tests' rate down.
+        approx(ok_rate(&view, EvidenceKind::Tests), 1.0);
+        approx(overall_ok_rate(&view), 0.5); // 2 of 4 across all kinds
     }
 }

@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-24
 
+## Wave 19 (set-010 export + sup-026 ok-rate + edit-007 concurrency) — 2026-08-24 COMPLETE
+
+1. ✅ **set-010**: export_user_json — schema-keyed current-values dump.
+2. ✅ **sup-026**: ok_rate per-kind + overall_ok_rate.
+3. ✅ **edit-007**: concurrent-reader torn-read safety test (4 readers ×
+   writer, 200ms soak; no partial fingerprints observed).
+
+Verification: full workspace suite green — **689 tests, 0 failed**
+(682 → 689). Ledger: 150 IMPLEMENTED (extensions fold into existing
+rows).
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 18 (jour-019 + mem-019 layer export + ctx-016) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-019**: replay_perf_smoke + 10k-record perf test (< 2s gate).

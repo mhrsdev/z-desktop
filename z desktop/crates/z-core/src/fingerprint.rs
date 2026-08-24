@@ -217,4 +217,77 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_file(&outside);
     }
+
+    /// edit-007: a writer hammering atomic_write while 4 readers fingerprint
+    /// the same path must never surface torn content — every read hashes to
+    /// exactly the old or new full payload (rename is all-or-nothing).
+    #[test]
+    fn concurrent_readers_never_see_torn_content_during_atomic_writes() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let dir = std::env::temp_dir().join(format!("zdt-fp-conc-{:x}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("torn.txt");
+
+        // Different lengths: any mixed-prefix/suffix read changes the length,
+        // so a torn hash can't collide with a whole-payload hash by accident.
+        let old = b"OLD-CONTENT-v1";
+        let new = b"NEW-MUCH-LONGER-CONTENT-v2-that-differs";
+        let old_fp = fnv1a64(old);
+        let new_fp = fnv1a64(new);
+
+        // Seed so readers never race a missing file; only torn content.
+        std::fs::write(&path, old).unwrap();
+
+        let done = Arc::new(AtomicBool::new(false));
+        let stop = done.clone();
+
+        let writer_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let mut writes = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                let payload: &[u8] = if writes % 2 == 0 { new } else { old };
+                crate::atomic_write::atomic_write(&writer_path, payload).unwrap();
+                writes += 1;
+            }
+            writes
+        });
+
+        let mut readers = Vec::new();
+        for r in 0..4 {
+            let thread_id = format!("t-conc-{r}");
+            record_fingerprint(&thread_id, "conc.txt", 7);
+            let reader_path = path.clone();
+            readers.push(std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_millis(200);
+                let mut reads = 0u64;
+                while Instant::now() < deadline {
+                    // Registry peek under the same contention load.
+                    assert_eq!(peek_fingerprint(&thread_id, "conc.txt"), Some(7));
+                    let fp = file_fingerprint(&reader_path)
+                        .unwrap_or_else(|e| panic!("reader {r}: read failed mid-write: {e}"));
+                    assert!(
+                        fp == old_fp || fp == new_fp,
+                        "reader {r} saw torn content after {reads} reads: {fp:#x}"
+                    );
+                    reads += 1;
+                }
+                reads
+            }));
+        }
+
+        std::thread::sleep(Duration::from_millis(200));
+        done.store(true, Ordering::Relaxed);
+
+        let flips = writer.join().expect("writer panicked");
+        let mut total = 0;
+        for h in readers {
+            total += h.join().expect("reader panicked");
+        }
+        assert!(flips > 0 && total > 0, "test must actually exercise the race");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

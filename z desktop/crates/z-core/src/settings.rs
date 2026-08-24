@@ -176,6 +176,27 @@ pub fn store(data_dir: &Path, s: &Settings) -> Result<(), String> {
     crate::atomic_write::atomic_write(&data_dir.join("settings.json"), pretty.as_bytes())
 }
 
+/// set-010: pretty JSON of the current user settings for external UIs —
+/// `{ "version": N, "values": { … } }`, one entry per [`schema_defs`] key
+/// (a `Settings` field without a schema entry is skipped). Shape mirrors
+/// [`store`], so the output passes [`migrate`] unchanged.
+pub fn export_user_json(current: &Settings) -> String {
+    let mut values = serde_json::Map::new();
+    for def in schema_defs() {
+        let v = match def.key {
+            "max_tool_rounds" => Some(json!(current.max_tool_rounds)),
+            "approval_timeout_secs" => Some(json!(current.approval_timeout_secs)),
+            "doom_threshold" => Some(json!(current.doom_threshold)),
+            _ => None,
+        };
+        if let Some(v) = v {
+            values.insert(def.key.to_string(), v);
+        }
+    }
+    serde_json::to_string_pretty(&json!({ "version": SETTINGS_VERSION, "values": values }))
+        .expect("settings always serialize")
+}
+
 /// set-007: migrate raw `settings.json` text up to [`SETTINGS_VERSION`],
 /// returning the (possibly rewritten) payload and its new version.
 ///
@@ -832,5 +853,43 @@ mod settings_tests {
             let entry = doc.as_array().unwrap().iter().find(|o| o["key"] == key).unwrap();
             assert_eq!(entry["default"], json!(default), "{key} default rendered");
         }
+    }
+
+    // ---- set-010: user settings JSON export -------------------------------
+
+    #[test]
+    fn export_user_json_round_trips_through_migrate() {
+        let s = Settings { max_tool_rounds: 42, approval_timeout_secs: 60, doom_threshold: 5 };
+        let raw = export_user_json(&s);
+        let (out, v) = migrate(&raw).expect("export is a valid versioned document");
+        assert_eq!(v, SETTINGS_VERSION);
+        assert_eq!(out, raw, "current-version export passes through byte-for-byte");
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(doc.get("version").is_some(), "version field present");
+        // The exported values are the live ones.
+        assert_eq!(doc["values"]["max_tool_rounds"], 42);
+        assert_eq!(doc["values"]["approval_timeout_secs"], 60);
+        assert_eq!(doc["values"]["doom_threshold"], 5);
+    }
+
+    #[test]
+    fn export_user_json_contains_every_schema_key_and_nothing_extra() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&export_user_json(&Settings::default())).unwrap();
+        let values = doc["values"].as_object().expect("values is an object");
+        for def in schema_defs() {
+            assert!(values.contains_key(def.key), "{} exported", def.key);
+        }
+        assert_eq!(values.len(), schema_defs().len(), "no non-schema fields exported");
+    }
+
+    #[test]
+    fn export_user_json_matches_defaults_on_fresh_struct() {
+        let d = Settings::default();
+        let doc: serde_json::Value = serde_json::from_str(&export_user_json(&d)).unwrap();
+        assert_eq!(doc["version"], json!(SETTINGS_VERSION));
+        assert_eq!(doc["values"]["max_tool_rounds"], json!(d.max_tool_rounds));
+        assert_eq!(doc["values"]["approval_timeout_secs"], json!(d.approval_timeout_secs));
+        assert_eq!(doc["values"]["doom_threshold"], json!(d.doom_threshold));
     }
 }

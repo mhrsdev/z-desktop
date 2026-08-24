@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 106 |
+| IMPLEMENTED | 107 |
 | PARTIAL | 2 |
-| PLANNED | 615 |
+| PLANNED | 614 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -819,7 +819,7 @@
 ### [IMPLEMENTED] prov-006 — Router decision logging (reason per call)
 - depends: prov-005
 
-### [PLANNED] prov-007 — Fallback chain evaluation
+### [IMPLEMENTED] prov-007 — Fallback chain evaluation
 - depends: prov-005
 
 ### [PLANNED] prov-008 — Hard-requirement bypass for downgrades

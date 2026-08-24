@@ -89,6 +89,47 @@ pub fn decide(registry: &Registry, model: &str) -> Decision {
     Decision { model: model.to_string(), caps, reason }
 }
 
+/// prov-007: one slot of an evaluated fallback chain. Pure data for now —
+/// runtime wiring waits on multi-provider config (prov-008/prov-024).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FallbackEntry {
+    pub model: String,
+}
+
+/// prov-007: order `available` models for failover. Exact requested match
+/// first (case-insensitive, when actually offered), then models whose
+/// capabilities are a superset of the requested model's (context window and
+/// supports_tools), then the rest; each bucket keeps its input order. A
+/// requested model that is not among `available` never appears in the chain.
+pub fn fallback_chain(
+    registry: &Registry,
+    requested_model: &str,
+    available: &[String],
+) -> Vec<String> {
+    let req_lower = requested_model.to_lowercase();
+    let req_caps = registry.lookup(requested_model);
+    let mut exact = Vec::new();
+    let mut capable = Vec::new();
+    let mut rest = Vec::new();
+    for m in available {
+        if m.to_lowercase() == req_lower {
+            exact.push(m.clone());
+        } else {
+            let c = registry.lookup(m);
+            if c.context_window >= req_caps.context_window
+                && c.supports_tools >= req_caps.supports_tools
+            {
+                capable.push(m.clone());
+            } else {
+                rest.push(m.clone());
+            }
+        }
+    }
+    exact.extend(capable);
+    exact.extend(rest);
+    exact
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +203,49 @@ mod tests {
         assert_eq!(d.reason, "fallback");
         assert_eq!(d.caps, Capabilities::default());
         assert_eq!(decide(&Registry::default(), "").reason, "fallback");
+    }
+
+    #[test]
+    fn requested_model_present_goes_first() {
+        let avail = vec![
+            "other-a".to_string(),
+            "gpt-4o".to_string(),
+            "claude-x".to_string(),
+        ];
+        let chain = fallback_chain(&Registry::default(), "gpt-4o", &avail);
+        assert_eq!(chain[0], "gpt-4o");
+        // Appears exactly once even though it also fits the capable bucket.
+        assert_eq!(chain.iter().filter(|m| *m == "gpt-4o").count(), 1);
+    }
+
+    #[test]
+    fn tool_requiring_request_pushes_toolless_models_to_back() {
+        let r = Registry::default();
+        // plain-chat resolves to default caps (16k, no tools) — too small and
+        // tool-less for a gpt-4o request; claude-x is a full superset.
+        let avail = vec![
+            "plain-chat".to_string(),
+            "gpt-4o".to_string(),
+            "claude-x".to_string(),
+        ];
+        assert_eq!(
+            fallback_chain(&r, "gpt-4o", &avail),
+            vec!["gpt-4o", "claude-x", "plain-chat"]
+        );
+    }
+
+    #[test]
+    fn unavailable_requested_model_is_excluded() {
+        let r = Registry::default();
+        let avail = vec!["llama-3-8b".to_string(), "plain-chat".to_string()];
+        assert_eq!(
+            fallback_chain(&r, "gpt-4o-not-offered", &avail),
+            vec!["llama-3-8b", "plain-chat"]
+        );
+    }
+
+    #[test]
+    fn empty_available_yields_empty_chain() {
+        assert!(fallback_chain(&Registry::default(), "gpt-4o", &[]).is_empty());
     }
 }

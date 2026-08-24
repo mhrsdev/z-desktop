@@ -292,7 +292,7 @@ DOMAINS = [
         ("004", "Model capability registry", [], "IMPLEMENTED"),
         ("005", "Router policy DSL parser", ["004"], "PLANNED"),
         ("006", "Router decision logging (reason per call)", ["005"], "IMPLEMENTED"),
-        ("007", "Fallback chain evaluation", ["005"], "PLANNED"),
+        ("007", "Fallback chain evaluation", ["005"], "IMPLEMENTED"),
         ("008", "Hard-requirement bypass for downgrades", ["007"], "PLANNED"),
         ("009", "Router settings UI (dev mode)", ["005", "set-002"], "PLANNED"),
         ("010", "Provider SSE line-limit hardening", [], "PLANNED"),

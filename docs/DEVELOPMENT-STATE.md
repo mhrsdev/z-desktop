@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## prov-007 Fallback Chain — 2026-08-23 COMPLETE
+
+1. ✅ **prov-007**: fallback_chain(registry, requested, available) —
+   exact match first, then capability supersets (ctx >= and tools >=),
+   then the rest, stable within buckets; unavailable requested never
+   appears. Runtime wiring awaits multi-provider config.
+
+Verification: full workspace suite green — **487 tests, 0 failed**
+(483 → 487). Ledger: 109 IMPLEMENTED.
+
+Next work continues → ui thread selection, sup-021 benchmark recorder,
+or core-028 latency benchmark.
+
 ## sup-020 Dishonest-Agent E2E — 2026-08-23 COMPLETE
 
 1. ✅ **sup-020**: two scripted end-to-end scenarios — dishonest agent

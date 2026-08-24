@@ -261,7 +261,7 @@ DOMAINS = [
         ("012", "Memory inspector panel", ["ui-060"], "PLANNED"),
         ("013", "Recency decay in confidence scoring", ["006"], "IMPLEMENTED"),
         ("014", "Daily write cap enforcement", ["006"], "IMPLEMENTED"),
-        ("015", "Memory replay from journal", ["005", "jour-005"], "PLANNED"),
+        ("015", "Memory replay from journal", ["005", "jour-005"], "IMPLEMENTED"),
         ("016", "Embedding-store choice ADR", [], "RESEARCH"),
         ("017", "Semantic retrieval layer (if justified)", ["016"], "RESEARCH"),
         ("018", "Anchor-based invalidation (file fingerprints)", ["001", "edit-001"], "PLANNED"),

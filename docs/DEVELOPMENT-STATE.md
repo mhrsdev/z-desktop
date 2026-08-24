@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## mem-015 Replay + View Rebuild — 2026-08-23 COMPLETE
+
+1. ✅ **mem-015**: replay_summary (live/superseded/provisional partition,
+   invariant-tested) + MemoryStore::rebuild_views — THE recovery path:
+   folds the journal, rewrites all three layer views atomically, heals
+   corrupted view files (tested), journal untouched.
+
+Verification: full workspace suite green — **469 tests, 0 failed**
+(466 → 469). Ledger: 103 IMPLEMENTED.
+
+Next work continues → core-027 build_request perf benchmark, sup-016
+requirement-skew detector, or prov-007 fallback chain.
+
 ## mem-014 Daily Write Cap — 2026-08-23 COMPLETE
 
 1. ✅ **mem-014**: DAILY_RECORD_CAP=200 (record-count proxy for the

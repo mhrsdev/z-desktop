@@ -148,6 +148,43 @@ pub fn count_today(journal: &Mutex<Journal>, now_ms: u128) -> usize {
     }
 }
 
+/// Health summary of one journal replay (mem-015, ADR-0014): counts over the
+/// last-line-wins folded state, so `live_records + superseded_records +
+/// provisional_records == total_events`. A cheap health view of the memory
+/// subsystem — no records are materialized for callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ReplayReport {
+    /// Distinct memory records after compaction (one per id).
+    pub total_events: usize,
+    pub live_records: usize,
+    pub superseded_records: usize,
+    pub provisional_records: usize,
+}
+
+fn replay_report(view: &MemoryView) -> ReplayReport {
+    ReplayReport {
+        total_events: view.records.len(),
+        live_records: view.live().len(),
+        superseded_records: view
+            .records
+            .iter()
+            .filter(|r| r.superseded_by.is_some())
+            .count(),
+        provisional_records: view
+            .records
+            .iter()
+            .filter(|r| r.status == Status::Provisional)
+            .count(),
+    }
+}
+
+/// Folds the journal and counts the folded state by status/superseded
+/// (mem-015). Fails loud on unreadable segments or corrupt payloads, same as
+/// [`MemoryView::fold`].
+pub fn replay_summary(journal_path: &Path) -> Result<ReplayReport, String> {
+    Ok(replay_report(&MemoryView::fold(journal_path)?))
+}
+
 /// Folded state of all `memory_recorded` events in a journal segment:
 /// last line per id wins (log-compaction semantics), insertion order kept.
 #[derive(Debug, Default, PartialEq)]
@@ -425,6 +462,23 @@ impl MemoryStore {
             }
         }
         Ok(records)
+    }
+
+    /// Recovery path (mem-015, ADR-0014 "views are caches, the journal is
+    /// truth"): refolds the journal segment and rewrites all three layer
+    /// views from its live records. Use after view corruption or manual
+    /// edits; the journal itself is never touched.
+    pub fn rebuild_views(&self, journal_path: &Path) -> Result<ReplayReport, String> {
+        let view = MemoryView::fold(journal_path)?;
+        let mut live_by_layer: HashMap<Layer, Vec<MemoryRecord>> = HashMap::new();
+        for r in view.live() {
+            live_by_layer.entry(r.layer).or_default().push(r.clone());
+        }
+        for layer in [Layer::Project, Layer::Semantic, Layer::Episodic] {
+            let records = live_by_layer.remove(&layer).unwrap_or_default();
+            self.write_layer_view(layer, &records)?;
+        }
+        Ok(replay_report(&view))
     }
 }
 
@@ -1337,5 +1391,141 @@ mod memory_tests {
         assert!((hits[1].score - (0.3 * 0.9 * 0.25 + 1.0)).abs() < 1e-5);
         // Cap still enforced through the decay path.
         assert_eq!(retrieve_with_decay(&view, &[], 1, 2 * DAY_MS, 1.0).len(), 1);
+    }
+
+    #[test]
+    fn replay_summary_counts_match_seeded_events() {
+        let dir = temp_dir("replay-summary");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let mut a = rec("mem-a", Status::Promoted);
+        record(&journal, &a);
+        record(&journal, &rec("mem-b", Status::Promoted));
+        record(&journal, &rec("mem-c", Status::Provisional));
+        a.superseded_by = Some("mem-b".into());
+        record(&journal, &a); // backfilled predecessor line wins by id
+        drop(journal);
+
+        let report = replay_summary(&path).expect("summary");
+        assert_eq!(
+            report,
+            ReplayReport {
+                total_events: 3,        // one per id after last-line-wins
+                live_records: 1,        // only mem-b
+                superseded_records: 1,  // mem-a
+                provisional_records: 1, // mem-c
+            }
+        );
+        assert_eq!(
+            report.live_records + report.superseded_records + report.provisional_records,
+            report.total_events
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rebuild_views_layer_files_read_back_identical_to_fold_live() {
+        let dir = temp_dir("rebuild-views");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let store = MemoryStore::open(&dir);
+        // Seed across layers: promoted project + semantic, provisional
+        // episodic, and a superseded project duplicate.
+        let mut old = MemoryRecord::new(
+            "mem-old",
+            Layer::Project,
+            "stale project fact",
+            prov("msg-1"),
+            0.5,
+            Status::Promoted,
+        )
+        .expect("valid");
+        record(&journal, &old);
+        record(&journal, &rec("mem-p", Status::Promoted)); // Project
+        record(
+            &journal,
+            &MemoryRecord::new(
+                "mem-e",
+                Layer::Episodic,
+                "episodic note",
+                prov("msg-2"),
+                0.8,
+                Status::Provisional,
+            )
+            .expect("valid"),
+        );
+        old.superseded_by = Some("mem-p".into());
+        record(&journal, &old); // backfilled predecessor line wins by id
+        let semantic = MemoryRecord::new(
+            "mem-s",
+            Layer::Semantic,
+            "semantic fact",
+            prov("msg-3"),
+            0.7,
+            Status::Promoted,
+        )
+        .expect("valid");
+        record(&journal, &semantic);
+        drop(journal);
+
+        // Corrupt every view first so rebuild must actually heal them.
+        std::fs::create_dir_all(dir.join("memory")).expect("mkdir");
+        std::fs::write(dir.join("memory").join("project.jsonl"), "{broken").expect("junk");
+
+        let report = store.rebuild_views(&path).expect("rebuild");
+        assert_eq!(report, replay_summary(&path).expect("summary"));
+
+        let view = MemoryView::fold(&path).expect("fold");
+        for layer in [Layer::Project, Layer::Semantic, Layer::Episodic] {
+            let expected: Vec<MemoryRecord> = view
+                .records
+                .iter()
+                .filter(|r| {
+                    r.layer == layer && r.status == Status::Promoted && r.superseded_by.is_none()
+                })
+                .cloned()
+                .collect();
+            assert_eq!(
+                store.read_layer(layer).expect("read back"),
+                expected,
+                "{layer:?} view matches fold+live"
+            );
+        }
+        assert_eq!(
+            store.read_layer(Layer::Project).expect("project"),
+            vec![rec("mem-p", Status::Promoted)],
+            "superseded + corrupt-junk healed"
+        );
+        assert_eq!(
+            store.read_layer(Layer::Semantic).expect("semantic"),
+            vec![semantic]
+        );
+        assert!(store
+            .read_layer(Layer::Episodic)
+            .expect("episodic")
+            .is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_journal_yields_zero_replay_report_and_empty_views() {
+        let dir = temp_dir("replay-empty");
+        let path = dir.join("runtime.jsonl");
+        drop(Journal::open(&dir, "runtime").expect("open")); // creates empty segment
+
+        assert_eq!(replay_summary(&path).expect("summary"), ReplayReport::default());
+
+        let store = MemoryStore::open(&dir);
+        assert_eq!(
+            store.rebuild_views(&path).expect("rebuild"),
+            ReplayReport::default()
+        );
+        for layer in [Layer::Project, Layer::Semantic, Layer::Episodic] {
+            assert!(
+                store.read_layer(layer).expect("read").is_empty(),
+                "{layer:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

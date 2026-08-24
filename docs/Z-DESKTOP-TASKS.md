@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 100 |
+| IMPLEMENTED | 101 |
 | PARTIAL | 2 |
-| PLANNED | 621 |
+| PLANNED | 620 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -734,7 +734,7 @@
 ### [IMPLEMENTED] mem-014 — Daily write cap enforcement
 - depends: mem-006
 
-### [PLANNED] mem-015 — Memory replay from journal
+### [IMPLEMENTED] mem-015 — Memory replay from journal
 - depends: mem-005, jour-005
 
 ### [RESEARCH] mem-016 — Embedding-store choice ADR

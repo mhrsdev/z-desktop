@@ -220,6 +220,15 @@ pub fn write_fixture(path: &Path, turns: usize, msgs_per_turn: usize) -> Result<
     Ok(seq as usize)
 }
 
+/// jour-019: replays the journal segment at `path` exactly once, wall-clock
+/// timed. Returns `(record_count, elapsed_ms)` so callers (and the smoke
+/// test below) can assert replay speed against their own budget.
+pub fn replay_perf_smoke(path: &Path) -> Result<(usize, u128), String> {
+    let start = std::time::Instant::now();
+    let count = Journal::replay(path)?.len();
+    Ok((count, start.elapsed().as_millis()))
+}
+
 /// UTC calendar day ("YYYY-MM-DD") of a wall-clock millisecond timestamp.
 /// Days-since-epoch → civil date (Howard Hinnant's algorithm); no chrono dep.
 fn utc_day(ts_ms: u128) -> String {
@@ -1266,6 +1275,25 @@ pub(crate) mod reducer_tests {
         let path = dir.join("empty-fixture.jsonl");
         assert_eq!(write_fixture(&path, 0, 5).expect("write"), 0);
         assert_eq!(Journal::replay(&path).expect("replay").len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// jour-019 perf smoke: a 10k-record fixture must replay well under 2s.
+    #[test]
+    fn replay_perf_smoke_10k_records_under_two_seconds() {
+        let dir = temp_dir("perf-smoke");
+        let path = dir.join("perf.jsonl");
+        // 1000 turns * (1 + 9) = 10_000 records.
+        let expected = write_fixture(&path, 1_000, 9).expect("write fixture");
+
+        let (count, ms) = replay_perf_smoke(&path).expect("perf smoke");
+        assert_eq!(count, expected);
+        assert!(
+            ms < 2_000,
+            "replay of {count} records took {ms}ms (budget: <2000ms)"
+        );
+        let recs_per_sec = count as f64 / (ms.max(1) as f64 / 1000.0);
+        println!("jour-019 replay perf: {count} records in {ms}ms ({recs_per_sec:.0} records/sec)");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

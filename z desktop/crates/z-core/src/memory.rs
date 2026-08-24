@@ -493,6 +493,15 @@ pub fn import_records(json: &str, journal: &Mutex<Journal>) -> Result<usize, Str
     Ok(imported)
 }
 
+/// Exports one layer's view as a pretty JSON array (mem-019): reads
+/// `<layer>.jsonl` via [`MemoryStore::read_layer`] — the per-layer slice of
+/// [`export_json`].
+pub fn export_layer(store: &MemoryStore, layer: Layer) -> Result<String, String> {
+    let records = store.read_layer(layer)?;
+    serde_json::to_string_pretty(&records)
+        .map_err(|e| format!("memory: cannot serialize {} view: {e}", layer.as_str()))
+}
+
 /// Owns the `data/memory/` view directory: one append-only JSONL file per
 /// layer, rebuilt from the journal (delete any of them and replaying
 /// reproduces equivalent state — ADR-0014 D2).
@@ -1051,6 +1060,42 @@ mod memory_tests {
             .read_layer(Layer::Project)
             .expect("re-read")
             .is_empty());
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn export_layer_round_trips_through_read_layer() {
+        let data_dir = temp_dir("export-layer");
+        let store = MemoryStore::open(&data_dir);
+        let project = vec![rec("mem-x", Status::Promoted)];
+        store
+            .write_layer_view(Layer::Project, &project)
+            .expect("write project");
+        let semantic = vec![MemoryRecord::new(
+            "mem-y",
+            Layer::Semantic,
+            "semantic note",
+            prov("pass-9"),
+            0.5,
+            Status::Provisional,
+        )
+        .expect("valid")];
+        store
+            .write_layer_view(Layer::Semantic, &semantic)
+            .expect("write semantic");
+
+        let json = export_layer(&store, Layer::Project).expect("export");
+        // Round-trip: parses back to exactly what read_layer returns for that
+        // layer — other layers excluded.
+        let parsed: Vec<MemoryRecord> = serde_json::from_str(&json).expect("parse export");
+        assert_eq!(parsed, store.read_layer(Layer::Project).expect("read"));
+        assert_eq!(json, serde_json::to_string_pretty(&project).unwrap());
+
+        // Never-written layer: empty array, not an error.
+        assert_eq!(
+            export_layer(&store, Layer::Episodic).expect("export empty"),
+            "[]"
+        );
         let _ = std::fs::remove_dir_all(&data_dir);
     }
 

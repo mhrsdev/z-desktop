@@ -1727,6 +1727,7 @@ fn enforce_budget(msgs: Vec<StoredMessage>, budget: usize) -> Vec<StoredMessage>
             est_tokens: stored_message_tokens(m),
             stale: false,
             pinned: false,
+            compacted: false,
         })
         .collect::<Vec<_>>();
     let mut keep: Vec<usize> = crate::context::assemble(items, budget)
@@ -2041,6 +2042,7 @@ mod budget_tests {
                     text,
                     stale: false,
                     pinned: false,
+                    compacted: false,
                 }
             })
             .collect();

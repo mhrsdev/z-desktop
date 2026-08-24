@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 146 |
+| IMPLEMENTED | 148 |
 | PARTIAL | 6 |
-| PLANNED | 571 |
+| PLANNED | 569 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -209,7 +209,7 @@
 ### [RESEARCH] jour-018 — SQLite-vs-JSONL decision ADR with load data
 - depends: jour-027
 
-### [PLANNED] jour-019 — Journal perf benchmark (10k records append+replay)
+### [IMPLEMENTED] jour-019 — Journal perf benchmark (10k records append+replay)
 - depends: jour-003
 
 ### [PLANNED] jour-020 — Crash-injection test: kill during append
@@ -766,7 +766,7 @@
 ### [PARTIAL] ctx-004 — Compaction procedure (pinned facts + round summaries)
 - depends: ctx-003
 
-### [PLANNED] ctx-005 — Idempotent compaction per span
+### [IMPLEMENTED] ctx-005 — Idempotent compaction per span
 - depends: ctx-004
 
 ### [IMPLEMENTED] ctx-006 — Freshness metadata on context items

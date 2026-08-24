@@ -37,13 +37,19 @@ pub struct ContextItem {
     /// ctx-004: pinned Session items are never drop candidates in assemble.
     #[serde(default)]
     pub pinned: bool,
+    /// ctx-016: set by [`compact_once`] on its survivors. Already-compacted
+    /// items are never drop candidates — later passes preserve them verbatim,
+    /// making repeated compaction at a fixed budget a no-op. Defaults false.
+    #[serde(default)]
+    pub compacted: bool,
 }
 
 /// Pure allocation walk (ADR-0013 D2/D3, ctx-002): keep items in the given
 /// order; if their total exceeds `budget`, drop stale Ephemeral first, then
 /// remaining Ephemeral, then oldest Turn items, then oldest Session items —
 /// never Prefix, never the last Session item (the live user message; its
-/// result must survive), never a ctx-004 pinned item. Returns kept items;
+/// result must survive), never a ctx-004 pinned item, never an
+/// already-compacted ctx-016 item. Returns kept items;
 /// total fits whenever prefix + pin alone do.
 pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Vec<ContextItem> {
     let mut total: usize = items.iter().map(|i| i.est_tokens).sum();
@@ -69,6 +75,7 @@ pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Vec<ContextItem> {
                 && item.stale == only_stale
                 && Some(idx) != last_session
                 && !item.pinned
+                && !item.compacted
             {
                 dropped[idx] = true;
                 total = total.saturating_sub(item.est_tokens);
@@ -120,6 +127,19 @@ pub fn set_pinned(
     }
 }
 
+/// ctx-016: ONE idempotent compaction pass. Runs [`assemble`] against
+/// `budget_tokens`, then marks every survivor `compacted`. Because assemble
+/// never drops already-compacted items, feeding its output back in — at the
+/// same or any smaller budget — returns it unchanged: the second call is a
+/// no-op and survivors of earlier passes are preserved verbatim.
+pub fn compact_once(items: Vec<ContextItem>, budget_tokens: usize) -> Vec<ContextItem> {
+    let mut kept = assemble(items, budget_tokens);
+    for item in &mut kept {
+        item.compacted = true;
+    }
+    kept
+}
+
 /// mem-009 (ADR-0014): appends ranked memories as Turn-layer items
 /// ("[memory] {content}") while the cumulative added estimate stays within
 /// `budget_tokens`; ranked order means the first overflow ends injection.
@@ -143,6 +163,7 @@ pub fn inject_memories(
             est_tokens,
             stale: false,
             pinned: false,
+            compacted: false,
         });
     }
 }
@@ -318,6 +339,7 @@ mod tests {
             est_tokens,
             stale: false,
             pinned: false,
+            compacted: false,
         }
     }
 
@@ -486,6 +508,7 @@ mod tests {
                 est_tokens: 10,
                 stale: false,
                 pinned: false,
+                compacted: false,
             },
             ContextItem {
                 layer: Layer::Ephemeral,
@@ -493,6 +516,7 @@ mod tests {
                 est_tokens: 10,
                 stale: true,
                 pinned: false,
+                compacted: false,
             },
         ];
         // Total 45; budget fits all but one ephemeral — the STALE one goes.
@@ -522,6 +546,7 @@ mod tests {
                 est_tokens: 4,
                 stale: true,
                 pinned: false,
+                compacted: false,
             },
             ContextItem {
                 layer: Layer::Ephemeral,
@@ -529,6 +554,7 @@ mod tests {
                 est_tokens: 6,
                 stale: false,
                 pinned: false,
+                compacted: false,
             },
         ];
         let s = stats(&items);
@@ -682,6 +708,7 @@ mod tests {
                 est_tokens: 7,
                 stale: false,
                 pinned: true,
+                compacted: false,
             },
         ];
         save_session_layer(&path, &items).unwrap();
@@ -714,5 +741,43 @@ mod tests {
         std::fs::write(&path, "{\"layer\":\"session\",\"text\":\n{not json}\n").unwrap();
         assert!(load_session_layer(&path).is_err());
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ctx-016
+    #[test]
+    fn double_compaction_is_idempotent() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 5),
+            item(Layer::Session, "oldest", 20),
+            item(Layer::Session, "latest", 10), // last session: pinned survivor
+            item(Layer::Turn, "t1", 15),
+            item(Layer::Ephemeral, "dump", 30),
+        ];
+        let once = compact_once(items, 40);
+        assert!(once.iter().all(|i| i.compacted), "survivors are marked");
+        let twice = compact_once(once.clone(), 40);
+        assert_eq!(once, twice, "second identical pass is a no-op");
+    }
+
+    #[test]
+    fn compacted_items_survive_tighter_budgets() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 5),
+            item(Layer::Session, "old1", 20),
+            item(Layer::Session, "old2", 20),
+            item(Layer::Session, "latest", 20),
+            item(Layer::Turn, "t1", 20),
+            item(Layer::Turn, "t2", 20),
+        ];
+        // Total 105; budget drops both Turn items, keeps 65 tokens of Session.
+        let once = compact_once(items, 70);
+        assert_eq!(
+            once.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(),
+            vec!["sys", "old1", "old2", "latest"]
+        );
+        // Budget 30 would normally keep only sys+latest; the already-compacted
+        // old1/old2 are preserved verbatim instead of re-dropped.
+        let tighter = compact_once(once.clone(), 30);
+        assert_eq!(once, tighter);
     }
 }

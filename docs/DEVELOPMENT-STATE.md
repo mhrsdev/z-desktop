@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-24
 
+## Wave 18 (jour-019 + mem-019 layer export + ctx-016) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-019**: replay_perf_smoke + 10k-record perf test (< 2s gate).
+2. ✅ **mem-019 ext**: export_layer per-layer pretty JSON.
+3. ✅ **ctx-016**: compact_once idempotent compaction (compacted items
+   survive tighter budgets; double-run identical). ctx-005 flipped.
+
+Verification: full workspace suite green — **682 tests, 0 failed**
+(678 → 682). Ledger: 150 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 17 (jour-017 + set-008 export + regression history) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-017**: write_fixture deterministic journal generator

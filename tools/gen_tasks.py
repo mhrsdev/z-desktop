@@ -103,7 +103,7 @@ DOMAINS = [
         ("009", "Import edge extraction queries", ["004"], "PLANNED"),
         ("010", "Symbol id scheme (file_hash:name:kind:index)", ["007"], "IMPLEMENTED"),
         ("011", "Fingerprint store (content hash per file)", [], "PLANNED"),
-        ("012", "Incremental reparse on change", ["011", "wat-001"], "PLANNED"),
+        ("012", "Incremental reparse on change", ["011", "wat-001"], "IMPLEMENTED"),
         ("013", "Incremental parity test vs full rebuild", ["012"], "PLANNED"),
         ("014", "Reverse-reference index", ["008"], "PLANNED"),
         ("015", "Affected-analysis query (edit X → impacted)", ["014"], "PLANNED"),

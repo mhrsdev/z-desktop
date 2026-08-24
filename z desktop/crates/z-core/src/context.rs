@@ -388,6 +388,39 @@ pub fn weighted_tokens(items: &[ContextItem], w: &PriorityWeights) -> usize {
         .sum()
 }
 
+/// ctx-009 ext: validated constructor — every weight must be finite and >= 0.0.
+pub fn weights_from_parts(
+    prefix: f32,
+    session: f32,
+    turn: f32,
+    ephemeral: f32,
+) -> Result<PriorityWeights, String> {
+    for (name, w) in [
+        ("prefix", prefix),
+        ("session", session),
+        ("turn", turn),
+        ("ephemeral", ephemeral),
+    ] {
+        if !w.is_finite() || w < 0.0 {
+            return Err(format!("invalid {name} weight: {w}"));
+        }
+    }
+    Ok(PriorityWeights {
+        prefix,
+        session,
+        turn,
+        ephemeral,
+    })
+}
+
+/// ctx-009 ext: alias for [`PriorityWeights::default`] (all 1.0).
+pub const NEUTRAL_WEIGHTS: PriorityWeights = PriorityWeights {
+    prefix: 1.0,
+    session: 1.0,
+    turn: 1.0,
+    ephemeral: 1.0,
+};
+
 /// ctx-018: one-line budget report for the inspector. `used` is the
 /// [`weighted_tokens`] total at default weights; pct is clamped to 0-999.
 pub fn budget_report(items: &[ContextItem], budget_tokens: usize) -> String {
@@ -768,6 +801,28 @@ mod tests {
     #[test]
     fn weighted_tokens_empty_input_is_zero() {
         assert_eq!(weighted_tokens(&[], &PriorityWeights::default()), 0);
+    }
+
+    // ctx-009 ext
+    #[test]
+    fn weights_from_parts_valid_passthrough() {
+        let w = weights_from_parts(0.5, 1.5, 0.0, 2.0).unwrap();
+        assert_eq!(w, PriorityWeights { prefix: 0.5, session: 1.5, turn: 0.0, ephemeral: 2.0 });
+        assert_eq!(NEUTRAL_WEIGHTS, PriorityWeights::default());
+    }
+
+    #[test]
+    fn weights_from_parts_rejects_negative() {
+        assert!(weights_from_parts(-0.1, 1.0, 1.0, 1.0).is_err());
+        assert!(weights_from_parts(1.0, -1.0, 1.0, 1.0).is_err());
+        assert!(weights_from_parts(1.0, 1.0, -1.0, 1.0).is_err());
+        assert!(weights_from_parts(1.0, 1.0, 1.0, -1.0).is_err());
+    }
+
+    #[test]
+    fn weights_from_parts_rejects_nan() {
+        assert!(weights_from_parts(f32::NAN, 1.0, 1.0, 1.0).is_err());
+        assert!(weights_from_parts(f32::INFINITY, 1.0, 1.0, 1.0).is_err());
     }
 
     // ctx-015

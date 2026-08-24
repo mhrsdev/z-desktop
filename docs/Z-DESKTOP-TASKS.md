@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 149 |
+| IMPLEMENTED | 150 |
 | PARTIAL | 6 |
-| PLANNED | 568 |
+| PLANNED | 567 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -280,7 +280,7 @@
 ### [PLANNED] idx-011 — Fingerprint store (content hash per file)
 - depends: —
 
-### [PLANNED] idx-012 — Incremental reparse on change
+### [IMPLEMENTED] idx-012 — Incremental reparse on change
 - depends: idx-011, wat-001
 
 ### [PLANNED] idx-013 — Incremental parity test vs full rebuild

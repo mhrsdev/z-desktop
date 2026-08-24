@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-24
 
+## Wave 25 (jour-022 + ctx-009 ext + idx-012) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-022**: task_state_journal_events idempotent re-sync drafts.
+2. ✅ **ctx-009 ext**: weights_from_parts validation + NEUTRAL_WEIGHTS.
+3. ✅ **idx-012**: incremental_reparse — old-hash purge + re-add
+   (idx-012 flipped).
+
+Verification: full workspace suite green — **731 tests, 0 failed**
+(723 → 731). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 24 (sup-025 + ctx-018 + set-012) — 2026-08-24 COMPLETE
 
 1. ✅ **sup-025**: detector_noise_report one-line evidence summary.

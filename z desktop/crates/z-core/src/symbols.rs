@@ -109,6 +109,23 @@ impl SymbolTable {
     }
 }
 
+/// Incremental reparse (idx-012): drop stale entries for this file, then
+/// index the new content and return the new table total. A `Some` old_hash
+/// is purged even when equal to `file_hash` — that makes an unchanged-file
+/// re-index a clean replace instead of duplicating every symbol.
+pub fn incremental_reparse(
+    table: &mut SymbolTable,
+    file_hash: &str,
+    old_hash: Option<&str>,
+    source: &str,
+) -> usize {
+    if let Some(old) = old_hash {
+        table.entries.retain(|(h, _, _)| h != old);
+    }
+    table.add_file(file_hash, source);
+    table.total()
+}
+
 /// Aggregate stats over a [`SymbolTable`] (idx-011).
 #[derive(Debug, PartialEq)]
 pub struct SymbolTableStats {
@@ -286,6 +303,40 @@ fn helper() {}
         // Malformed source degrades to zero added symbols, no panic.
         table.add_file("h3", "fn {{{ broken !!!");
         assert_eq!(table.total(), 4);
+    }
+
+    #[test]
+    fn incremental_reparse_replaces_old_hash_symbols() {
+        let mut table = SymbolTable::default();
+        table.add_file("old", "fn stale() {}\nstruct Old;");
+        table.add_file("other", "fn keep() {}");
+        let total = incremental_reparse(&mut table, "new", Some("old"), "fn fresh() {}\nenum New {}");
+        assert_eq!(total, 3);
+        assert!(table.lookup_name("stale").is_empty(), "old symbols gone");
+        assert!(!table.lookup_name("fresh").is_empty(), "new present");
+        assert!(!table.lookup_name("keep").is_empty());
+        // New symbols carry the new hash in their ids.
+        assert!(table
+            .lookup_name("fresh")
+            .iter()
+            .all(|id| id.starts_with("new:")));
+    }
+
+    #[test]
+    fn incremental_reparse_same_hash_does_not_duplicate() {
+        let mut table = SymbolTable::default();
+        table.add_file("same", "fn a() {}\nstruct B;");
+        let total = incremental_reparse(&mut table, "same", Some("same"), "fn a() {}\nstruct B;");
+        // Same-hash re-add replaces rather than appends.
+        assert_eq!(total, 2);
+        assert_eq!(table.lookup_name("a").len(), 1);
+    }
+
+    #[test]
+    fn incremental_reparse_none_old_hash_just_adds() {
+        let mut table = SymbolTable::default();
+        let total = incremental_reparse(&mut table, "h1", None, "fn only() {}");
+        assert_eq!(total, 1);
     }
 
     #[test]

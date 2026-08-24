@@ -267,6 +267,11 @@ pub enum TaskStatus {
 #[derive(Debug, Default, PartialEq)]
 pub struct TasksView {
     pub tasks: HashMap<String, TaskRecord>,
+    /// jour-022: status carried by each task's LAST `task_state_changed`
+    /// event, tracked during fold so re-sync helpers can detect drift between
+    /// the folded state and what the journal last said (they only diverge
+    /// when a caller mutates `tasks` out-of-band, e.g. from a snapshot).
+    pub(crate) last_event_status: HashMap<String, TaskStatus>,
 }
 
 /// Segment name used by [`TaskStore`] and orch-024 recovery (`runtime.rs`).
@@ -328,6 +333,7 @@ impl TasksView {
                                 );
                             }
                         }
+                        view.last_event_status.insert(id.to_string(), status);
                     }
                 }
                 Err(e) => bad_payload = Some(e),
@@ -405,6 +411,30 @@ pub fn task_state_json(view: &TasksView) -> String {
         .map(|(id, status)| serde_json::json!({ "id": id, "status": status }))
         .collect();
     serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".into())
+}
+
+/// jour-022: idempotent re-sync batch — one shape-only draft per task whose
+/// folded status differs from its LAST `task_state_changed` event (or that
+/// has no recorded event yet). Each draft is identical in shape to what
+/// [`TaskStore::transition`] appends, so appending the returned batch and
+/// re-folding yields no further drift. Sorted by id for deterministic batches.
+pub fn task_state_journal_events(view: &TasksView) -> Vec<RecordDraft> {
+    let mut stale: Vec<&TaskRecord> = view
+        .tasks
+        .values()
+        .filter(|t| view.last_event_status.get(&t.id) != Some(&t.status))
+        .collect();
+    stale.sort_by(|a, b| a.id.cmp(&b.id));
+    stale
+        .into_iter()
+        .map(|t| {
+            RecordDraft::new(
+                JournalKind::TaskStateChanged,
+                None,
+                serde_json::json!({ "id": t.id, "status": t.status }),
+            )
+        })
+        .collect()
 }
 
 /// Newest `user`-role `MessagePersisted` record's `text`, via one full replay.
@@ -1456,6 +1486,71 @@ pub(crate) mod reducer_tests {
         );
         let recs_per_sec = count as f64 / (ms.max(1) as f64 / 1000.0);
         println!("jour-019 replay perf: {count} records in {ms}ms ({recs_per_sec:.0} records/sec)");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// jour-022: a view folded straight off the journal never drifts.
+    #[test]
+    fn task_state_journal_events_no_drift_is_empty() {
+        let dir = temp_dir("jour-022-clean");
+        {
+            let mut j = Journal::open(&dir, TASKS_SEGMENT).expect("open");
+            append(
+                &mut j,
+                JournalKind::TaskStateChanged,
+                None,
+                json!({"id": "t1", "status": "pending"}),
+            );
+            append(
+                &mut j,
+                JournalKind::TaskStateChanged,
+                None,
+                json!({"id": "t1", "status": "running"}),
+            );
+        }
+        let view = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl"))).expect("fold");
+        assert!(task_state_journal_events(&view).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// jour-022: out-of-band knowledge that a task moved on yields exactly one
+    /// shape-only draft for it; untouched tasks stay silent.
+    #[test]
+    fn task_state_journal_events_emits_one_draft_per_stale_task() {
+        let dir = temp_dir("jour-022-stale");
+        {
+            let mut j = Journal::open(&dir, TASKS_SEGMENT).expect("open");
+            append(
+                &mut j,
+                JournalKind::TaskStateChanged,
+                None,
+                json!({"id": "t1", "status": "pending"}),
+            );
+            append(
+                &mut j,
+                JournalKind::TaskStateChanged,
+                None,
+                json!({"id": "t1", "status": "running"}),
+            );
+            append(
+                &mut j,
+                JournalKind::TaskStateChanged,
+                None,
+                json!({"id": "t2", "status": "done"}),
+            );
+        }
+        let mut view = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl"))).expect("fold");
+        // Orchestrator/snapshot knows t1 finished since the journal last spoke.
+        view.tasks.get_mut("t1").expect("t1").status = TaskStatus::Done;
+
+        let drafts = task_state_journal_events(&view);
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].kind, JournalKind::TaskStateChanged);
+        assert_eq!(drafts[0].thread_id, None);
+        assert_eq!(
+            drafts[0].payload,
+            json!({"id": "t1", "status": TaskStatus::Done})
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

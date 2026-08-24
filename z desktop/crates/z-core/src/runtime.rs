@@ -364,6 +364,8 @@ impl Runtime {
                 Command::GetEvidence { turn_id } => self.send_evidence(turn_id),
                 // sup-017: user appeals a supervision verdict.
                 Command::AppealVerdict { turn_id, .. } => self.appeal_verdict(turn_id),
+                // set-004: live settings change; swaps the Shared snapshot Arc.
+                Command::SetSetting { key, value } => self.set_setting(key, value),
             }
         }
         log::info!("command channel closed; runtime stopping");
@@ -463,6 +465,10 @@ impl Runtime {
                     "fields": config_field_names(config),
                 }),
             ),
+            Command::SetSetting { key, .. } => (
+                None,
+                json!({ "command": "set_setting", "key": key }),
+            ),
         };
         Runtime::journal_record(&self.journal, JournalKind::CommandReceived, thread_id, payload);
     }
@@ -530,6 +536,30 @@ impl Runtime {
         let path = self.data_dir.join("config.json");
         if let Ok(json) = serde_json::to_string_pretty(&config) {
             let _ = std::fs::write(path, json);
+        }
+    }
+
+    /// set-004 (ADR-0011 swap-on-write): validate one SetSetting, persist it,
+    /// and swap the shared snapshot `Arc`. Running turns keep their turn-start
+    /// clone; the next turn sees the new values with no restart. Rejections
+    /// ride ProviderStatus with a `settings:` prefix and change nothing.
+    fn set_setting(&self, key: Id, value: serde_json::Value) {
+        let current = self.shared.settings.lock().unwrap().get().as_ref().clone();
+        match crate::settings::apply(&current, &key, &value) {
+            Ok(updated) => {
+                if let Err(e) = crate::settings::store(&self.data_dir, &updated) {
+                    log::warn!("set_setting: persist failed ({e}); applying in memory only");
+                }
+                *self.shared.settings.lock().unwrap() =
+                    Arc::new(crate::settings::Snapshot::new(updated));
+                let _ = self.event_tx.send(Event::SettingChanged { key, value });
+            }
+            Err(message) => {
+                let _ = self.event_tx.send(Event::ProviderStatus {
+                    ok: false,
+                    message: format!("settings: {message}"),
+                });
+            }
         }
     }
 
@@ -2803,6 +2833,185 @@ mod settings_wiring_tests {
             provider.0.load(std::sync::atomic::Ordering::Relaxed),
             2,
             "exactly max_tool_rounds provider rounds ran"
+        );
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+}
+
+#[cfg(test)]
+mod settings_command_tests {
+    //! set-004: SetSetting through the live serve() loop — rejection leaves
+    //! the snapshot untouched; an accepted change swaps the Arc so the NEXT
+    //! turn in the SAME session picks it up with no restart.
+
+    use super::*;
+    use super::steering_tests::make_runtime_at;
+
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn unique_data_dir(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("zdt-setcmd-{tag}-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("threads")).expect("create temp data dir");
+        dir
+    }
+
+    /// A provider that always demands one more fs_read tool call, forever.
+    /// `calls` is shared so tests can count requests without downcasting.
+    struct AlwaysToolProvider {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl provider::Provider for AlwaysToolProvider {
+        fn describe(&self) -> String {
+            "always-tool".into()
+        }
+        fn stream(
+            &self,
+            _req: &provider::ChatRequest,
+            _on_item: &mut dyn FnMut(provider::StreamItem),
+        ) -> Result<provider::StreamOutcome, String> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(provider::StreamOutcome {
+                text: String::new(),
+                tool_calls: vec![provider::ToolCallSpec {
+                    id: format!(
+                        "call-{}",
+                        self.calls.load(std::sync::atomic::Ordering::Relaxed)
+                    ),
+                    name: "fs_read".into(),
+                    arguments_json: r#"{"path":"README.md"}"#.into(),
+                }],
+            })
+        }
+    }
+
+    fn always_tool_shared(calls: Arc<std::sync::atomic::AtomicUsize>) -> Shared {
+        Shared {
+            provider: Mutex::new(Some(Arc::new(AlwaysToolProvider { calls }) as Arc<dyn provider::Provider>)),
+            provider_label: Mutex::new("always-tool".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+
+    /// Drive one command through serve(); returns events until `predicate`
+    /// matches or the 10s deadline passes.
+    fn serve_until(
+        rt: Runtime,
+        cmd_tx: Sender<(u64, Command)>,
+        event_rx: std::sync::mpsc::Receiver<Event>,
+        command: Command,
+        predicate: impl Fn(&Event) -> bool,
+    ) -> Event {
+        let server = std::thread::spawn(move || rt.serve());
+        cmd_tx.send((1, command)).expect("send command");
+        drop(cmd_tx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            assert!(std::time::Instant::now() < deadline, "event never arrived");
+            match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(event) if predicate(&event) => return event,
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+    }
+
+    #[test]
+    fn out_of_range_set_setting_is_rejected_and_snapshot_unchanged() {
+        let data_dir = unique_data_dir("reject");
+        let shared = Arc::new(always_tool_shared(Arc::default()));
+        let (rt, cmd_tx, event_rx) = make_runtime_at(shared.clone(), data_dir.clone());
+
+        let rejected = serve_until(
+            rt,
+            cmd_tx,
+            event_rx,
+            Command::SetSetting {
+                key: "max_tool_rounds".into(),
+                value: serde_json::json!(5000),
+            },
+            |e| matches!(e, Event::ProviderStatus { ok: false, .. }),
+        );
+
+        match rejected {
+            Event::ProviderStatus { ok: false, message } => {
+                assert!(message.starts_with("settings:"), "{message}");
+                assert!(message.contains("max_tool_rounds"), "{message}");
+            }
+            other => panic!("expected ProviderStatus rejection, got {other:?}"),
+        }
+        // Snapshot untouched: still the documented default.
+        assert_eq!(
+            shared.settings.lock().unwrap().get().max_tool_rounds,
+            crate::settings::Settings::default().max_tool_rounds
+        );
+        // Nothing was persisted either.
+        assert!(!data_dir.join("settings.json").exists(), "rejection must not write settings.json");
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn accepted_set_setting_persists_and_caps_the_next_turn_without_restart() {
+        let data_dir = unique_data_dir("live-swap");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let shared = Arc::new(always_tool_shared(calls.clone()));
+
+        let (rt, cmd_tx, event_rx) = make_runtime_at(shared.clone(), data_dir.clone());
+        let changed = serve_until(
+            rt,
+            cmd_tx,
+            event_rx,
+            Command::SetSetting {
+                key: "max_tool_rounds".into(),
+                value: serde_json::json!(2),
+            },
+            |e| matches!(e, Event::SettingChanged { .. }),
+        );
+        assert!(matches!(
+            &changed,
+            Event::SettingChanged { key, .. } if key == "max_tool_rounds"
+        ));
+
+        // Persisted for restarts...
+        let raw = std::fs::read_to_string(data_dir.join("settings.json")).expect("stored");
+        assert!(raw.contains("\"max_tool_rounds\": 2"), "{raw}");
+        // ...and swapped into the live snapshot.
+        assert_eq!(shared.settings.lock().unwrap().get().max_tool_rounds, 2);
+
+        // Same session, no restart: the next turn stops at exactly 2 rounds.
+        let (rt, cmd_tx, event_rx) = make_runtime_at(shared, data_dir.clone());
+        let finished = serve_until(
+            rt,
+            cmd_tx,
+            event_rx,
+            Command::SendMessage { thread_id: "swap-thread".into(), text: "go".into() },
+            |e| matches!(e, Event::TurnFinished { .. }),
+        );
+        match finished {
+            Event::TurnFinished { ok, error, .. } => {
+                assert!(!ok, "capped turn must not report success");
+                assert!(
+                    error.unwrap_or_default().contains("stopped after 2 tool rounds"),
+                    "turn must stop at the swapped cap"
+                );
+            }
+            other => panic!("expected TurnFinished, got {other:?}"),
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "the always-tool provider must see exactly max_tool_rounds requests"
         );
         let _ = std::fs::remove_dir_all(&data_dir);
     }

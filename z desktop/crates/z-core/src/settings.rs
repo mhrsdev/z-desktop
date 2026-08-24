@@ -116,6 +116,38 @@ pub fn load(data_dir: &Path) -> Settings {
     s
 }
 
+/// set-004: validate + apply one SetSetting against a copy of the current
+/// values. Unknown keys, mistyped values, and out-of-range values are
+/// rejected with a human message; nothing mutates on rejection. The bounds
+/// live here so the command path can never drift from `load`'s sanity checks.
+pub fn apply(s: &Settings, key: &str, value: &serde_json::Value) -> Result<Settings, String> {
+    let mut out = s.clone();
+    match key {
+        "max_tool_rounds" => match value.as_u64() {
+            Some(n) if (MIN_TOOL_ROUNDS..=MAX_TOOL_ROUNDS_CAP).contains(&n) => {
+                out.max_tool_rounds = n as usize;
+            }
+            _ => {
+                return Err(format!(
+                    "{key} must be an integer in {MIN_TOOL_ROUNDS}..={MAX_TOOL_ROUNDS_CAP}"
+                ))
+            }
+        },
+        "approval_timeout_secs" => match value.as_u64() {
+            Some(n) if (MIN_APPROVAL_TIMEOUT_SECS..=MAX_APPROVAL_TIMEOUT_SECS).contains(&n) => {
+                out.approval_timeout_secs = n;
+            }
+            _ => {
+                return Err(format!(
+                    "{key} must be an integer in {MIN_APPROVAL_TIMEOUT_SECS}..={MAX_APPROVAL_TIMEOUT_SECS}"
+                ))
+            }
+        },
+        other => return Err(format!("unknown setting \"{other}\"")),
+    }
+    Ok(out)
+}
+
 /// Persist settings atomically (edit-004 helper) as pretty JSON. Unknown keys
 /// written by future versions are not preserved yet — set-004 owns merge
 /// semantics when the command path lands.
@@ -195,6 +227,33 @@ mod settings_tests {
         let s = load(&dir);
         assert_eq!(s.max_tool_rounds, 24, "out-of-range rounds fall back to default");
         assert_eq!(s.approval_timeout_secs, 60, "valid sibling field is kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apply_rejects_bad_keys_and_values_without_mutating() {
+        let base = Settings::default();
+        assert!(apply(&base, "nope", &json!(5)).is_err(), "unknown key rejected");
+        assert!(apply(&base, "max_tool_rounds", &json!(0)).is_err());
+        assert!(apply(&base, "max_tool_rounds", &json!(201)).is_err());
+        assert!(apply(&base, "max_tool_rounds", &json!("many")).is_err());
+        assert!(apply(&base, "approval_timeout_secs", &json!(4)).is_err());
+        assert!(apply(&base, "approval_timeout_secs", &json!(3601)).is_err());
+        // Rejections leave the base untouched.
+        assert_eq!(base, Settings::default());
+    }
+
+    #[test]
+    fn applied_set_setting_round_trips_through_store_and_load() {
+        let dir = unique_data_dir("set004");
+        let updated = apply(&Settings::default(), "max_tool_rounds", &json!(2))
+            .expect("in-range value applies");
+        assert_eq!(updated.max_tool_rounds, 2);
+        assert_eq!(updated.approval_timeout_secs, 300, "siblings untouched");
+        let updated = apply(&updated, "approval_timeout_secs", &json!(60))
+            .expect("second key applies");
+        store(&dir, &updated).expect("store succeeds");
+        assert_eq!(load(&dir), updated, "SetSetting survives store/load");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

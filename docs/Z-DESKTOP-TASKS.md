@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 95 |
+| IMPLEMENTED | 96 |
 | PARTIAL | 2 |
-| PLANNED | 626 |
+| PLANNED | 625 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -1588,7 +1588,7 @@
 ### [IMPLEMENTED] set-003 — Typed accessor cache
 - depends: set-001
 
-### [PLANNED] set-004 — SetSetting command + change events
+### [IMPLEMENTED] set-004 — SetSetting command + change events
 - depends: set-003
 
 ### [PLANNED] set-005 — Validation + constraint reset-with-warning

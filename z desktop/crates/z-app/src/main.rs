@@ -179,6 +179,11 @@ impl App {
                 };
                 true
             }
+            // set-004: mirror accepted setting changes into the status line.
+            Event::SettingChanged { key, value } => {
+                self.view.status_line = format!("settings: {key} = {value}");
+                true
+            }
             Event::ProjectIndexed { path, files, symbols } => {
                 let name = std::path::Path::new(&path)
                     .file_name()

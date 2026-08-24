@@ -67,6 +67,10 @@ pub enum Command {
     /// sup-017: appeal a supervision verdict on `turn_id`. Journaled by the
     /// runtime (sup-024 persistence) and honored by the gate from then on.
     AppealVerdict { turn_id: Id, reason: String },
+    /// set-004: change one runtime setting live (ADR-0011 swap-on-write).
+    /// Only whitelisted keys with in-range values apply; rejections ride
+    /// [`Event::ProviderStatus`] with a `settings:` message prefix.
+    SetSetting { key: String, value: serde_json::Value },
 }
 
 /// One row of a thread listing (core-021): cheap projection, never carries
@@ -171,6 +175,9 @@ pub enum Event {
     /// the turn id so the UI can drop its blocked badge when
     /// `blocked_cleared` (i.e. the override is durably recorded).
     VerdictOverridden { turn_id: Id, blocked_cleared: bool },
+    /// set-004: a setting was validated, persisted, and swapped into the
+    /// live snapshot. `value` echoes the applied value.
+    SettingChanged { key: String, value: serde_json::Value },
 }
 
 #[cfg(test)]

@@ -571,7 +571,7 @@ DOMAINS = [
         ("001", "SettingDef schema representation", [], "IMPLEMENTED"),
         ("002", "Initial schema population (§75 draft)", ["001"], "PLANNED"),
         ("003", "Typed accessor cache", ["001"], "IMPLEMENTED"),
-        ("004", "SetSetting command + change events", ["003"], "PLANNED"),
+        ("004", "SetSetting command + change events", ["003"], "IMPLEMENTED"),
         ("005", "Validation + constraint reset-with-warning", ["001"], "PLANNED"),
         ("006", "Unknown-key keep+warn behavior", ["005"], "PLANNED"),
         ("007", "Migration framework (versioned files)", ["001"], "PLANNED"),

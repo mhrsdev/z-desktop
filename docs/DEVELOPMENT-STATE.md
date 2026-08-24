@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-23
 
+## set-004 Live Settings — 2026-08-23 COMPLETE
+
+1. ✅ **set-004**: additive Command::SetSetting → Event::SettingChanged;
+   settings::apply() is the single validation point (same range consts as
+   load()); handler persists via store + swaps the Shared snapshot Arc
+   (ADR-0011 swap-on-write). Test proves max_tool_rounds=2 takes effect on
+   the next turn in the SAME session — no restart.
+
+Verification: full workspace suite green — **457 tests, 0 failed**
+(453 → 457). Ledger: 98 IMPLEMENTED.
+
+Next work continues → set-002 full schema draft, sup-013 premature-stop
+detector, or prov-006 decision logging.
+
 ## sup-017/024 Verdict Appeals — 2026-08-23 COMPLETE
 
 1. ✅ **sup-017**: additive Command::AppealVerdict → Event::

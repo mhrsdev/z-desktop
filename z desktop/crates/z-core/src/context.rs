@@ -124,6 +124,97 @@ pub fn inject_memories(
     }
 }
 
+/// ctx-008: read-only inspector snapshot over a candidate-item slice.
+/// `by_layer` is indexed by [`Layer`] in enum order (prefix, session,
+/// turn, ephemeral) and holds (item count, summed est tokens) per layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextStats {
+    pub total_items: usize,
+    pub est_tokens_total: usize,
+    pub by_layer: [(usize, usize); 4],
+    pub stale_count: usize,
+}
+
+/// ctx-008: aggregate counts/tokens/staleness for the inspector. Pure.
+pub fn stats(items: &[ContextItem]) -> ContextStats {
+    let mut s = ContextStats {
+        total_items: items.len(),
+        est_tokens_total: 0,
+        by_layer: [(0, 0); 4],
+        stale_count: 0,
+    };
+    for i in items {
+        let slot = &mut s.by_layer[i.layer as usize];
+        *slot = (slot.0 + 1, slot.1 + i.est_tokens);
+        s.est_tokens_total += i.est_tokens;
+        s.stale_count += i.stale as usize;
+    }
+    s
+}
+
+fn layer_name(layer: Layer) -> &'static str {
+    match layer {
+        Layer::Prefix => "prefix",
+        Layer::Session => "session",
+        Layer::Turn => "turn",
+        Layer::Ephemeral => "ephemeral",
+    }
+}
+
+fn preview_line(item: &ContextItem) -> String {
+    const HEAD_CHARS: usize = 40;
+    let mut head: String = item.text.chars().take(HEAD_CHARS).collect();
+    if item.text.chars().count() > HEAD_CHARS {
+        head.push('…');
+    }
+    format!(
+        "[{}] {} ({} tok)",
+        layer_name(item.layer),
+        head,
+        item.est_tokens
+    )
+}
+
+/// ctx-008: compact text listing for the inspector, one
+/// `[layer] first-40-chars… (N tok)` line per item, never exceeding
+/// `max_chars`. Items that do not fit are summarized by a final
+/// `+N more items` line (whole earlier lines are dropped to make room
+/// for it, so the marker is always last when present).
+pub fn preview(items: &[ContextItem], max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut shown = 0usize;
+    for item in items {
+        let line = preview_line(item);
+        let need = out.chars().count() + usize::from(!out.is_empty()) + line.chars().count();
+        if need > max_chars {
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&line);
+        shown += 1;
+    }
+    if shown < items.len() {
+        let marker = format!("+{} more items", items.len() - shown);
+        while !out.is_empty() && out.chars().count() + 1 + marker.chars().count() > max_chars {
+            let pos = out.rfind('\n').unwrap_or(0);
+            out.truncate(pos);
+        }
+        if out.chars().count() + usize::from(!out.is_empty()) + marker.chars().count() <= max_chars
+        {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&marker);
+        } else {
+            // Budget smaller than the marker itself; hard-truncate.
+            out = marker.chars().take(max_chars).collect();
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +407,86 @@ mod tests {
             kept.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(),
             vec!["sys", "oldest", "latest"]
         );
+    }
+
+    #[test]
+    fn stats_counts_items_tokens_and_staleness_per_layer() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Session, "old", 5),
+            item(Layer::Session, "latest", 7),
+            item(Layer::Turn, "now", 3),
+            ContextItem {
+                layer: Layer::Ephemeral,
+                text: "dump".into(),
+                est_tokens: 4,
+                stale: true,
+            },
+            ContextItem {
+                layer: Layer::Ephemeral,
+                text: "fresh dump".into(),
+                est_tokens: 6,
+                stale: false,
+            },
+        ];
+        let s = stats(&items);
+        assert_eq!(s.total_items, 6);
+        assert_eq!(s.est_tokens_total, 35);
+        assert_eq!(
+            s.by_layer,
+            [(1, 10), (2, 12), (1, 3), (2, 10)] // prefix, session, turn, ephemeral
+        );
+        assert_eq!(s.stale_count, 1);
+    }
+
+    #[test]
+    fn stats_on_empty_input_is_all_zeros() {
+        let s = stats(&[]);
+        assert_eq!(
+            s,
+            ContextStats {
+                total_items: 0,
+                est_tokens_total: 0,
+                by_layer: [(0, 0); 4],
+                stale_count: 0
+            }
+        );
+    }
+
+    #[test]
+    fn preview_renders_layer_head_and_tokens_per_line() {
+        let long = "a".repeat(50);
+        let items = vec![item(Layer::Session, &long, 12)];
+        let out = preview(&items, 200);
+        assert_eq!(out, format!("[session] {}… (12 tok)", "a".repeat(40)));
+        // Short text gets no ellipsis.
+        let out = preview(&[item(Layer::Turn, "hi", 2)], 200);
+        assert_eq!(out, "[turn] hi (2 tok)");
+    }
+
+    #[test]
+    fn preview_truncates_with_more_marker_within_budget() {
+        let items = vec![
+            item(Layer::Prefix, "sys prompt here", 10),
+            item(Layer::Session, "history one", 5),
+            item(Layer::Session, "history two", 5),
+            item(Layer::Ephemeral, "tool dump", 40),
+        ];
+        // Budget fits only the first line plus the marker.
+        let first_len = preview_line(&items[0]).chars().count();
+        let marker = "+3 more items";
+        let budget = first_len + 1 + marker.len();
+        let out = preview(&items, budget);
+        assert_eq!(out, format!("{}\n{}", preview_line(&items[0]), marker));
+        assert!(out.chars().count() <= budget);
+        // Generous budget lists everything with no marker.
+        let all = preview(&items, 400);
+        assert_eq!(all.lines().count(), 4);
+        assert!(!all.contains("more items"));
+    }
+
+    #[test]
+    fn preview_on_empty_input_is_empty() {
+        assert_eq!(preview(&[], 80), "");
     }
 }

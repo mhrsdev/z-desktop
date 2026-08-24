@@ -368,6 +368,61 @@ pub fn truncate_corrupt_tail(path: &Path) -> Result<usize, String> {
     }
 }
 
+/// jour-014 background compaction: rewrites `path` to hold only the last
+/// `keep_last` records, renumbered sequentially from 1. Returns
+/// `(records_before, records_after)`.
+///
+/// A no-op when `keep_last >= record_count` (nothing to reclaim): the file is
+/// left byte-for-byte untouched and `(count, count)` is returned.
+///
+/// Compaction replays first and fails loud on corruption — it never rewrites
+/// a segment it cannot fully parse. The swap is atomic-ish: the replacement
+/// is fully written and fsync-ed to a sibling `.compact-tmp` file, then
+/// renamed over the original, so a crash mid-compaction leaves either the
+/// old or the new segment, never a half-written one.
+///
+/// WARNING: rewriting the segment invalidates every byte offset a live
+/// [`Journal`] handle (or any cached read position) holds into this file —
+/// the caller must reopen after compacting. Compaction also must not race an
+/// active writer: flush/drop the writer first.
+pub fn compact(path: &Path, keep_last: usize) -> Result<(usize, usize), String> {
+    let records = Journal::replay(path)?;
+    let before = records.len();
+    if keep_last >= before {
+        return Ok((before, before));
+    }
+    let kept = &records[before - keep_last..];
+    let mut body = String::new();
+    for (index, record) in kept.iter().enumerate() {
+        let mut renumbered = record.clone();
+        renumbered.seq = index as u64 + 1;
+        body.push_str(
+            &serde_json::to_string(&renumbered)
+                .map_err(|e| format!("journal {}: renumber failed: {e}", path.display()))?,
+        );
+        body.push('\n');
+    }
+    let tmp = path.with_extension("jsonl.compact-tmp");
+    let file = std::fs::File::create(&tmp)
+        .map_err(|e| format!("journal: cannot create {}: {}", tmp.display(), e))?;
+    let mut file = std::io::BufWriter::new(file);
+    file.write_all(body.as_bytes())
+        .and_then(|()| file.flush())
+        .map_err(|e| format!("journal: cannot write {}: {}", tmp.display(), e))?;
+    file.get_ref()
+        .sync_all()
+        .map_err(|e| format!("journal: cannot fsync {}: {}", tmp.display(), e))?;
+    drop(file);
+    std::fs::rename(&tmp, path).map_err(|e| {
+        format!(
+            "journal: cannot swap compacted copy over {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+    Ok((before, kept.len()))
+}
+
 /// Returns `(record_index, expected_seq)` for the first gap or regression in
 /// `records` (jour-010 hook).
 ///
@@ -825,6 +880,130 @@ mod journal_tests {
         );
         assert_eq!(std::fs::read(&path).expect("read back"), b"");
         assert!(Journal::replay(&path).expect("now empty").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compact_keeps_last_n_with_renumbered_seqs() {
+        let dir = temp_journal_dir("compact");
+        let path = dir.join("main.jsonl");
+        {
+            let mut journal = Journal::open(&dir, "main").expect("open journal");
+            for draft in mixed_drafts() {
+                journal.append(draft).expect("append");
+            }
+        }
+        let (before, after) = compact(&path, 3).expect("compact");
+        assert_eq!((before, after), (mixed_drafts().len(), 3));
+        let records = Journal::replay(&path).expect("replay compacted segment");
+        let drafts = mixed_drafts();
+        for (index, record) in records.iter().enumerate() {
+            let draft = &drafts[drafts.len() - 3 + index];
+            assert_eq!(record.seq, index as u64 + 1, "seqs renumbered from 1");
+            assert_eq!(record.kind, draft.kind);
+            assert_eq!(record.thread_id, draft.thread_id);
+            assert_eq!(record.payload, draft.payload);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replay_after_compact_yields_same_logical_tail() {
+        let dir = temp_journal_dir("compact-tail");
+        let path = dir.join("main.jsonl");
+        {
+            let mut journal = Journal::open(&dir, "main").expect("open journal");
+            for draft in mixed_drafts() {
+                journal.append(draft).expect("append");
+            }
+        }
+        let original = Journal::replay(&path).expect("original replay");
+        let keep = 4;
+        compact(&path, keep).expect("compact");
+        let after = Journal::replay(&path).expect("post-compact replay");
+        assert_eq!(after.len(), keep);
+        // Everything but `seq` must survive byte-identically.
+        for (record, old) in after
+            .iter()
+            .zip(original.iter().skip(original.len() - keep))
+        {
+            assert_eq!(record.ts_ms, old.ts_ms);
+            assert_eq!(record.kind, old.kind);
+            assert_eq!(record.thread_id, old.thread_id);
+            assert_eq!(record.payload, old.payload);
+        }
+        assert!(first_seq_gap(&after).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compact_is_noop_when_count_le_keep_last() {
+        let dir = temp_journal_dir("compact-noop");
+        let path = dir.join("main.jsonl");
+        {
+            let mut journal = Journal::open(&dir, "main").expect("open journal");
+            for _ in 0..2 {
+                journal
+                    .append(RecordDraft::new(
+                        JournalKind::TurnStarted,
+                        None,
+                        json!({"v": 1}),
+                    ))
+                    .expect("append");
+            }
+        }
+        let raw_before = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(compact(&path, 2).expect("equal count is a no-op"), (2, 2));
+        assert_eq!(
+            compact(&path, 5).expect("keep_last above count is a no-op"),
+            (2, 2)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            raw_before,
+            "no-op must not touch a single byte"
+        );
+        assert!(
+            !path.with_extension("jsonl.compact-tmp").exists(),
+            "no temp litter"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compact_fails_loud_on_corrupt_journal_and_touches_nothing() {
+        let dir = temp_journal_dir("compact-corrupt");
+        let path = dir.join("broken.jsonl");
+        let good = Record {
+            seq: 1,
+            ts_ms: 1_770_000_000_000,
+            kind: JournalKind::CommandReceived,
+            thread_id: None,
+            payload: json!({"x": 1}),
+        };
+        // Mid-file corruption: bad line is not the last, so torn-tail repair
+        // must NOT kick in and compaction must refuse.
+        let body = format!(
+            "{}\n{{\"seq\": not json at all\n{}\n",
+            serde_json::to_string(&good).expect("serialize"),
+            serde_json::to_string(&Record {
+                seq: 2,
+                ..good.clone()
+            })
+            .expect("serialize")
+        );
+        std::fs::write(&path, &body).expect("seed corrupt journal");
+        let err = compact(&path, 1).expect_err("corruption must fail loud");
+        assert!(err.contains("line 2"), "got: {err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            body,
+            "failed compaction must leave the segment untouched"
+        );
+        assert!(
+            !path.with_extension("jsonl.compact-tmp").exists(),
+            "no temp litter on failure"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

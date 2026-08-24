@@ -27,6 +27,8 @@ pub struct RepoIndex {
     search_index: TrigramIndex,
     /// Doc id -> rel path, aligned with insertion order into `search_index`.
     search_paths: Vec<String>,
+    /// Cached repo map keyed by (input fingerprint, budget). idx-021.
+    map_cache: Option<(u64, usize, String)>,
 }
 
 /// Directories that never carry source worth indexing.
@@ -169,8 +171,72 @@ impl RepoIndex {
             }
         }
         lines.truncate(max_lines);
-        lines.join("
-")
+        lines.join("\n")
+    }
+
+    /// idx-021: flat ranked repo map — one `rel_path  Nsymb` line per indexed
+    /// file, best-first by symbol count, truncated to `max_chars` with an
+    /// explicit `... +N more` marker when files were dropped.
+    pub fn build_map(&self, max_chars: usize) -> String {
+        let mut files: Vec<&FileEntry> = self.files.values().collect();
+        files.sort_by(|a, b| {
+            b.symbols.len().cmp(&a.symbols.len()).then(a.rel_path.cmp(&b.rel_path))
+        });
+        let lines: Vec<String> =
+            files.iter().map(|f| format!("{}  {}", f.rel_path, f.symbols.len())).collect();
+        // Cost of emitting the first n lines, counting each trailing newline.
+        let cost = |n: usize| -> usize { lines[..n].iter().map(|l| l.len() + 1).sum() };
+        let full = lines.len();
+        if cost(full) <= max_chars {
+            return lines.join("\n");
+        }
+        let mut keep = full;
+        while keep > 0 {
+            let marker = format!("... +{} more", full - keep);
+            if cost(keep) + marker.len() <= max_chars {
+                let mut out = lines[..keep].join("\n");
+                out.push('\n');
+                out.push_str(&marker);
+                return out;
+            }
+            keep -= 1;
+        }
+        String::new()
+    }
+
+    /// Fingerprint of everything `build_map` reads: the set of indexed paths
+    /// and each file's stamp. FNV-1a over sorted entries.
+    fn map_fingerprint(&self) -> u64 {
+        let mut parts: Vec<(&str, (i64, u32))> =
+            self.files.values().map(|f| (f.rel_path.as_str(), f.stamp)).collect();
+        parts.sort_unstable();
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for (path, stamp) in &parts {
+            for b in path
+                .bytes()
+                .chain(std::iter::once(0))
+                .chain(stamp.0.to_le_bytes())
+                .chain(stamp.1.to_le_bytes())
+            {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        h
+    }
+
+    /// Cached `build_map`; recomputed only when the index fingerprint or the
+    /// budget changed since the last call.
+    pub fn repo_map(&mut self, max_chars: usize) -> String {
+        let fp = self.map_fingerprint();
+        if let Some((cached_fp, cached_max, map)) = &self.map_cache {
+            if *cached_fp == fp && *cached_max == max_chars {
+                return map.clone();
+            }
+        }
+        let map = self.build_map(max_chars);
+        self.map_cache = Some((fp, max_chars, map.clone()));
+        map
     }
 }
 
@@ -297,5 +363,60 @@ struct Config { name: String }
         let mut index = RepoIndex::open(&root);
         index.build_search_index().unwrap();
         assert!(index.search("main").is_empty());
+    }
+
+    #[test]
+    fn build_map_format_is_path_then_symbol_count() {
+        let root = temp_root("bmap");
+        std::fs::write(root.join("src/lib.rs"), "fn alpha() {}\nfn beta() {}\n").unwrap();
+        let mut index = RepoIndex::open(&root);
+        // lib.rs (2 syms) ranks above main.rs (2 syms? main+Config) — just
+        // assert both lines exist in `rel  N` shape.
+        let map = index.repo_map(10_000);
+        for line in map.lines() {
+            let (path, count) = line.rsplit_once("  ").expect("two-space separator");
+            assert!(index.files.contains_key(path), "{path}");
+            assert_eq!(count.parse::<usize>().unwrap(), index.files[path].symbols.len());
+        }
+        assert!(map.contains("src/main.rs"), "{map}");
+        assert!(map.contains("src/lib.rs"), "{map}");
+    }
+
+    #[test]
+    fn build_map_respects_char_budget_and_marks_truncation() {
+        let root = temp_root("budget");
+        for i in 0..40 {
+            std::fs::write(
+                root.join(format!("src/mod{i}.rs")),
+                format!("fn sym_{i}() {{}}\n"),
+            )
+            .unwrap();
+        }
+        let index = RepoIndex::open(&root);
+        let map = index.build_map(200);
+        assert!(map.len() <= 200, "len={}, budget=200", map.len());
+        assert!(map.contains("... +"), "truncation marker missing: {map}");
+
+        // Generous budget: everything fits, no marker.
+        let full = index.build_map(100_000);
+        assert!(!full.contains("+"), "no marker when everything fits: {full}");
+        assert_eq!(full.lines().count(), index.file_count() as usize);
+    }
+
+    #[test]
+    fn repo_map_caches_until_inputs_change() {
+        let root = temp_root("cache");
+        let mut index = RepoIndex::open(&root);
+        let first = index.repo_map(10_000);
+        assert_eq!(index.repo_map(10_000), first, "same inputs => cached copy");
+
+        // Mutate a file stamp: fingerprint must change and the cache must be
+        // invalidated so the new symbols show up.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(root.join("src/extra.rs"), "fn brand_new_symbol() {}\n").unwrap();
+        index.rescan();
+        let second = index.repo_map(10_000);
+        assert_ne!(first, second);
+        assert!(second.contains("src/extra.rs"), "{second}");
     }
 }

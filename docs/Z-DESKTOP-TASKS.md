@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 122 |
+| IMPLEMENTED | 126 |
 | PARTIAL | 3 |
-| PLANNED | 598 |
+| PLANNED | 594 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -420,7 +420,7 @@
 ### [IMPLEMENTED] edit-017 — Grant overlap rejection at grant time
 - depends: edit-016
 
-### [PLANNED] edit-018 — No-fingerprint flag on blind writes
+### [IMPLEMENTED] edit-018 — No-fingerprint flag on blind writes
 - depends: edit-002
 
 ### [IMPLEMENTED] edit-019 — Diff generation (histogram algorithm)
@@ -725,7 +725,7 @@
 ### [IMPLEMENTED] mem-011 — Dependents flagged on correction
 - depends: mem-010
 
-### [PLANNED] mem-012 — Memory inspector panel
+### [IMPLEMENTED] mem-012 — Memory inspector panel
 - depends: ui-060
 
 ### [IMPLEMENTED] mem-013 — Recency decay in confidence scoring
@@ -775,7 +775,7 @@
 ### [IMPLEMENTED] ctx-007 — Exact-source rehydration before edits
 - depends: ctx-001, edit-002
 
-### [PLANNED] ctx-008 — Context inspector panel data export
+### [IMPLEMENTED] ctx-008 — Context inspector panel data export
 - depends: ctx-001, ui-070
 
 ### [PLANNED] ctx-009 — Priority weight settings (dev mode)
@@ -1582,7 +1582,7 @@
 ### [IMPLEMENTED] set-001 — SettingDef schema representation
 - depends: —
 
-### [PLANNED] set-002 — Initial schema population (§75 draft)
+### [IMPLEMENTED] set-002 — Initial schema population (§75 draft)
 - depends: set-001
 
 ### [IMPLEMENTED] set-003 — Typed accessor cache

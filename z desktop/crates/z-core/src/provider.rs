@@ -88,14 +88,60 @@ pub trait Provider: Send + Sync {
 // SSE line reader shared by both adapters
 // ---------------------------------------------------------------------------
 
+pub const MAX_SSE_LINE: usize = 1 << 20; // 1 MiB
+
 /// Call `body_line` for every `data:` payload of an SSE stream.
-fn read_sse(reader: impl BufRead, mut body_line: impl FnMut(&str)) -> Result<(), String> {
-    for line in reader.lines() {
-        let line = line.map_err(|e| format!("stream read failed: {e}"))?;
-        if let Some(data) = line.strip_prefix("data:") {
-            body_line(data.trim());
+///
+/// Lines are assembled manually instead of `BufRead::lines()` so accumulation
+/// can be capped: a line longer than [`MAX_SSE_LINE`] is truncated (memory
+/// stays bounded) and a malformed-stream error is returned once the stream
+/// ends being drained.
+fn read_sse(mut reader: impl BufRead, mut body_line: impl FnMut(&str)) -> Result<(), String> {
+    let mut line: Vec<u8> = Vec::new();
+    let mut oversized = false;
+    loop {
+        let (line_complete, consumed) = {
+            let buf =
+                reader.fill_buf().map_err(|e| format!("stream read failed: {e}"))?;
+            match buf.iter().position(|&b| b == b'\n') {
+                Some(end) => {
+                    line.extend_from_slice(&buf[..end]);
+                    (true, end + 1)
+                }
+                None => {
+                    line.extend_from_slice(buf);
+                    (false, buf.len())
+                }
+            }
+        };
+        reader.consume(consumed);
+        if line.len() > MAX_SSE_LINE {
+            line.truncate(MAX_SSE_LINE);
+            oversized = true;
         }
-        // Non-data lines (event:, comments) carry nothing we need in v0.1.
+        if line_complete {
+            let text = String::from_utf8_lossy(&line);
+            let text = text.trim_end_matches('\r');
+            if let Some(data) = text.strip_prefix("data:") {
+                body_line(data.trim());
+            }
+            // Non-data lines (event:, comments) carry nothing we need in v0.1.
+            line.clear();
+        } else if consumed == 0 {
+            // EOF: flush an unterminated trailing line, then stop.
+            if !line.is_empty() {
+                let text = String::from_utf8_lossy(&line);
+                if let Some(data) = text.strip_prefix("data:") {
+                    body_line(data.trim());
+                }
+            }
+            break;
+        }
+    }
+    if oversized {
+        return Err(format!(
+            "malformed SSE stream: line exceeded {MAX_SSE_LINE} bytes (truncated)"
+        ));
     }
     Ok(())
 }
@@ -404,6 +450,33 @@ note: ignored
         let mut seen = Vec::new();
         read_sse(raw.as_bytes(), |d| seen.push(d.to_string())).unwrap();
         assert_eq!(seen, vec![r#"{"a":1}"#, "[DONE]"]);
+    }
+
+    #[test]
+    fn sse_reader_caps_oversized_lines() {
+        // One synthetic `data:` line far beyond MAX_SSE_LINE.
+        let payload = "x".repeat(MAX_SSE_LINE * 4);
+        let raw = format!("data: {payload}\ndata: [DONE]\n");
+        let mut seen = Vec::new();
+        let err = read_sse(raw.as_bytes(), |d| seen.push(d.to_string()))
+            .expect_err("oversized line must yield malformed-stream error");
+        assert!(err.contains("malformed SSE stream"), "got: {err}");
+        // Buffer stayed bounded: first line delivered truncated to MAX_SSE_LINE
+        // (raw line incl. "data: " prefix), never grew unbounded; the following
+        // normal line still came through.
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].len(), MAX_SSE_LINE - "data: ".len());
+        assert_eq!(seen[1], "[DONE]");
+    }
+
+    #[test]
+    fn sse_reader_flushes_unterminated_trailing_line() {
+        let mut seen = Vec::new();
+        read_sse(b"data: {\"ok\":true}".as_slice(), |d| {
+            seen.push(d.to_string())
+        })
+        .unwrap();
+        assert_eq!(seen, vec![r#"{"ok":true}"#]);
     }
 
     #[test]

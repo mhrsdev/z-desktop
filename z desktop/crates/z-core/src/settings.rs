@@ -164,6 +164,89 @@ pub fn store(data_dir: &Path, s: &Settings) -> Result<(), String> {
     crate::atomic_write::atomic_write(&data_dir.join("settings.json"), pretty.as_bytes())
 }
 
+/// Type of one setting's value in the schema (set-002).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DefKind {
+    U64,
+    F32,
+    Bool,
+    String,
+}
+
+/// Documented default for one setting, tagged by its [`DefKind`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SettingDefault {
+    U64(u64),
+    F32(f32),
+    Bool(bool),
+    String(&'static str),
+}
+
+/// Schema entry for one setting (set-002): key, type, sanity bounds, default.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SettingDef {
+    pub key: &'static str,
+    pub kind: DefKind,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub default: SettingDefault,
+}
+
+/// §75 draft schema: one [`SettingDef`] per `Settings` field, with the same
+/// sanity bounds `load`/`apply` enforce. Single source for UIs and validators;
+/// bounds here must not drift from the consts above.
+pub fn schema_defs() -> &'static [SettingDef] {
+    const fn u64_def(key: &'static str, min: u64, max: u64, default: u64) -> SettingDef {
+        SettingDef {
+            key,
+            kind: DefKind::U64,
+            min: Some(min as f64),
+            max: Some(max as f64),
+            default: SettingDefault::U64(default),
+        }
+    }
+    // A `static` (not an inline literal) so the const-fn entries get 'static life.
+    static DEFS: [SettingDef; 3] = [
+        u64_def(
+            "max_tool_rounds",
+            MIN_TOOL_ROUNDS,
+            MAX_TOOL_ROUNDS_CAP,
+            DEFAULT_MAX_TOOL_ROUNDS as u64,
+        ),
+        u64_def(
+            "approval_timeout_secs",
+            MIN_APPROVAL_TIMEOUT_SECS,
+            MAX_APPROVAL_TIMEOUT_SECS,
+            DEFAULT_APPROVAL_TIMEOUT_SECS,
+        ),
+        u64_def(
+            "doom_threshold",
+            MIN_DOOM_THRESHOLD,
+            MAX_DOOM_THRESHOLD_CAP,
+            DEFAULT_DOOM_THRESHOLD as u64,
+        ),
+    ];
+    &DEFS
+}
+
+/// Validate a numeric value against the schema bounds for `key`. Unknown keys
+/// and out-of-range values are rejected with a human message; nothing mutates.
+pub fn validate(key: &str, value: f64) -> Result<(), String> {
+    let Some(def) = schema_defs().iter().find(|d| d.key == key) else {
+        return Err(format!("unknown setting \"{key}\""));
+    };
+    let lo = def.min.unwrap_or(f64::NEG_INFINITY);
+    let hi = def.max.unwrap_or(f64::INFINITY);
+    if value.is_finite() && (lo..=hi).contains(&value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{key} must be an integer in {}..={}",
+            lo as i64, hi as i64
+        ))
+    }
+}
+
 #[cfg(test)]
 mod settings_tests {
     use super::*;
@@ -270,5 +353,99 @@ mod settings_tests {
         .unwrap();
         assert_eq!(load(&dir), Settings::default());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- set-002: schema population ------------------------------------
+
+    #[test]
+    fn schema_covers_every_settings_field() {
+        // Compile-level coverage: each field name must appear exactly once.
+        for key in ["max_tool_rounds", "approval_timeout_secs", "doom_threshold"] {
+            assert_eq!(
+                schema_defs().iter().filter(|d| d.key == key).count(),
+                1,
+                "schema_defs must define {key} exactly once"
+            );
+        }
+        // Defaults in the schema match the live documented defaults.
+        let d = Settings::default();
+        for def in schema_defs() {
+            match (def.key, def.default) {
+                ("max_tool_rounds", SettingDefault::U64(v)) => {
+                    assert_eq!(v as usize, d.max_tool_rounds)
+                }
+                ("approval_timeout_secs", SettingDefault::U64(v)) => {
+                    assert_eq!(v, d.approval_timeout_secs)
+                }
+                ("doom_threshold", SettingDefault::U64(v)) => {
+                    assert_eq!(v as usize, d.doom_threshold)
+                }
+                other => panic!("unexpected schema entry {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn validate_enforces_schema_ranges_table() {
+        // (key, value, expected-valid)
+        let cases: &[(&str, f64, bool)] = &[
+            ("max_tool_rounds", 1.0, true),
+            ("max_tool_rounds", 24.0, true),
+            ("max_tool_rounds", 200.0, true),
+            ("max_tool_rounds", 0.0, false),
+            ("max_tool_rounds", 200.5, false),
+            ("max_tool_rounds", 201.0, false),
+            ("max_tool_rounds", -1.0, false),
+            ("max_tool_rounds", f64::NAN, false),
+            ("max_tool_rounds", f64::INFINITY, false),
+            ("approval_timeout_secs", 5.0, true),
+            ("approval_timeout_secs", 300.0, true),
+            ("approval_timeout_secs", 3600.0, true),
+            ("approval_timeout_secs", 4.9, false),
+            ("approval_timeout_secs", 3601.0, false),
+            ("doom_threshold", 1.0, true),
+            ("doom_threshold", 3.0, true),
+            ("doom_threshold", 10.0, true),
+            ("doom_threshold", 0.99, false),
+            ("doom_threshold", 11.0, false),
+        ];
+        for &(key, value, ok) in cases {
+            assert_eq!(
+                validate(key, value).is_ok(),
+                ok,
+                "validate({key}, {value}) should be {ok:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_rejects_unknown_keys_with_message() {
+        let err = validate("nope", 5.0).unwrap_err();
+        assert!(err.contains("unknown setting"), "got: {err}");
+        assert!(err.contains("nope"), "error names the bad key: {err}");
+    }
+
+    #[test]
+    fn validate_bounds_match_load_and_apply_bounds() {
+        // The schema and the command path must agree on every boundary.
+        for def in schema_defs() {
+            if let (Some(min), Some(max)) = (def.min, def.max) {
+                assert!(
+                    validate(def.key, min).is_ok(),
+                    "{} min bound valid",
+                    def.key
+                );
+                assert!(
+                    validate(def.key, max).is_ok(),
+                    "{} max bound valid",
+                    def.key
+                );
+                assert!(
+                    validate(def.key, min - 1.0).is_err() && validate(def.key, max + 1.0).is_err(),
+                    "{} rejects outside bounds",
+                    def.key
+                );
+            }
+        }
     }
 }

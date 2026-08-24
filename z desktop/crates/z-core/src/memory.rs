@@ -185,6 +185,51 @@ pub fn replay_summary(journal_path: &Path) -> Result<ReplayReport, String> {
     Ok(replay_report(&MemoryView::fold(journal_path)?))
 }
 
+/// Inspector stats over one folded view (mem-012): record counts by state
+/// plus average confidence and capture-time bounds. Same counting semantics
+/// as [`ReplayReport`] (live = Promoted AND not superseded); the parts need
+/// not partition the total, since a record can be both provisional and
+/// superseded.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct MemoryStats {
+    /// Distinct records in the folded view (one per id).
+    pub total_records: usize,
+    pub live: usize,
+    pub superseded: usize,
+    pub provisional: usize,
+    /// Mean confidence over all records; 0.0 when the view is empty.
+    pub avg_confidence: f32,
+    /// Earliest / latest provenance capture time in the view.
+    pub oldest_ts_ms: Option<u128>,
+    pub newest_ts_ms: Option<u128>,
+}
+
+/// Computes [`MemoryStats`] over an already-folded view (mem-012).
+pub fn view_stats(view: &MemoryView) -> MemoryStats {
+    let n = view.records.len();
+    MemoryStats {
+        total_records: n,
+        live: view.live().len(),
+        superseded: view
+            .records
+            .iter()
+            .filter(|r| r.superseded_by.is_some())
+            .count(),
+        provisional: view
+            .records
+            .iter()
+            .filter(|r| r.status == Status::Provisional)
+            .count(),
+        avg_confidence: if n == 0 {
+            0.0
+        } else {
+            view.records.iter().map(|r| r.confidence).sum::<f32>() / n as f32
+        },
+        oldest_ts_ms: view.records.iter().map(|r| r.provenance.ts_ms).min(),
+        newest_ts_ms: view.records.iter().map(|r| r.provenance.ts_ms).max(),
+    }
+}
+
 /// Folded state of all `memory_recorded` events in a journal segment:
 /// last line per id wins (log-compaction semantics), insertion order kept.
 #[derive(Debug, Default, PartialEq)]
@@ -1527,5 +1572,52 @@ mod memory_tests {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn view_stats_counts_seeded_view_exactly() {
+        let mut view = MemoryView::default();
+        view.records.push(rec_conf("mem-live", "x", 0.8, Status::Promoted));
+        let mut sup = rec_conf("mem-sup", "y", 0.4, Status::Promoted);
+        sup.superseded_by = Some("mem-live".into());
+        view.records.push(sup);
+        view.records.push(rec_conf(
+            "mem-prov",
+            "z",
+            0.6,
+            Status::Provisional,
+        ));
+
+        let s = view_stats(&view);
+        assert_eq!(s.total_records, 3);
+        assert_eq!(s.live, 1);
+        assert_eq!(s.superseded, 1);
+        assert_eq!(s.provisional, 1);
+        assert!((s.avg_confidence - (0.8 + 0.4 + 0.6) / 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn view_stats_on_empty_view_is_zeros_and_none() {
+        assert_eq!(view_stats(&MemoryView::default()), MemoryStats::default());
+        let s = view_stats(&MemoryView::default());
+        assert_eq!(s.total_records, 0);
+        assert_eq!(s.avg_confidence, 0.0);
+        assert_eq!(s.oldest_ts_ms, None);
+        assert_eq!(s.newest_ts_ms, None);
+    }
+
+    #[test]
+    fn view_stats_reports_min_and_max_capture_times() {
+        const DAY_MS: u128 = 86_400_000;
+        let mut view = MemoryView::default();
+        view.records.push(rec_at("mid", DAY_MS));
+        view.records.push(rec_at("old", 0));
+        view.records.push(rec_at("fresh", 5 * DAY_MS));
+
+        let s = view_stats(&view);
+        assert_eq!(s.oldest_ts_ms, Some(0));
+        assert_eq!(s.newest_ts_ms, Some(5 * DAY_MS));
+        // Insertion order must not leak into min/max.
+        assert!(s.oldest_ts_ms.unwrap() < s.newest_ts_ms.unwrap());
     }
 }

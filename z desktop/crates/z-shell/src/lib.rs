@@ -17,6 +17,7 @@ pub mod dock_indicators;
 pub mod layout;
 pub mod panel;
 pub mod region;
+pub mod theme;
 pub mod view;
 
 pub use dock_indicators::{compute_drop_indicator, DropIndicator, DropZone};

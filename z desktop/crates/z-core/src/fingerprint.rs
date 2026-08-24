@@ -73,6 +73,28 @@ pub fn peek_fingerprint(thread_id: &str, path: &str) -> Option<u64> {
     registry().lock().unwrap().get(&(thread_id.into(), path.into())).copied()
 }
 
+/// edit-018: blind-write detection. A write is *blind* when this thread never
+/// recorded a fingerprint for the path (never read it), so edit-001's stale
+/// comparison has nothing to compare against — refuse before touching disk.
+/// Stale-*content* refusal remains fs_write/edit-003's separate job.
+pub struct WriteCheck {
+    pub allowed: bool,
+    pub reason: &'static str,
+}
+
+/// Gate a write by `thread_id` at `path`: allowed iff some fingerprint was
+/// previously recorded for that thread+path pair.
+pub fn blind_write_check(thread_id: &str, path: &Path) -> WriteCheck {
+    if peek_fingerprint(thread_id, &path.to_string_lossy()).is_some() {
+        WriteCheck { allowed: true, reason: "fingerprint on record" }
+    } else {
+        WriteCheck {
+            allowed: false,
+            reason: "no recorded fingerprint for this thread+path; read the file before writing",
+        }
+    }
+}
+
 /// ctx-007: diff this thread's recorded reads against disk right now.
 /// Returns the raw registry paths under `root` whose CURRENT fingerprint
 /// differs from what `thread_id` last read (pass the same root shape the
@@ -132,6 +154,30 @@ mod tests {
         record_fingerprint("t2", "b.txt", 2);
         assert_eq!(take_fingerprint("t1", "b.txt"), Some(1));
         assert_eq!(take_fingerprint("t2", "b.txt"), Some(2));
+    }
+
+    #[test]
+    fn blind_write_check_blocks_unrecorded_and_allows_recorded_per_thread() {
+        let base = format!("t-blind-{:x}", std::process::id());
+        let path = std::env::temp_dir().join(format!("zdt-blind-{:x}.txt", std::process::id()));
+        let path_str = path.to_string_lossy().to_string();
+
+        // Unrecorded => blocked, reason names the missing fingerprint.
+        let chk = blind_write_check(&base, &path);
+        assert!(!chk.allowed);
+        assert!(chk.reason.contains("no recorded fingerprint"));
+
+        // Recorded => allowed.
+        record_fingerprint(&base, &path_str, 99);
+        assert!(blind_write_check(&base, &path).allowed);
+
+        // Same path, different thread stays blind.
+        let other = format!("{base}-other");
+        let chk = blind_write_check(&other, &path);
+        assert!(!chk.allowed);
+        assert!(chk.reason.contains("no recorded fingerprint"));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -76,6 +76,17 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Write `contents` only when they differ from what's on disk.
+/// Returns `Ok(false)` if `path` already holds exactly these bytes (no write,
+/// no mtime churn); otherwise performs an atomic write and returns `Ok(true)`.
+pub fn write_if_changed(path: &Path, contents: &[u8]) -> Result<bool, String> {
+    match std::fs::read(path) {
+        Ok(existing) if existing == contents => Ok(false),
+        // Missing file or differing bytes: (re)write atomically.
+        _ => atomic_write(path, contents).map(|()| true),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +174,59 @@ mod tests {
             .filter(|n| n.ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "leaked temp files: {leftovers:?}");
+    }
+
+    fn mtime_secs(p: &Path) -> std::time::SystemTime {
+        std::fs::metadata(p).unwrap().modified().unwrap()
+    }
+
+    #[test]
+    fn write_if_changed_skips_identical_content() {
+        let dir = temp_dir("wic-same");
+        let target = dir.join("same.txt");
+        atomic_write(&target, b"stable").unwrap();
+        // Ensure any coarse-mtime filesystem would still show a difference
+        // if a write had actually happened.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let before = mtime_secs(&target);
+
+        assert_eq!(write_if_changed(&target, b"stable").unwrap(), false);
+        assert_eq!(std::fs::read(&target).unwrap(), b"stable");
+        assert_eq!(mtime_secs(&target), before, "skip must not touch the file");
+    }
+
+    #[test]
+    fn write_if_changed_writes_when_content_differs() {
+        let dir = temp_dir("wic-diff");
+        let target = dir.join("diff.txt");
+        std::fs::write(&target, b"old").unwrap();
+
+        assert_eq!(write_if_changed(&target, b"new bytes").unwrap(), true);
+        assert_eq!(std::fs::read(&target).unwrap(), b"new bytes");
+
+        // And a second call with the now-current content skips.
+        assert_eq!(write_if_changed(&target, b"new bytes").unwrap(), false);
+    }
+
+    #[test]
+    fn write_if_changed_writes_missing_file() {
+        let dir = temp_dir("wic-missing");
+        let target = dir.join("absent.txt");
+
+        assert_eq!(write_if_changed(&target, b"created").unwrap(), true);
+        assert_eq!(std::fs::read(&target).unwrap(), b"created");
+    }
+
+    #[test]
+    fn write_if_changed_skips_empty_vs_empty() {
+        let dir = temp_dir("wic-empty");
+        let target = dir.join("empty.txt");
+        std::fs::write(&target, b"").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let before = mtime_secs(&target);
+
+        assert_eq!(write_if_changed(&target, b"").unwrap(), false);
+        assert!(std::fs::read(&target).unwrap().is_empty());
+        assert_eq!(mtime_secs(&target), before);
     }
 }

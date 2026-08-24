@@ -6,6 +6,32 @@
 
 Last updated: 2026-08-24
 
+## 8-Agent Wave 5 (inspectors + tokens + schema + ADR-0022) — 2026-08-24 COMPLETE
+
+First 8-sibling fan-out. Landed:
+
+1. ✅ **jour-014**: journal compact(path, keep_last) — atomic rewrite,
+   seq renumbering, no-op when count <= keep_last.
+2. ✅ **idx-021**: repo_map(max_chars) with FNV fingerprint cache keyed
+   on (path, stamp) pairs — budget-respecting, truncation marker.
+3. ✅ **ADR-0022** (docs/adr/0022-ui-maturation.md): honest UI audit
+   (hardcoded px leaks line-cited), Z Desktop design language, phased
+   plan A-D (tokens → components → motion → theming).
+4. ✅ **set-002**: SettingDef/DefKind/SettingDefault + schema_defs() +
+   validate() reusing load()/apply() range consts.
+5. ✅ **ctx-008**: ContextStats + stats()/preview() inspector APIs.
+6. ✅ **mem-012**: MemoryStats + view_stats().
+7. ✅ **edit-018**: blind_write_check() — no-recorded-fingerprint refusal.
+8. ✅ **theme-001**: z-shell theme.rs Tokens::DARK mirroring the approved
+   zero_dark palette via z_tokens::Rgba (luminance-tested).
+9. ✅ **edit-004 completion**: atomic_write write_if_changed dedup.
+
+Failed (empty model replies, retry next wave): red-002 redaction
+counters, tok-017 cache hit-rate, prov-010 SSE line cap.
+
+Verification: full workspace suite green — **573 tests, 0 failed**
+(545 → 573). Ledger: 128 IMPLEMENTED.
+
 ## Parallel Wave 4 (sup-022 + idx-020 + kb nav) — 2026-08-24 COMPLETE
 
 1. ✅ **sup-022**: regression() + regression_batch() evidence helpers —

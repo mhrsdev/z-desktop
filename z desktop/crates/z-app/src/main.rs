@@ -94,6 +94,14 @@ impl App {
             let _ = tx.send((id, Command::SendMessage { thread_id: thread_id.clone(), text }));
         }));
 
+        // Thread selection → Agent Runtime (completes the SwitchThread loop).
+        let tx = app.command_tx.clone();
+        app.view.on_switch_thread = Some(Box::new(move |thread_id| {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = tx.send((id, Command::SwitchThread { thread_id }));
+        }));
+
         // Approval decision → Agent Runtime.
         let tx = app.command_tx.clone();
         let pending = Arc::clone(&app.pending_call);
@@ -974,5 +982,63 @@ mod access_tests {
         let scene = app.build(app.viewport, 1.0);
         assert!(scene.texts().any(|t| t.text == "[Tests ok]"), "ok badge missing");
         assert!(scene.texts().any(|t| t.text == "[Build FAIL]"), "failed badge missing");
+    }
+
+    #[test]
+    fn arrows_and_enter_route_a_focused_thread_row_to_switch_thread() {
+        let mut app = App::new();
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        app.command_tx = cmd_tx.clone();
+        // App::new wired the view callbacks to its own channel; re-point the
+        // thread-switch callback at the test channel like the swap above does
+        // for paths that read `self.command_tx` directly.
+        app.view.on_switch_thread = Some(Box::new(move |thread_id| {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = cmd_tx.send((id, Command::SwitchThread { thread_id }));
+        }));
+
+        app.events.lock().unwrap().push(Event::ThreadList {
+            threads: vec![
+                z_protocol::ThreadInfo {
+                    id: "t1".into(),
+                    title: "Alpha thread".into(),
+                    message_count: 1,
+                    updated_ms: 0,
+                },
+                z_protocol::ThreadInfo {
+                    id: "t2".into(),
+                    title: "Beta thread".into(),
+                    message_count: 2,
+                    updated_ms: 1,
+                },
+            ],
+        });
+        assert!(app.drain_events());
+
+        let viewport = app.viewport;
+        let row = |app: &mut App, label: &str| {
+            app.build(viewport, 1.0)
+                .access()
+                .nodes()
+                .iter()
+                .find(|node| node.label == label)
+                .map(|node| node.id)
+                .unwrap_or_else(|| panic!("{label:?} thread row missing from the semantic tree"))
+        };
+
+        let alpha = row(&mut app, "Alpha thread");
+        let beta = row(&mut app, "Beta thread");
+        assert!(app.view.focus(alpha, viewport));
+        assert!(app.on_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty()));
+        assert_eq!(app.view.focused(), Some(beta));
+
+        // Enter activates the focused row; the command channel receives the
+        // SwitchThread command with the row's runtime id.
+        assert!(app.on_key(&Key::Named(NamedKey::Enter), ModifiersState::empty()));
+        match cmd_rx.try_recv() {
+            Ok((_, Command::SwitchThread { thread_id })) => assert_eq!(thread_id, "t2"),
+            other => panic!("expected SwitchThread, got {other:?}"),
+        }
     }
 }

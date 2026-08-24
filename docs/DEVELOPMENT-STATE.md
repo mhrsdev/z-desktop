@@ -6,6 +6,27 @@
 
 Last updated: 2026-08-24
 
+## Codex Reference Wave (ADR-0021 + term-004 + thread selection) — 2026-08-24 COMPLETE
+
+1. ✅ **ADR-0021** (docs/adr/0021-sandbox-and-exec.md): evidence-based
+   survey of codex-rs exec/ (process_group(0), kill_on_drop, Windows Job
+   Objects) vs our sandbox.rs; phased decision — Phase 1 kill-on-close
+   guards + timeout + caps (shipped now), Phase 2 platform sandboxes
+   (Landlock/Seatbelt/Job objects) behind a trait seam with graceful
+   fallback, Phase 3 per-tool capability grants integrated with Risk::
+   Write machinery. Containers-by-default rejected for personal desktop.
+2. ✅ **term-004**: ChildGuard kill-on-drop in sandbox.rs wired to the
+   timeout path — semantics match codex's kill_on_drop; process-group
+   kill deferred to Phase 2 (needs libc dep).
+3. ✅ **Thread selection UI**: active-thread highlight in the sidebar
+   (primary vs secondary text) completing the SwitchThread visual loop.
+
+Verification: full workspace suite green — **532 tests, 0 failed**
+(526 → 532). Ledger: 120 IMPLEMENTED.
+
+Next work continues → sup-022 regression recorder, ui keyboard nav
+completion, or idx-020 lexical search query path.
+
 ## Reference Audit + Parallel Wave 2 — 2026-08-24 COMPLETE
 
 Mission-recall audit performed (no rebuilds, no redesign):

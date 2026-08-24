@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 117 |
+| IMPLEMENTED | 118 |
 | PARTIAL | 2 |
-| PLANNED | 604 |
+| PLANNED | 603 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -934,7 +934,7 @@
 ### [PLANNED] term-003 — Unix openpty backend
 - depends: term-001
 
-### [PLANNED] term-004 — Kill-on-close via job/group guards
+### [IMPLEMENTED] term-004 — Kill-on-close via job/group guards
 - depends: term-002, term-003
 
 ### [IMPLEMENTED] term-005 — Ring buffer scrollback (10 MB cap)

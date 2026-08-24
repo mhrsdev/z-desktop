@@ -64,6 +64,9 @@ pub struct WorkspaceView {
     /// core-024 companion: the thread the runtime confirmed as active,
     /// mirrored from `ThreadSwitched` events. None until a switch succeeds.
     pub active_thread_id: Option<String>,
+    /// Called when the user activates a thread row; App routes it to
+    /// `Command::SwitchThread` through the command channel.
+    pub on_switch_thread: Option<Box<dyn FnMut(String)>>,
     /// Called when the user sends the composer text.
     pub on_send: Option<Box<dyn FnMut(String)>>,
     /// Called when the user resolves a pending approval.
@@ -103,6 +106,7 @@ mod ns {
     pub const PREVIEW_TOOL: u32 = 12;
     pub const DIFF_TOOL: u32 = 13;
     pub const SURFACE: u32 = 14;
+    pub const THREAD: u32 = 15;
 }
 
 /// An action the reference shell can actually carry out today.
@@ -125,6 +129,9 @@ enum ViewCommand {
     SendMessage,
     /// Answer a pending tool approval.
     ResolveApproval(bool),
+    /// Ask the runtime to make the thread at this row index active
+    /// (`SwitchThread`); resolved to an id against `threads` on execution.
+    SwitchThread(u32),
 }
 
 /// A tool call waiting for an explicit user decision.
@@ -197,6 +204,7 @@ impl WorkspaceView {
             active_thread_id: None,
             on_send: None,
             on_resolve: None,
+            on_switch_thread: None,
         }
     }
 
@@ -768,7 +776,7 @@ impl WorkspaceView {
     /// separate lists, so an arrow key never jumps between distant panels.
     pub fn move_focus_in_list(&mut self, forward: bool, viewport: Rect) -> bool {
         let Some(namespace) = self.focused.map(node_namespace) else { return false };
-        if !matches!(namespace, ns::NAV | ns::CONTEXT) {
+        if !matches!(namespace, ns::NAV | ns::CONTEXT | ns::THREAD) {
             return false;
         }
         self.move_focus_in_namespace(namespace, forward, viewport, |_| true)
@@ -887,6 +895,11 @@ impl WorkspaceView {
             ns::DIFF_TOOL => {
                 DiffTool::ALL.get(index as usize).copied().map(ViewCommand::SelectDiffTool)
             }
+            // Bounds-checked here, so an out-of-range row id maps to no
+            // command instead of switching to a thread that does not exist.
+            ns::THREAD if index < self.threads.len() as u32 => {
+                Some(ViewCommand::SwitchThread(index))
+            }
             ns::FLOATING if index == 0 => Some(ViewCommand::ToggleFloatingTool),
             ns::COMPOSER if index == 10 && !self.input.trim().is_empty() => {
                 Some(ViewCommand::SendMessage)
@@ -963,6 +976,17 @@ impl WorkspaceView {
                 }
                 if let Some(send) = self.on_send.as_mut() {
                     send(text);
+                }
+                true
+            }
+            ViewCommand::SwitchThread(index) => {
+                let Some(thread) = self.threads.get(index as usize) else { return false };
+                let thread_id = thread.id.clone();
+                if self.active_thread_id.as_deref() == Some(thread_id.as_str()) {
+                    return false;
+                }
+                if let Some(switch) = self.on_switch_thread.as_mut() {
+                    switch(thread_id);
                 }
                 true
             }
@@ -1239,10 +1263,12 @@ impl WorkspaceView {
         if !icon_only {
             let section_bottom = rail.bottom() - Spacing::S3 - row_height;
             let width = rail.width - Spacing::S4;
-            for thread in &self.threads {
+            for (index, thread) in self.threads.iter().enumerate() {
                 if y + 40.0 > section_bottom {
                     break;
                 }
+                let row = Rect::new(rail.x + Spacing::S2, y, width, row_height);
+                let active = self.active_thread_id.as_deref() == Some(thread.id.as_str());
                 sidebar_two_line_row(
                     scene,
                     rail.x + Spacing::S2,
@@ -1251,6 +1277,11 @@ impl WorkspaceView {
                     thread.title.clone(),
                     format!("{} messages", thread.message_count),
                     c,
+                    active,
+                );
+                scene.push_access(
+                    AccessNode::new(NodeId::new(ns::THREAD, index as u32), AxRole::Button, &thread.title, row)
+                        .selected(active),
                 );
                 y += 40.0;
             }
@@ -1258,7 +1289,16 @@ impl WorkspaceView {
                 if y + 40.0 > section_bottom {
                     break;
                 }
-                sidebar_two_line_row(scene, rail.x + Spacing::S2, width, y, label.clone(), hint.clone(), c);
+                sidebar_two_line_row(
+                    scene,
+                    rail.x + Spacing::S2,
+                    width,
+                    y,
+                    label.clone(),
+                    hint.clone(),
+                    c,
+                    false,
+                );
                 y += 40.0;
             }
         }
@@ -2803,7 +2843,8 @@ fn wrapped_line_count(text: &str, width: f32, font_size: f32) -> f32 {
 }
 
 /// One two-line sidebar row: primary label over a smaller hint. Shared by the
-/// thread rows (core-021) and the project index rows (ui-030).
+/// thread rows (core-021) and the project index rows (ui-030). The active
+/// thread's title reads as primary text; every other row stays secondary.
 fn sidebar_two_line_row(
     scene: &mut Scene,
     x: f32,
@@ -2812,10 +2853,16 @@ fn sidebar_two_line_row(
     label: String,
     hint: String,
     c: &Semantic,
+    active: bool,
 ) {
     scene.push_text(
         Layer::Content,
-        TextRun::new(label, Rect::new(x, y, width, 22.0), Typography::BASE, c.text_secondary),
+        TextRun::new(
+            label,
+            Rect::new(x, y, width, 22.0),
+            Typography::BASE,
+            if active { c.text_primary } else { c.text_secondary },
+        ),
     );
     scene.push_text(
         Layer::Content,
@@ -3819,5 +3866,131 @@ mod tests {
             !scene.texts().any(|t| t.text.contains(" indexed")),
             "the view must not invent index counts the runtime never sent"
         );
+    }
+
+    #[test]
+    fn the_active_thread_row_is_styled_differently_from_inactive_rows() {
+        let mut view = WorkspaceView::new();
+        view.threads = vec![
+            z_protocol::ThreadInfo {
+                id: "t1".into(),
+                title: "Refactor tokens".into(),
+                message_count: 7,
+                updated_ms: 42,
+            },
+            z_protocol::ThreadInfo {
+                id: "t2".into(),
+                title: "Wire runtime events".into(),
+                message_count: 3,
+                updated_ms: 43,
+            },
+        ];
+        view.active_thread_id = Some("t2".into());
+        let scene = settle(&mut view, Rect::new(0.0, 0.0, 1536.0, 1024.0));
+
+        let inactive = scene
+            .texts()
+            .find(|t| t.text == "Refactor tokens")
+            .expect("the inactive title should be drawn");
+        let active = scene
+            .texts()
+            .find(|t| t.text == "Wire runtime events")
+            .expect("the active title should be drawn");
+        assert_eq!(
+            active.color, view.theme.colors.text_primary,
+            "the active thread's title must read as primary text"
+        );
+        assert_eq!(
+            inactive.color, view.theme.colors.text_secondary,
+            "inactive rows must keep the secondary title colour"
+        );
+
+        // And the same distinction is announced, not just painted.
+        let node = scene
+            .access()
+            .nodes()
+            .iter()
+            .find(|n| n.label == "Wire runtime events")
+            .expect("the active thread row is in the semantic tree");
+        assert!(node.state.selected, "the active thread must be marked selected");
+    }
+
+    #[test]
+    fn activating_a_thread_row_switches_through_the_command_path_with_bounds_checks() {
+        let viewport = Rect::new(0.0, 0.0, 1536.0, 1024.0);
+        let mut view = WorkspaceView::new();
+        view.threads = vec![
+            z_protocol::ThreadInfo {
+                id: "t1".into(),
+                title: "Refactor tokens".into(),
+                message_count: 7,
+                updated_ms: 42,
+            },
+            z_protocol::ThreadInfo {
+                id: "t2".into(),
+                title: "Wire runtime events".into(),
+                message_count: 3,
+                updated_ms: 43,
+            },
+        ];
+        let switched = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let sink = std::rc::Rc::clone(&switched);
+        view.on_switch_thread = Some(Box::new(move |thread_id| sink.borrow_mut().push(thread_id)));
+
+        // An out-of-range row id maps to no command and switches nothing.
+        assert!(!view.activate(NodeId::new(ns::THREAD, 9)));
+        assert!(switched.borrow().is_empty());
+
+        // Activating row 1 requests a switch to that thread's id.
+        assert!(view.activate(NodeId::new(ns::THREAD, 1)));
+        assert_eq!(&*switched.borrow(), &["t2".to_string()]);
+
+        // Re-activating the already-active thread changes nothing.
+        view.active_thread_id = Some("t2".into());
+        assert!(!view.activate(NodeId::new(ns::THREAD, 1)));
+        assert_eq!(switched.borrow().len(), 1);
+    }
+
+    #[test]
+    fn arrow_keys_roam_thread_rows_and_wrap_within_bounds() {
+        let viewport = Rect::new(0.0, 0.0, 1536.0, 1024.0);
+        let mut view = WorkspaceView::new();
+        view.threads = vec![
+            z_protocol::ThreadInfo {
+                id: "t1".into(),
+                title: "Refactor tokens".into(),
+                message_count: 7,
+                updated_ms: 42,
+            },
+            z_protocol::ThreadInfo {
+                id: "t2".into(),
+                title: "Wire runtime events".into(),
+                message_count: 3,
+                updated_ms: 43,
+            },
+        ];
+        let row = |view: &mut WorkspaceView, title: &str| {
+            view.build(viewport)
+                .access()
+                .nodes()
+                .iter()
+                .find(|n| n.label == title && node_namespace(n.id) == ns::THREAD)
+                .map(|n| n.id)
+                .unwrap_or_else(|| panic!("{title:?} thread row missing from the tree"))
+        };
+        let first = row(&mut view, "Refactor tokens");
+        let second = row(&mut view, "Wire runtime events");
+
+        assert!(view.focus(first, viewport));
+        assert!(view.move_focus_in_list(true, viewport));
+        assert_eq!(view.focused(), Some(second));
+
+        // One more step wraps to the first row instead of leaving the list.
+        assert!(view.move_focus_in_list(true, viewport));
+        assert_eq!(view.focused(), Some(first));
+
+        // Up from the first row wraps to the last.
+        assert!(view.move_focus_in_list(false, viewport));
+        assert_eq!(view.focused(), Some(second));
     }
 }

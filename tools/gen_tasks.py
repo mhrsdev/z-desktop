@@ -333,7 +333,7 @@ DOMAINS = [
         ("001", "PTY trait definition", [], "PLANNED"),
         ("002", "ConPTY backend", ["001"], "PLANNED"),
         ("003", "Unix openpty backend", ["001"], "PLANNED"),
-        ("004", "Kill-on-close via job/group guards", ["002", "003"], "PLANNED"),
+        ("004", "Kill-on-close via job/group guards", ["002", "003"], "IMPLEMENTED"),
         ("005", "Ring buffer scrollback (10 MB cap)", ["004"], "IMPLEMENTED"),
         ("006", "VT sequence parser (vte-class)", ["005"], "PLANNED"),
         ("007", "Terminal panel renderer", ["006", "ui-090"], "PLANNED"),

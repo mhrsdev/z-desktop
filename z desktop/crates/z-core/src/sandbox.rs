@@ -237,6 +237,17 @@ impl Guard {
     }
 }
 
+/// Kill-on-close: whatever happens to `run` (success, error, panic), no
+/// spawned tree outlives the guard. This is the unix counterpart of the
+/// job handle's `KILL_ON_JOB_CLOSE` (which fires via `CloseHandle` in
+/// `JobHandle::drop`). Once the group is already dead this is a harmless
+/// best-effort `kill(2)` returning ESRCH.
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.kill_tree();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Windows: Job Objects
 // ---------------------------------------------------------------------------
@@ -547,5 +558,50 @@ mod tests {
             "64 MiB push took too long: {:?}",
             started.elapsed()
         );
+    }
+
+    // -- term-004: kill-on-close child guards --------------------------------
+
+    /// Dropping the guard must SIGKILL the child's process group: a `sleep`
+    /// handed to the guard cannot survive it.
+    #[test]
+    #[cfg(unix)]
+    fn guard_kills_child_process_group_on_drop() {
+        let mut child = spawn("sleep 30", std::env::temp_dir().as_path()).unwrap();
+        let guard = Guard::attach(&child).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        drop(guard);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    // Killed by signal ⇒ no exit code and not success.
+                    assert!(status.code().is_none(), "expected signal kill: {status:?}");
+                    return;
+                }
+                Ok(None) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "child survived guard drop — kill-on-close gap!"
+                    );
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => panic!("try_wait failed: {e}"),
+            }
+        }
+    }
+
+    /// The timeout path must terminate the child promptly, not wait out the
+    /// full 30 s sleep.
+    #[test]
+    #[cfg(unix)]
+    fn timeout_path_terminates_child_within_budget() {
+        let started = Instant::now();
+        let outcome =
+            run("sleep 30", std::env::temp_dir().as_path(), Some(Duration::from_secs(1))).unwrap();
+        assert!(outcome.timed_out);
+        assert_eq!(outcome.code, None);
+        let elapsed = started.elapsed();
+        assert!(elapsed < Duration::from_secs(5), "timeout took too long: {elapsed:?}");
     }
 }

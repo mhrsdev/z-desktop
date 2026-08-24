@@ -441,6 +441,37 @@ pub fn first_seq_gap(records: &[Record]) -> Option<(usize, u64)> {
     None
 }
 
+/// jour-016 lag metric for a replayed segment: how far the journal is from
+/// being loss-free. `gaps` sums every *missing* sequence number across ALL
+/// discontinuities (per forward jump `actual - expected`; duplicates and
+/// backwards jumps are saturating no-ops) — unlike [`first_seq_gap`], which
+/// stops at the first offender.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LagStats {
+    pub records: usize,
+    pub last_seq: Option<u64>,
+    pub gaps: usize,
+}
+
+pub fn lag_stats(records: &[Record]) -> LagStats {
+    let mut gaps = 0usize;
+    if let Some(first) = records.first() {
+        let mut expected = first.seq;
+        for record in &records[1..] {
+            expected = expected.wrapping_add(1);
+            gaps += record.seq.saturating_sub(expected) as usize;
+            // A forward jump consumes its own tail: next expectation
+            // continues from this record, not from `expected`.
+            expected = record.seq;
+        }
+    }
+    LagStats {
+        records: records.len(),
+        last_seq: records.last().map(|r| r.seq),
+        gaps,
+    }
+}
+
 #[cfg(test)]
 mod journal_tests {
     use super::*;
@@ -1005,5 +1036,61 @@ mod journal_tests {
             "no temp litter on failure"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn records_with_seqs(seqs: &[u64]) -> Vec<Record> {
+        seqs.iter()
+            .map(|&seq| Record {
+                seq,
+                ts_ms: 0,
+                kind: JournalKind::TurnStarted,
+                thread_id: None,
+                payload: json!({}),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn lag_stats_clean_journal_has_no_gaps() {
+        let stats = lag_stats(&records_with_seqs(&[1, 2, 3, 4]));
+        assert_eq!(
+            stats,
+            LagStats {
+                records: 4,
+                last_seq: Some(4),
+                gaps: 0
+            }
+        );
+    }
+
+    #[test]
+    fn lag_stats_counts_every_missing_seq_in_one_jump() {
+        // 1 -> 4 skips seqs 2 and 3: two missing numbers.
+        let stats = lag_stats(&records_with_seqs(&[1, 4]));
+        assert_eq!(stats.records, 2);
+        assert_eq!(stats.last_seq, Some(4));
+        assert_eq!(stats.gaps, 2);
+    }
+
+    #[test]
+    fn lag_stats_accumulates_across_multiple_jumps() {
+        // 1->3 misses one; 3->7 misses three more => 4 total. A duplicate
+        // adds nothing (saturating at 0).
+        let stats = lag_stats(&records_with_seqs(&[1, 3, 7, 7, 8]));
+        assert_eq!(stats.records, 5);
+        assert_eq!(stats.last_seq, Some(8));
+        assert_eq!(stats.gaps, 4);
+    }
+
+    #[test]
+    fn lag_stats_empty_segment_is_all_zero_and_none() {
+        assert_eq!(
+            lag_stats(&records_with_seqs(&[])),
+            LagStats {
+                records: 0,
+                last_seq: None,
+                gaps: 0
+            }
+        );
     }
 }

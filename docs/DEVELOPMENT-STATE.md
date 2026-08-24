@@ -6,6 +6,24 @@
 
 Last updated: 2026-08-24
 
+## Wave 10 (ctx-009 weights + jour-016 lag metric) — 2026-08-24 COMPLETE
+
+1. ✅ **ctx-009**: PriorityWeights (per-layer f32, default 1.0) +
+   weighted_tokens() with ceil scaling — settings-backed allocation
+   groundwork.
+2. ✅ **jour-016**: LagStats {records, last_seq, gaps} + lag_stats() —
+   total missing-seq accounting across all gap points (reuses
+   first_seq_gap).
+
+Note: ctx-009's mid-run "2 failed" report was the sibling's in-flight
+journal.rs state; final tree is green.
+
+Verification: full workspace suite green — **623 tests, 0 failed**
+(616 → 623). Ledger: 136 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel, term-006 VT parser
+study (clone vte-rs), or ext-001 plugin manifest format research.
+
 ## Wave 9 (jour-016 + mem-018 + theme-010) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-016**: redacted_summary — counts records with secret-shaped

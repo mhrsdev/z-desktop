@@ -236,6 +236,44 @@ pub fn preview(items: &[ContextItem], max_chars: usize) -> String {
     out
 }
 
+/// ctx-009: per-layer token weights (1.0 = raw estimate). Pure scoring input
+/// for [`weighted_tokens`]; callers tune these to bias budget math by layer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PriorityWeights {
+    pub prefix: f32,
+    pub session: f32,
+    pub turn: f32,
+    pub ephemeral: f32,
+}
+
+impl Default for PriorityWeights {
+    fn default() -> Self {
+        Self {
+            prefix: 1.0,
+            session: 1.0,
+            turn: 1.0,
+            ephemeral: 1.0,
+        }
+    }
+}
+
+/// ctx-009: sum of `est_tokens` scaled by each item's layer weight, rounded
+/// up per item so fractional weights never under-count against the budget.
+pub fn weighted_tokens(items: &[ContextItem], w: &PriorityWeights) -> usize {
+    items
+        .iter()
+        .map(|i| {
+            let weight = match i.layer {
+                Layer::Prefix => w.prefix,
+                Layer::Session => w.session,
+                Layer::Turn => w.turn,
+                Layer::Ephemeral => w.ephemeral,
+            };
+            (i.est_tokens as f32 * weight).ceil() as usize
+        })
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,5 +605,34 @@ mod tests {
     fn default_items_are_unpinned() {
         let it = item(Layer::Session, "plain", 5);
         assert!(!it.pinned);
+    }
+
+    // ctx-009
+    #[test]
+    fn uniform_weights_equal_raw_total() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Session, "old", 5),
+            item(Layer::Turn, "now", 7),
+            item(Layer::Ephemeral, "scratch", 3),
+        ];
+        assert_eq!(weighted_tokens(&items, &PriorityWeights::default()), 25);
+    }
+
+    #[test]
+    fn doubled_turn_weight_doubles_only_turn_tokens() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Session, "old", 5),
+            item(Layer::Turn, "now", 7),
+        ];
+        let mut w = PriorityWeights::default();
+        w.turn = 2.0;
+        assert_eq!(weighted_tokens(&items, &w), 10 + 5 + 14);
+    }
+
+    #[test]
+    fn weighted_tokens_empty_input_is_zero() {
+        assert_eq!(weighted_tokens(&[], &PriorityWeights::default()), 0);
     }
 }

@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 132 |
+| IMPLEMENTED | 134 |
 | PARTIAL | 5 |
-| PLANNED | 586 |
+| PLANNED | 584 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -200,7 +200,7 @@
 ### [PLANNED] jour-015 — Journal redaction by construction
 - depends: jour-001, red-002
 
-### [PLANNED] jour-016 — journal_lag_records metric
+### [IMPLEMENTED] jour-016 — journal_lag_records metric
 - depends: jour-002
 
 ### [PLANNED] jour-017 — Fixture journal-seq generation script
@@ -778,7 +778,7 @@
 ### [IMPLEMENTED] ctx-008 — Context inspector panel data export
 - depends: ctx-001, ui-070
 
-### [PLANNED] ctx-009 — Priority weight settings (dev mode)
+### [IMPLEMENTED] ctx-009 — Priority weight settings (dev mode)
 - depends: ctx-002, set-002
 
 ### [PLANNED] ctx-010 — Compaction journaling with token counts

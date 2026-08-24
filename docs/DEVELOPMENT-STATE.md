@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-24
 
+## Wave 20 (ctx-010 + mem-021 + red-003) — 2026-08-24 COMPLETE
+
+1. ✅ **ctx-010**: compact_with_journal — CompactionEvent (dropped,
+   tokens_saved) emitted only on actual drops.
+2. ✅ **mem-021**: import_layer round-trips export_layer through a fresh
+   store rebuild.
+3. ✅ **red-003**: scan_and_record bridges redact() with RedactionStats
+   counters.
+
+Verification: full workspace suite green — **696 tests, 0 failed**
+(689 → 696). Ledger: 150 IMPLEMENTED + extensions.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 19 (set-010 export + sup-026 ok-rate + edit-007 concurrency) — 2026-08-24 COMPLETE
 
 1. ✅ **set-010**: export_user_json — schema-keyed current-values dump.

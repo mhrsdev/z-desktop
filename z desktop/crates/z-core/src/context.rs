@@ -140,6 +140,43 @@ pub fn compact_once(items: Vec<ContextItem>, budget_tokens: usize) -> Vec<Contex
     kept
 }
 
+/// ctx-010: journal record for one [`compact_with_journal`] pass.
+pub struct CompactionEvent {
+    pub at_ms: u128,
+    pub dropped: usize,
+    pub tokens_saved: usize,
+}
+
+/// ctx-010: [`compact_once`] plus a journal event, `Some` only when the pass
+/// actually dropped items. `tokens_saved` is the dropped est_tokens sum;
+/// assemble is order-preserving and drop-only, so the input/output deltas are
+/// exact.
+pub fn compact_with_journal(
+    items: Vec<ContextItem>,
+    budget_tokens: usize,
+) -> (Vec<ContextItem>, Option<CompactionEvent>) {
+    let before_count = items.len();
+    let before_tokens: usize = items.iter().map(|i| i.est_tokens).sum();
+    let kept = compact_once(items, budget_tokens);
+    let dropped = before_count - kept.len();
+    if dropped == 0 {
+        return (kept, None);
+    }
+    let tokens_saved =
+        before_tokens.saturating_sub(kept.iter().map(|i| i.est_tokens).sum::<usize>());
+    (
+        kept,
+        Some(CompactionEvent {
+            at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+            dropped,
+            tokens_saved,
+        }),
+    )
+}
+
 /// mem-009 (ADR-0014): appends ranked memories as Turn-layer items
 /// ("[memory] {content}") while the cumulative added estimate stays within
 /// `budget_tokens`; ranked order means the first overflow ends injection.
@@ -779,5 +816,65 @@ mod tests {
         // old1/old2 are preserved verbatim instead of re-dropped.
         let tighter = compact_once(once.clone(), 30);
         assert_eq!(once, tighter);
+    }
+
+    // ctx-010
+    #[test]
+    fn compact_journal_no_drop_returns_none() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 5),
+            item(Layer::Session, "latest", 10),
+        ];
+        let (kept, event) = compact_with_journal(items, 100);
+        assert_eq!(kept.len(), 2);
+        assert!(event.is_none(), "nothing dropped => no journal event");
+    }
+
+    #[test]
+    fn compact_journal_drop_reports_dropped_and_tokens_saved() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 5),
+            item(Layer::Session, "oldest", 20),
+            item(Layer::Session, "latest", 10), // last session: survivor
+            item(Layer::Turn, "t1", 15),
+            item(Layer::Ephemeral, "dump", 30),
+        ];
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let (kept, event) = compact_with_journal(items, 40);
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        // Total 80; dropping dump(30)+t1(15) reaches 35 <= 40, so oldest stays.
+        assert_eq!(
+            kept.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(),
+            vec!["sys", "oldest", "latest"]
+        );
+        let event = event.expect("drops occurred => Some(event)");
+        assert_eq!(event.dropped, 2);
+        assert_eq!(event.tokens_saved, 15 + 30);
+        assert!(
+            before <= event.at_ms && event.at_ms <= after,
+            "at_ms {} outside [{before},{after}]",
+            event.at_ms
+        );
+    }
+
+    #[test]
+    fn compact_journal_event_matches_kept_delta() {
+        let items = vec![
+            item(Layer::Session, "old1", 20),
+            item(Layer::Session, "old2", 20),
+            item(Layer::Session, "old3", 20),
+            item(Layer::Session, "latest", 20),
+        ];
+        let (kept, event) = compact_with_journal(items, 50);
+        let event = event.expect("over budget => drops");
+        assert_eq!(kept.len() + event.dropped, 4);
+        let kept_tokens: usize = kept.iter().map(|i| i.est_tokens).sum();
+        assert_eq!(kept_tokens + event.tokens_saved, 80);
     }
 }

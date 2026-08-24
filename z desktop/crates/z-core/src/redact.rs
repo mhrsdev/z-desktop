@@ -73,6 +73,21 @@ pub fn redact(input: &str) -> String {
     text
 }
 
+/// Run [`redact`] over `text`, recording one scan plus one hit per matched
+/// rule kind into `stats`. Returns the redacted text.
+pub fn scan_and_record(text: &str, stats: &RedactionStats, ts_ms: u128) -> String {
+    stats.record_scan();
+    let out = redact(text);
+    // A rule "hit" iff its regex matched the pre-redaction text; recording
+    // on the output instead could double-count via fingerprint markers.
+    for rule in rules() {
+        if rule.regex.is_match(text) {
+            stats.record_hit(rule.label, ts_ms);
+        }
+    }
+    out
+}
+
 /// First 2 + last 2 chars of the secret — enough to correlate, useless to recover.
 fn fingerprint(secret: &str) -> String {
     let chars: Vec<char> = secret.chars().collect();
@@ -206,6 +221,30 @@ mod tests {
             vec![("sk".to_string(), 2), ("bearer".to_string(), 1)]
         );
         assert_eq!(snap.last_hit_at_ms, Some(175));
+    }
+
+    #[test]
+    fn scan_and_record_clean_text_records_scan_without_hits() {
+        let stats = RedactionStats::default();
+        let out = scan_and_record("just plain code", &stats, 10);
+        assert_eq!(out, "just plain code");
+        let snap = stats.snapshot();
+        assert_eq!(snap.total_scans, 1);
+        assert!(snap.hits_by_kind.is_empty());
+        assert_eq!(snap.last_hit_at_ms, None);
+    }
+
+    #[test]
+    fn scan_and_record_sk_hit_is_counted_per_kind() {
+        let stats = RedactionStats::default();
+        let src = "key sk-abcdefghijklmnopqrstuvwx end";
+        let out = scan_and_record(src, &stats, 250);
+        assert_ne!(out, src);
+        assert!(out.contains("[redacted:sk"), "{out}");
+        let snap = stats.snapshot();
+        assert_eq!(snap.total_scans, 1);
+        assert_eq!(snap.hits_by_kind, vec![("sk".to_string(), 1)]);
+        assert_eq!(snap.last_hit_at_ms, Some(250));
     }
 
     #[test]

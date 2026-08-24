@@ -502,6 +502,86 @@ pub fn export_layer(store: &MemoryStore, layer: Layer) -> Result<String, String>
         .map_err(|e| format!("memory: cannot serialize {} view: {e}", layer.as_str()))
 }
 
+/// Per-layer counterpart of [`import_records`] (mem-021): parses
+/// [`export_layer`] output back into records and appends each to the journal
+/// via [`record`] (best-effort), then refreshes the target layer's derived
+/// view from the refolded journal (same "views are caches" path as
+/// [`MemoryStore::rebuild_views`]). Entries whose `layer` field does not
+/// match `layer` are skipped like malformed ones; an [`Err`] is returned only
+/// when the payload is not a JSON array or every entry was rejected. Returns
+/// how many records landed in the journal.
+pub fn import_layer(
+    store: &MemoryStore,
+    layer: Layer,
+    json: &str,
+    journal: &Mutex<Journal>,
+) -> Result<usize, String> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(json)
+        .map_err(|e| format!("memory: import payload is not a JSON array: {e}"))?;
+    let total = entries.len();
+    let mut imported = 0usize;
+    for entry in entries {
+        let validated = match serde_json::from_value::<MemoryRecord>(entry) {
+            // Foreign-layer entries are skipped, not silently relabeled.
+            Ok(r) if r.layer != layer => Err(format!(
+                "record {} belongs to layer {}, not {}",
+                r.id,
+                r.layer.as_str(),
+                layer.as_str()
+            )),
+            // Re-validate through the only constructor so hand-written
+            // payloads cannot bypass provenance/confidence invariants.
+            Ok(r) => MemoryRecord::new(
+                r.id,
+                r.layer,
+                r.content,
+                r.provenance,
+                r.confidence,
+                r.status,
+            ),
+            Err(e) => Err(e.to_string()),
+        };
+        match validated {
+            Ok(r) => {
+                record(journal, &r);
+                imported += 1;
+            }
+            Err(e) => log::warn!(
+                "memory: skipping malformed {} import entry: {e}",
+                layer.as_str()
+            ),
+        }
+    }
+    if total > 0 && imported == 0 {
+        return Err(format!(
+            "memory: all {total} {} import entries were malformed",
+            layer.as_str()
+        ));
+    }
+    // Refresh the derived view so a fresh store sees the imports without a
+    // separate rebuild_views call. Cache maintenance is best-effort, matching
+    // record(); the journal remains the fail-loud source of truth.
+    let path = journal.lock().unwrap().path().to_path_buf();
+    match MemoryView::fold(&path) {
+        Ok(view) => {
+            let live: Vec<MemoryRecord> = view
+                .live()
+                .into_iter()
+                .filter(|r| r.layer == layer)
+                .cloned()
+                .collect();
+            if let Err(e) = store.write_layer_view(layer, &live) {
+                log::warn!("memory: cannot refresh {} view: {e}", layer.as_str());
+            }
+        }
+        Err(e) => log::warn!(
+            "memory: cannot refold journal to refresh {} view: {e}",
+            layer.as_str()
+        ),
+    }
+    Ok(imported)
+}
+
 /// Owns the `data/memory/` view directory: one append-only JSONL file per
 /// layer, rebuilt from the journal (delete any of them and replaying
 /// reproduces equivalent state — ADR-0014 D2).
@@ -1963,6 +2043,117 @@ mod memory_tests {
         assert_eq!(view.records[0].id, "mem-g");
         assert_eq!(view.records[0].content, "good fact");
         assert_eq!(view.records[0].status, Status::Promoted, "validated via ::new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_layer_round_trips_export_through_a_fresh_store() {
+        let src_dir = temp_dir("mem-lx-src");
+        let src_store = MemoryStore::open(&src_dir);
+        let src_journal = Mutex::new(Journal::open(&src_dir, "runtime").expect("open"));
+        record(&src_journal, &rec("p-a", Status::Promoted));
+        record(&src_journal, &rec("p-b", Status::Promoted));
+        // Foreign layer: must NOT ride along in the project export.
+        record(
+            &src_journal,
+            &MemoryRecord::new(
+                "s-a",
+                Layer::Semantic,
+                "semantic fact",
+                prov("msg-2"),
+                0.8,
+                Status::Promoted,
+            )
+            .expect("valid record"),
+        );
+        drop(src_journal);
+        // Views are caches: build them from the journal before exporting
+        // (same recovery path as mem-015).
+        let src_path = src_dir.join("runtime.jsonl");
+        src_store.rebuild_views(&src_path).expect("rebuild views");
+        let json = export_layer(&src_store, Layer::Project).expect("export");
+
+        let dst_dir = temp_dir("mem-lx-dst");
+        let dst_store = MemoryStore::open(&dst_dir);
+        let dst_journal = Mutex::new(Journal::open(&dst_dir, "runtime").expect("open"));
+        let imported =
+            import_layer(&dst_store, Layer::Project, &json, &dst_journal).expect("import");
+        assert_eq!(imported, 2);
+
+        drop(dst_journal);
+        // Fresh store's rebuilt view is identical to what was exported.
+        let expected: Vec<MemoryRecord> = serde_json::from_str(&json).expect("parse export");
+        assert_eq!(
+            dst_store.read_layer(Layer::Project).expect("read"),
+            expected
+        );
+        assert!(
+            dst_store
+                .read_layer(Layer::Semantic)
+                .expect("read")
+                .is_empty(),
+            "foreign layer must not leak into the fresh store"
+        );
+        let _ = std::fs::remove_dir_all(&src_dir);
+        let _ = std::fs::remove_dir_all(&dst_dir);
+    }
+
+    #[test]
+    fn import_layer_rejects_malformed_json_and_skips_bad_or_foreign_entries() {
+        let dir = temp_dir("mem-lx-bad");
+        let store = MemoryStore::open(&dir);
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let err = import_layer(&store, Layer::Project, "{not json", &journal)
+            .err()
+            .unwrap();
+        assert!(err.contains("not a JSON array"), "{err}");
+
+        let good = serde_json::json!({
+            "id": "mem-p",
+            "layer": "project",
+            "content": "good fact",
+            "provenance": {
+                "kind": "user",
+                "ref": "msg-1",
+                "thread_id": "t",
+                "turn_id": "u",
+                "ts_ms": 42
+            },
+            "confidence": 0.8,
+            "status": "promoted"
+        });
+        // One good, one wrong-layer (skipped like malformed), one shape-broken.
+        let arr = serde_json::json!([
+            good,
+            {
+                "id": "mem-s",
+                "layer": "semantic",
+                "content": "foreign layer fact",
+                "provenance": {
+                    "kind": "user",
+                    "ref": "msg-1",
+                    "thread_id": "t",
+                    "turn_id": "u",
+                    "ts_ms": 43
+                },
+                "confidence": 0.5,
+                "status": "promoted"
+            },
+            {}
+        ]);
+        let imported =
+            import_layer(&store, Layer::Project, &arr.to_string(), &journal).expect("partial");
+        assert_eq!(imported, 1, "{arr}");
+        // All-malformed array fails loud with the rejected count.
+        let err = import_layer(&store, Layer::Project, "[{}, {}]", &journal)
+            .err()
+            .unwrap();
+        assert!(err.contains("all 2"), "{err}");
+
+        drop(journal);
+        let view = MemoryView::fold(&dir.join("runtime.jsonl")).expect("fold");
+        assert_eq!(view.records.len(), 1, "only the project entry landed");
+        assert_eq!(view.records[0].id, "mem-p");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

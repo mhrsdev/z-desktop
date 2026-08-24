@@ -128,6 +128,21 @@ pub fn usage_by_day(path: &Path) -> Result<Vec<(String, u64)>, String> {
     Ok(days.into_iter().collect())
 }
 
+/// jour-016: counts journal records whose payload contains no secret-shaped
+/// substrings. A record passes when [`crate::redact::redact`] applied to its
+/// serialized payload leaves it byte-identical. This is only a summary
+/// counter over one segment; the full redaction audit of every persisted
+/// surface is red-005.
+pub fn redacted_summary(path: &Path) -> Result<usize, String> {
+    Ok(Journal::replay(path)?
+        .iter()
+        .filter(|record| {
+            let text = record.payload.to_string();
+            crate::redact::redact(&text) == text
+        })
+        .count())
+}
+
 /// UTC calendar day ("YYYY-MM-DD") of a wall-clock millisecond timestamp.
 /// Days-since-epoch → civil date (Howard Hinnant's algorithm); no chrono dep.
 fn utc_day(ts_ms: u128) -> String {
@@ -836,6 +851,46 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             usage_by_day(&dir.join("main.jsonl")).expect("fold"),
             vec![("2024-01-01".to_string(), 2)]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-016 ---------------------------------------------------------------
+
+    #[test]
+    fn redacted_summary_counts_only_secret_free_records() {
+        let dir = temp_dir("redacted-summary");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"text": "hello world"}),
+            );
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"text": "key sk-abcdefghijklmnopqrstuvwx"}),
+            );
+            append(&mut j, JournalKind::CommandReceived, None, json!({}));
+        }
+        let count = redacted_summary(&dir.join("main.jsonl")).expect("summary");
+        assert_eq!(count, 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn redacted_summary_on_empty_journal_is_zero() {
+        let dir = temp_dir("redacted-empty");
+        {
+            // Create the file with no records (drop flushes/closes it).
+            Journal::open(&dir, "main").expect("open");
+        }
+        assert_eq!(
+            redacted_summary(&dir.join("main.jsonl")).expect("summary"),
+            0
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 130 |
+| IMPLEMENTED | 132 |
 | PARTIAL | 5 |
-| PLANNED | 588 |
+| PLANNED | 586 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -743,7 +743,7 @@
 ### [RESEARCH] mem-017 — Semantic retrieval layer (if justified)
 - depends: mem-016
 
-### [PLANNED] mem-018 — Anchor-based invalidation (file fingerprints)
+### [IMPLEMENTED] mem-018 — Anchor-based invalidation (file fingerprints)
 - depends: mem-001, edit-001
 
 ### [PLANNED] mem-019 — Memory export/import
@@ -1014,7 +1014,7 @@
 ### [PLANNED] ide-009 — tree-sitter highlight query sets
 - depends: idx-004
 
-### [PLANNED] ide-010 — Highlight theme token mapping
+### [IMPLEMENTED] ide-010 — Highlight theme token mapping
 - depends: ide-009, theme-001
 
 ### [PLANNED] ide-011 — Editor v1 renderer (virtualized lines)

@@ -6,6 +6,22 @@
 
 Last updated: 2026-08-24
 
+## Wave 9 (jour-016 + mem-018 + theme-010) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-016**: redacted_summary — counts records with secret-shaped
+   substrings already masked; security-scan allowlist gained the new
+   alphabet fake fixture (real value extracted from source, not guessed).
+2. ✅ **mem-018**: AnchoredFact + anchored_facts()/stale_anchors() —
+   file-anchored memory records flagged stale on fingerprint change.
+3. ✅ **theme-010**: LIGHT tokens (calm light palette, same accent hue
+   family; luminance-tested).
+
+Verification: full workspace suite green — **616 tests, 0 failed**
+(609 → 616). Ledger: 134 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard, ctx-009 priority weights,
+or term-006 VT parser study.
+
 ## Wave 8 (set-006 verify + ctx-004 pins + diff-020 patience) — 2026-08-24 COMPLETE
 
 1. ✅ **set-006**: verified prior attempt landed (known_keys/defaults_map +

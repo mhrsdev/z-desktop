@@ -777,6 +777,65 @@ pub fn consolidate(
     Ok((promoted, superseded))
 }
 
+/// One live record's claim about a code file on disk (mem-018): the record
+/// cites a path whose current content may have drifted since capture.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnchoredFact {
+    pub record_id: String,
+    pub file_path: String,
+    /// FNV-1a of the cited file's bytes; 0 = unknown until linked to disk
+    /// state (anchored_facts never reads the filesystem itself).
+    pub file_fingerprint: u64,
+}
+
+const CODE_EXTENSIONS: [&str; 3] = [".rs", ".toml", ".md"];
+
+/// First whitespace-delimited token in `content` that looks like a repo path:
+/// contains '/' and ends with a known code extension. Trailing punctuation is
+/// stripped so "see src/lib.rs," still parses. ponytail: substring heuristic,
+/// no tokenizer — refine if prose paths start misfiring.
+fn path_like_token(content: &str) -> Option<String> {
+    content.split_whitespace().find_map(|tok| {
+        let tok = tok.trim_end_matches(|c| matches!(c, '.' | ',' | ';' | ':' | ')'));
+        (tok.contains('/') && CODE_EXTENSIONS.iter().any(|e| tok.ends_with(e)))
+            .then(|| tok.to_string())
+    })
+}
+
+/// Anchors of a view's live records (mem-018): extraction-kind records whose
+/// content cites a code-file path. Fingerprints are parsed as 0 — unknown
+/// until linked against disk state via [`stale_anchors`].
+pub fn anchored_facts(view: &MemoryView) -> Vec<AnchoredFact> {
+    view.live()
+        .iter()
+        .filter(|r| r.provenance.kind == "extraction")
+        .filter_map(|r| {
+            path_like_token(&r.content).map(|file_path| AnchoredFact {
+                record_id: r.id.clone(),
+                file_path,
+                file_fingerprint: 0,
+            })
+        })
+        .collect()
+}
+
+/// Facts no longer matching `current` disk-state pairs (mem-018): a fact is
+/// stale when no pair has both its path and its fingerprint — covering files
+/// that changed fingerprint and files that vanished.
+pub fn stale_anchors<'a>(
+    facts: &'a [AnchoredFact],
+    current: &[(&str, u64)],
+) -> Vec<&'a AnchoredFact> {
+    facts
+        .iter()
+        .filter(|f| {
+            !current
+                .iter()
+                .any(|(p, fp)| *p == f.file_path && *fp == f.file_fingerprint)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod memory_tests {
     use super::*;
@@ -1765,5 +1824,93 @@ mod memory_tests {
         assert_eq!(view.records[0].content, "good fact");
         assert_eq!(view.records[0].status, Status::Promoted, "validated via ::new");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn extraction_rec(id: &str, content: &str, status: Status) -> MemoryRecord {
+        MemoryRecord::new(
+            id,
+            Layer::Project,
+            content,
+            Provenance {
+                kind: "extraction".into(),
+                ..prov("turn-1")
+            },
+            0.6,
+            status,
+        )
+        .expect("valid record")
+    }
+
+    #[test]
+    fn anchored_facts_parse_live_extraction_records_citing_code_paths() {
+        let mut view = MemoryView::default();
+        view.records.push(extraction_rec(
+            "mem-a",
+            "Config lives in crates/app/src/main.rs today",
+            Status::Promoted,
+        ));
+        // Trailing punctuation is stripped from the token.
+        view.records.push(extraction_rec(
+            "mem-b",
+            "Edited crates/old/thing.rs, then moved on",
+            Status::Promoted,
+        ));
+        // Non-extraction kind: skipped even with identical content.
+        let mut user = extraction_rec(
+            "mem-u",
+            "Config lives in crates/app/src/main.rs today",
+            Status::Promoted,
+        );
+        user.provenance.kind = "user".into();
+        view.records.push(user);
+        // Provisional / superseded are not live (D4): skipped.
+        view.records.push(extraction_rec(
+            "mem-p",
+            "See z desktop/Cargo.toml for the workspace",
+            Status::Provisional,
+        ));
+        let mut sup = extraction_rec("mem-s", "Docs in README.md explain usage", Status::Promoted);
+        sup.superseded_by = Some("mem-a".into());
+        view.records.push(sup);
+        // Extraction without a path-like token: skipped.
+        view.records.push(extraction_rec("mem-n", "Always use pnpm", Status::Promoted));
+
+        let facts = anchored_facts(&view);
+        assert_eq!(
+            facts,
+            vec![
+                AnchoredFact {
+                    record_id: "mem-a".into(),
+                    file_path: "crates/app/src/main.rs".into(),
+                    file_fingerprint: 0,
+                },
+                AnchoredFact {
+                    record_id: "mem-b".into(),
+                    file_path: "crates/old/thing.rs".into(),
+                    file_fingerprint: 0,
+                },
+            ],
+            "only live extraction records with path tokens anchor"
+        );
+    }
+
+    #[test]
+    fn stale_anchors_flag_changed_fingerprints_and_vanished_paths() {
+        let facts = vec![
+            AnchoredFact { record_id: "m1".into(), file_path: "src/lib.rs".into(), file_fingerprint: 7 },
+            AnchoredFact { record_id: "m2".into(), file_path: "docs/guide.md".into(), file_fingerprint: 9 },
+        ];
+        assert!(stale_anchors(&facts, &[("src/lib.rs", 7), ("docs/guide.md", 9)]).is_empty());
+
+        let stale = stale_anchors(&facts, &[("src/lib.rs", 8), ("docs/guide.md", 9)]);
+        assert_eq!(
+            stale.iter().map(|f| f.record_id.as_str()).collect::<Vec<_>>(),
+            vec!["m1"],
+            "fingerprint change flags exactly that fact"
+        );
+        // Path gone entirely -> stale.
+        assert_eq!(stale_anchors(&facts, &[("docs/guide.md", 9)]).len(), 1);
+        // No disk state at all -> everything stale.
+        assert_eq!(stale_anchors(&facts, &[]).len(), facts.len());
     }
 }

@@ -64,6 +64,7 @@ ALLOWLIST_SUBSTRINGS = [
     "AKIAIO...MPLE",               # redact.rs test placeholder (fake)
     "sk-SU",                       # runtime.rs journal test placeholder prefix
                                    # (21-char fake; the test asserts it never persists)
+        "sk-abcdefghijklmnopqrstuvwx",  # reducer.rs redacted-summary fixture (alphabet fake)
 ]
 
 

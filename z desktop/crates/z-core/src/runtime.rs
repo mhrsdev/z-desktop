@@ -123,6 +123,11 @@ struct Shared {
     // time. ponytail: unbounded map OK at personal scale — entries live only
     // for the duration of one call.
     write_grants: Mutex<HashMap<String, String>>,
+    // sup-017/024: turn ids whose supervision verdict the user appealed.
+    // run_turn's gate stands down for these (warn-only); seeded from the
+    // journal at startup so overrides survive restarts. Lives here rather
+    // than on Runtime because run_turn workers reach Shared by Arc already.
+    overridden_turns: Mutex<std::collections::HashSet<Id>>,
 }
 
 /// Upper bound on queued steering texts per thread. Beyond this, the oldest
@@ -182,6 +187,37 @@ fn open_runtime_journal(data_dir: &std::path::Path) -> Option<Arc<Mutex<Journal>
             None
         }
     }
+}
+
+/// sup-017/024: fold journaled verdict overrides into the gate's skip-set at
+/// startup, so an appeal survives a restart. Replay failures degrade to an
+/// empty set — the journal itself is best-effort; a lost override history
+/// must never block startup. ponytail: full replay per boot is fine at
+/// personal journal scale.
+fn load_overridden_turns(data_dir: &std::path::Path) -> std::collections::HashSet<Id> {
+    let path = data_dir.join("journal").join("runtime.jsonl");
+    match Journal::replay(&path) {
+        Ok(records) => records
+            .iter()
+            .filter(|r| r.kind == JournalKind::VerdictOverridden)
+            .filter_map(|r| r.payload.get("turn_id").and_then(|v| v.as_str()).map(Id::from))
+            .collect(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+
+/// sup-017: best-effort resolution of the thread that ran `turn_id`, from
+/// TurnStarted breadcrumbs in the runtime journal. Unknown turns journal with
+/// a null thread_id — never fatal to the appeal itself.
+fn thread_for_turn(data_dir: &std::path::Path, turn_id: &str) -> Option<Id> {
+    let path = data_dir.join("journal").join("runtime.jsonl");
+    Journal::replay(&path)
+        .ok()?
+        .iter()
+        .rev()
+        .filter(|r| r.kind == JournalKind::TurnStarted)
+        .find(|r| r.payload.get("turn_id").and_then(|v| v.as_str()) == Some(turn_id))
+        .and_then(|r| r.thread_id.clone())
 }
 
 /// Where sessions/config live. `Z_DESKTOP_DATA` overrides; default is `data/`
@@ -253,6 +289,8 @@ impl Runtime {
         log::info!("restored {} thread(s)", threads.len());
         // jour-024: resume the lifecycle journal across restarts (best-effort).
         let journal = open_runtime_journal(&data_dir);
+        // sup-017/024: journaled verdict overrides gate-honor across restarts.
+        let overridden_turns = Mutex::new(load_overridden_turns(&data_dir));
         Self {
             shared: Arc::new(Shared {
                 provider: Mutex::new(None),
@@ -264,6 +302,7 @@ impl Runtime {
                 steering: Mutex::new(HashMap::new()),
                 settings: Mutex::new(settings),
                 write_grants: Mutex::new(HashMap::new()),
+                overridden_turns,
             }),
             data_dir,
             threads: Mutex::new(threads),
@@ -323,6 +362,8 @@ impl Runtime {
                 }
                 // ui-040: fold the journal's evidence for the UI badges.
                 Command::GetEvidence { turn_id } => self.send_evidence(turn_id),
+                // sup-017: user appeals a supervision verdict.
+                Command::AppealVerdict { turn_id, .. } => self.appeal_verdict(turn_id),
             }
         }
         log::info!("command channel closed; runtime stopping");
@@ -347,6 +388,26 @@ impl Runtime {
         let _ = self
             .event_tx
             .send(Event::SteeringQueued { thread_id, depth });
+    }
+
+    /// sup-017/024: user appealed a supervision verdict on `turn_id`. The
+    /// override is journaled (so restarts honor it), added to the in-memory
+    /// skip-set immediately, and echoed to the UI so its blocked badge can
+    /// clear. `blocked_cleared` is false only when no journal exists — then
+    /// nothing durable would survive a restart.
+    fn appeal_verdict(&self, turn_id: Id) {
+        let thread_id = thread_for_turn(&self.data_dir, &turn_id);
+        Runtime::journal_record(
+            &self.journal,
+            JournalKind::VerdictOverridden,
+            thread_id.clone(),
+            json!({ "turn_id": turn_id, "thread_id": thread_id }),
+        );
+        self.shared.overridden_turns.lock().unwrap().insert(turn_id.clone());
+        let _ = self.event_tx.send(Event::VerdictOverridden {
+            turn_id,
+            blocked_cleared: self.journal.is_some(),
+        });
     }
 
     /// jour-024: append one `CommandReceived` record per inbound command,
@@ -387,6 +448,12 @@ impl Runtime {
                 json!({ "command": "duplicate_thread", "thread_id": thread_id, "new_id": new_id }),
             ),
             Command::GetEvidence { .. } => (None, json!({ "command": "get_evidence" })),
+            Command::AppealVerdict { turn_id, .. } => (
+                None,
+                // Shape-only breadcrumb; the appeal reason stays out of the
+                // journal like every other free-text field.
+                json!({ "command": "appeal_verdict", "turn_id": turn_id }),
+            ),
             Command::ConfigureProvider { config } => (
                 None,
                 // Shape only: which configuration fields were sent, never
@@ -950,7 +1017,12 @@ fn run_turn(
             // a fully-unlinked claim set with zero ok same-turn evidence fails
             // the turn when evidence capture was demonstrably operational.
             let mut blocked_reason: Option<String> = None;
-            if !outcome.text.trim().is_empty() && !crate::evidence::extract_claims(&outcome.text).is_empty() {
+            // sup-017/024: a turn whose verdict the user appealed is never
+            // gated again — warn only; the whole evaluation below is skipped.
+            let overridden = shared.overridden_turns.lock().unwrap().contains(&turn_id);
+            if overridden {
+                log::warn!("supervision: turn {turn_id} was overridden by user appeal; gate skipped");
+            } else if !outcome.text.trim().is_empty() && !crate::evidence::extract_claims(&outcome.text).is_empty() {
                 let claims = crate::evidence::extract_claims(&outcome.text);
                 match crate::evidence::EvidenceView::fold(&data_dir.join("journal").join("runtime.jsonl")) {
                     Ok(view) => {
@@ -1793,6 +1865,7 @@ mod budget_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let big = "word ".repeat(400); // ~100 tokens per message
         let thread = Thread {
@@ -1944,6 +2017,7 @@ mod capability_gate_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         shared.provider =
             Mutex::new(Some(Arc::new(provider::OpenAiProvider {
@@ -1984,6 +2058,7 @@ mod capability_gate_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let caps = model_caps(&empty);
         assert!(!caps.supports_tools);
@@ -2112,6 +2187,7 @@ mod steering_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         {
             let mut q = shared.steering.lock().unwrap();
@@ -2139,6 +2215,7 @@ mod steering_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
         for i in 0..(STEERING_QUEUE_CAP + 4) {
@@ -2163,6 +2240,7 @@ mod steering_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
         rt.enqueue_message("t".into(), "stale guidance".into());
@@ -2195,6 +2273,7 @@ mod steering_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let rt = make_runtime_for_tests(Arc::new(shared));
 
@@ -2326,6 +2405,7 @@ mod journal_wiring_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -2340,6 +2420,7 @@ mod journal_wiring_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -2676,6 +2757,7 @@ mod settings_wiring_tests {
                 crate::settings::load(&data_dir),
             ))),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
         assert_eq!(
@@ -2816,6 +2898,7 @@ mod doom_loop_retry_tests {
                 crate::settings::load(&data_dir),
             ))),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _runtime_events) = make_runtime_at(Arc::new(shared), data_dir.clone());
 
@@ -2947,6 +3030,7 @@ mod doom_loop_retry_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _runtime_events) = make_runtime_at(Arc::new(shared), data_dir.clone());
 
@@ -3073,6 +3157,7 @@ mod supervision_verdict_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
         assert!(rt.journal.is_some(), "sup-007 gate requires a live journal");
@@ -3147,6 +3232,7 @@ mod supervision_verdict_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
 
@@ -3210,6 +3296,7 @@ mod supervision_verdict_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         };
         let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
 
@@ -3248,6 +3335,184 @@ mod supervision_verdict_tests {
 }
 
 #[cfg(test)]
+mod appeal_override_tests {
+    //! sup-017/024: appealed verdict overrides are journaled, folded back in
+    //! at startup, and stand down the sup-007 gate for that turn id.
+
+    use super::*;
+    use super::steering_tests::{make_runtime_at, ScriptedProvider};
+
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn unique_data_dir(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("zdt-appeal-{tag}-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("threads")).expect("create temp data dir");
+        dir
+    }
+
+    /// One evidence-free read tool call, then a final text claiming success —
+    /// the exact fake-completion signature the sup-007 gate fires on.
+    fn gated_outcome_pair() -> Vec<provider::StreamOutcome> {
+        vec![
+            provider::StreamOutcome {
+                text: String::new(),
+                tool_calls: vec![provider::ToolCallSpec {
+                    id: "call-x".into(),
+                    name: "fs_read".into(),
+                    arguments_json: r#"{"path":"README.md"}"#.into(),
+                }],
+            },
+            provider::StreamOutcome {
+                text: "All done, the tests pass.".into(),
+                tool_calls: Vec::new(),
+            },
+        ]
+    }
+
+    fn scripted_shared(outcomes: Vec<provider::StreamOutcome>) -> Shared {
+        Shared {
+            provider: Mutex::new(Some(Arc::new(ScriptedProvider {
+                outcomes: std::sync::Mutex::new(outcomes),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }) as Arc<dyn provider::Provider>)),
+            provider_label: Mutex::new("scripted".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+
+    fn gated_thread(id: &str) -> Thread {
+        Thread {
+            id: id.into(),
+            title: "appeal".into(),
+            messages: vec![StoredMessage {
+                role: z_protocol::Role::User,
+                text: "do work".into(),
+                tool_calls: Vec::new(),
+            }],
+            updated_ms: 0,
+        }
+    }
+
+    /// Drive one gated run_turn synchronously; returns every emitted event.
+    fn run_gated_turn(rt: &Runtime, data_dir: &PathBuf, thread: Thread, turn_id: &str) -> Vec<Event> {
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        run_turn(
+            Arc::clone(&rt.shared),
+            event_tx,
+            Arc::new(Mutex::new(())),
+            data_dir.clone(),
+            rt.journal.clone(),
+            thread,
+            turn_id.into(),
+        );
+        let mut events = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    /// Leave a TurnStarted breadcrumb so `thread_for_turn` can resolve the
+    /// thread (in production start_turn writes this before any appeal).
+    fn seed_turn_started_breadcrumb(rt: &Runtime, thread_id: &str, turn_id: &str) {
+        rt.journal
+            .as_ref()
+            .expect("journal must be live")
+            .lock()
+            .unwrap()
+            .append(RecordDraft::new(
+                JournalKind::TurnStarted,
+                Some(thread_id.into()),
+                json!({ "turn_id": turn_id }),
+            ))
+            .expect("append breadcrumb");
+    }
+
+    #[test]
+    fn gated_turn_then_appeal_means_identical_turn_is_not_gated() {
+        let data_dir = unique_data_dir("unblock");
+        // Two identical gated runs' worth of outcomes.
+        let mut outcomes = gated_outcome_pair();
+        outcomes.extend(gated_outcome_pair());
+        let (rt, _cmd_tx, _rt_events) =
+            make_runtime_at(Arc::new(scripted_shared(outcomes)), data_dir.clone());
+
+        // 1. The gate blocks the first identical turn.
+        let events = run_gated_turn(&rt, &data_dir, gated_thread("ap-thread"), "turn-ap");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::TurnFinished { ok: false, error: Some(err), .. }
+                    if err.contains("without recorded evidence")
+            )),
+            "first gated turn must be blocked: {events:?}"
+        );
+
+        // 2. User appeals; override lands in journal + skip-set + event echo.
+        seed_turn_started_breadcrumb(&rt, "ap-thread", "turn-ap");
+        rt.appeal_verdict("turn-ap".into());
+        let records = Journal::replay(&data_dir.join("journal").join("runtime.jsonl"))
+            .expect("replay after appeal");
+        let overrides: Vec<&Record> = records
+            .iter()
+            .filter(|r| r.kind == JournalKind::VerdictOverridden)
+            .collect();
+        assert_eq!(overrides.len(), 1, "exactly one VerdictOverridden record");
+        assert_eq!(overrides[0].payload["turn_id"], "turn-ap");
+        assert_eq!(overrides[0].payload["thread_id"], "ap-thread");
+        assert!(rt.shared.overridden_turns.lock().unwrap().contains("turn-ap"));
+
+        // 3. The same turn id is never gated again.
+        let events = run_gated_turn(&rt, &data_dir, gated_thread("ap-thread"), "turn-ap");
+        assert!(
+            events.iter().any(|e| matches!(e, Event::TurnFinished { ok: true, .. })),
+            "appealed turn must pass the gate: {events:?}"
+        );
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn override_persists_across_startup_refold() {
+        let data_dir = unique_data_dir("persist");
+        let (rt, _cmd_tx, _rt_events) =
+            make_runtime_at(Arc::new(scripted_shared(gated_outcome_pair())), data_dir.clone());
+        let events = run_gated_turn(&rt, &data_dir, gated_thread("p-thread"), "turn-persist");
+        assert!(events.iter().any(|e| matches!(e, Event::TurnFinished { ok: false, .. })));
+
+        seed_turn_started_breadcrumb(&rt, "p-thread", "turn-persist");
+        rt.appeal_verdict("turn-persist".into());
+        drop(rt); // simulate process exit
+
+        // "Restart": fold the journaled overrides back into a fresh set.
+        let restored = load_overridden_turns(&data_dir);
+        assert!(
+            restored.contains("turn-persist"),
+            "loader must fold the journaled override: {restored:?}"
+        );
+        let mut shared = scripted_shared(gated_outcome_pair());
+        *shared.overridden_turns.lock().unwrap() = restored;
+        let (rt2, _cmd_tx, _rt_events2) = make_runtime_at(Arc::new(shared), data_dir.clone());
+        let events =
+            run_gated_turn(&rt2, &data_dir, gated_thread("p-thread"), "turn-persist");
+        assert!(
+            events.iter().any(|e| matches!(e, Event::TurnFinished { ok: true, .. })),
+            "after restart refold the gate stays skipped: {events:?}"
+        );
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+}
+
+#[cfg(test)]
 mod write_grant_tests {
     use super::*;
     use super::steering_tests::ScriptedProvider;
@@ -3274,6 +3539,7 @@ mod write_grant_tests {
             steering: Mutex::new(HashMap::new()),
             settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
             write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -3906,6 +4172,7 @@ mod thread_management_tests {
                     steering: Mutex::new(HashMap::new()),
                     settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
                     write_grants: Mutex::new(HashMap::new()),
+                    overridden_turns: Mutex::new(std::collections::HashSet::new()),
                 }),
                 data_dir: dir,
                 threads: Mutex::new(seed.into_iter().map(|t| (t.id.clone(), t)).collect()),

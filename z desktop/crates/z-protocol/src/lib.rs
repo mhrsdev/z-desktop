@@ -64,6 +64,9 @@ pub enum Command {
     /// Request the folded supervision-evidence summary (answered with
     /// [`Event::EvidenceSummary`]). `Some(turn_id)` limits to one turn.
     GetEvidence { turn_id: Option<Id> },
+    /// sup-017: appeal a supervision verdict on `turn_id`. Journaled by the
+    /// runtime (sup-024 persistence) and honored by the gate from then on.
+    AppealVerdict { turn_id: Id, reason: String },
 }
 
 /// One row of a thread listing (core-021): cheap projection, never carries
@@ -164,6 +167,10 @@ pub enum Event {
     /// Folded supervision-evidence summary (ui-040), journal order, capped to
     /// the most recent 50 rows. Answered on [`Command::GetEvidence`].
     EvidenceSummary { items: Vec<EvidenceInfo> },
+    /// sup-017/024: an appealed verdict was journaled as overridden. Echoes
+    /// the turn id so the UI can drop its blocked badge when
+    /// `blocked_cleared` (i.e. the override is durably recorded).
+    VerdictOverridden { turn_id: Id, blocked_cleared: bool },
 }
 
 #[cfg(test)]
@@ -278,5 +285,27 @@ mod tests {
             }
             other => panic!("wrong event: {other:?}"),
         }
+    }
+
+    // sup-017/024: appeal command and override event round-trip; both stay
+    // snake_case-tagged like every other variant.
+    #[test]
+    fn appeal_and_override_round_trip_through_json() {
+        let cmd = Command::AppealVerdict {
+            turn_id: "u1".into(),
+            reason: "the tests really ran".into(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""type":"appeal_verdict""#), "{json}");
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert!(
+            matches!(back, Command::AppealVerdict { turn_id, reason } if turn_id == "u1" && reason == "the tests really ran")
+        );
+
+        let event = Event::VerdictOverridden { turn_id: "u1".into(), blocked_cleared: true };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""type":"verdict_overridden""#), "{json}");
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Event::VerdictOverridden { blocked_cleared: true, .. }));
     }
 }

@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 93 |
+| IMPLEMENTED | 95 |
 | PARTIAL | 2 |
-| PLANNED | 628 |
+| PLANNED | 626 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -586,10 +586,10 @@
 ### [PLANNED] sup-016 — requirement-skew detector
 - depends: sup-004
 
-### [PLANNED] sup-017 — User appeal/override flow (journaled)
+### [IMPLEMENTED] sup-017 — User appeal/override flow (journaled)
 - depends: sup-007
 
-### [PLANNED] sup-018 — Evidence badges in conversation view
+### [IMPLEMENTED] sup-018 — Evidence badges in conversation view
 - depends: ui-040
 
 ### [PLANNED] sup-019 — Evidence drill-down viewer

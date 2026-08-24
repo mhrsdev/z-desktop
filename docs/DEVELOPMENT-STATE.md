@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-23
 
+## sup-017/024 Verdict Appeals — 2026-08-23 COMPLETE
+
+1. ✅ **sup-017**: additive Command::AppealVerdict → Event::
+   VerdictOverridden; JournalKind::VerdictOverridden records {turn_id,
+   thread_id}; Shared.overridden_turns skip-set consulted by the run_turn
+   gate (overridden turns go warn-only).
+2. ✅ **sup-024 (partial)**: load_overridden_turns() folds journaled
+   overrides into the set at startup — persistence across restarts.
+
+Verification: full workspace suite green — **453 tests, 0 failed**
+(450 → 453). Ledger: 97 IMPLEMENTED.
+
+Next work continues → sup-013 premature-stop detector, prov-006 decision
+logging, or mem-013 recency decay.
+
 ## sup-012 Fake-Completion Detector — 2026-08-23 COMPLETE
 
 1. ✅ **sup-012**: detect_fake_completion — fires when claims exist, ALL

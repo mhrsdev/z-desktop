@@ -152,8 +152,18 @@ impl App {
                 self.view.evidence_badges = badges;
                 true
             }
+            // sup-017/024: an appealed verdict was journaled as overridden;
+            // surface it so the user sees the appeal took effect.
+            Event::VerdictOverridden { turn_id, blocked_cleared } => {
+                self.view.status_line = format!(
+                    "verdict overridden for {turn_id} ({})",
+                    if blocked_cleared { "cleared" } else { "not persisted" }
+                );
+                true
+            }
             Event::SteeringQueued { depth, .. } => {
                 self.view.steering_depth = depth as u32;
+
                 self.view.status_line = if depth > 0 {
                     format!("steering queued ({depth} pending)")
                 } else {

@@ -58,6 +58,9 @@ pub enum JournalKind {
     /// failed attempt; payload carries `attempt` (1 = initial call,
     /// 2 = the single retry) and the retry `class`.
     ProviderError,
+    /// A user appeal overrode a supervision verdict (sup-017/024); folded
+    /// back into the gate's override set at startup by the runtime loader.
+    VerdictOverridden,
     /// Escape hatch for kinds this build does not know yet.
     Other(String),
 }
@@ -74,6 +77,7 @@ impl JournalKind {
             JournalKind::MemoryRecorded => "memory_recorded",
             JournalKind::ThreadDeleted => "thread_deleted",
             JournalKind::ProviderError => "provider_error",
+            JournalKind::VerdictOverridden => "verdict_overridden",
             JournalKind::Other(s) => s.as_str(),
         }
     }
@@ -89,6 +93,7 @@ impl JournalKind {
             "memory_recorded" => JournalKind::MemoryRecorded,
             "thread_deleted" => JournalKind::ThreadDeleted,
             "provider_error" => JournalKind::ProviderError,
+            "verdict_overridden" => JournalKind::VerdictOverridden,
             _ => JournalKind::Other(s),
         }
     }

@@ -76,6 +76,12 @@ impl TrigramIndex {
         Ok(())
     }
 
+    /// (live docs, removed-but-reserved slots) over the docs vec.
+    pub fn doc_stats(&self) -> (usize, usize) {
+        let live = self.docs.iter().filter(|d| d.is_some()).count();
+        (live, self.docs.len() - live)
+    }
+
     fn live_doc_text(&self, id: u32) -> Result<String, String> {
         self.docs
             .get(id as usize)
@@ -312,6 +318,17 @@ mod tests {
         assert!(!idx.verify(gone, "content"));
         // Reserved: the next add skips the freed id instead of reusing it.
         assert_eq!(idx.add("fresh text"), kept + 1);
+    }
+
+    #[test]
+    fn doc_stats_counts_live_and_removed() {
+        let mut idx = TrigramIndex::default();
+        assert_eq!(idx.doc_stats(), (0, 0));
+        idx.add("one");
+        let two = idx.add("two");
+        idx.add("three");
+        idx.remove(two).unwrap();
+        assert_eq!(idx.doc_stats(), (2, 1));
     }
 
     #[test]

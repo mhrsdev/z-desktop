@@ -103,6 +103,24 @@ pub fn oldest_message_age_ms(path: &Path, now_ms: u128) -> Result<Option<u128>, 
     Ok(oldest.map(|ts| now_ms.saturating_sub(ts)))
 }
 
+/// jour-021: shape-only CheckpointCreated-style draft summarizing a
+/// [`ThreadsView`] snapshot — counts and a wall-clock stamp, no thread
+/// contents. Kinded via the [`JournalKind::Other`] escape hatch because
+/// journal.rs owns the kind enum; folds as an unknown kind today.
+pub fn checkpoint_draft(view: &ThreadsView) -> RecordDraft {
+    let threads = view.threads.len() as u64;
+    let messages = view.threads.values().map(|t| t.message_count).sum::<u64>();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    RecordDraft::new(
+        JournalKind::Other("checkpoint_created".to_string()),
+        None,
+        serde_json::json!({ "threads": threads, "messages": messages, "ts": ts }),
+    )
+}
+
 /// jour-009: lifetime usage counters folded from journal events.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct UsageView {
@@ -609,6 +627,40 @@ pub(crate) mod reducer_tests {
         assert_eq!(t2.message_count, 0);
         assert_eq!(t2.last_kind, JournalKind::TurnStarted);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checkpoint_draft_seeded_view_has_correct_counts() {
+        let dir = temp_dir("checkpoint");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"text": "hello"}),
+            );
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::TurnStarted, Some("t2"), json!({}));
+        }
+        let view = ThreadsView::fold(&dir.join("main.jsonl")).expect("fold");
+        let draft = checkpoint_draft(&view);
+        assert_eq!(
+            draft.kind,
+            JournalKind::Other("checkpoint_created".to_string())
+        );
+        assert_eq!(draft.thread_id, None);
+        assert_eq!(draft.payload["threads"], 2);
+        assert_eq!(draft.payload["messages"], 2); // t1=2 messages, t2=0
+        assert!(draft.payload["ts"].as_u64().expect("ts") > 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checkpoint_draft_empty_view_is_zeros() {
+        let draft = checkpoint_draft(&ThreadsView::default());
+        assert_eq!(draft.payload["threads"], 0);
+        assert_eq!(draft.payload["messages"], 0);
     }
 
     #[test]

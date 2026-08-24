@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-24
 
+## Wave 27 (jour-021 + mem-023 + idx-022) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-021**: checkpoint_draft — snapshot RecordDraft with
+   threads/messages counts.
+2. ✅ **mem-023**: memory_diff live-record id comparison between views.
+3. ✅ **idx-022**: doc_stats (live docs vs removed reserved slots).
+
+Verification: full workspace suite green — **744 tests, 0 failed**
+(740 → 744). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 26 (sup-027 + set-013 + diff-021) — 2026-08-24 COMPLETE
 
 1. ✅ **sup-027**: evidence_by_thread filter + thread_ok_rate.

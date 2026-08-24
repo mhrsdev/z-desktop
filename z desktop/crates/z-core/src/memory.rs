@@ -230,6 +230,18 @@ pub fn view_stats(view: &MemoryView) -> MemoryStats {
     }
 }
 
+/// Live-record id diff between two folded views (mem-023): counts how many
+/// record ids became live ([`MemoryView::live`]) and stopped being live
+/// between `old` and `new`.
+pub fn memory_diff(old: &MemoryView, new: &MemoryView) -> (usize /*added*/, usize /*removed*/) {
+    let old_ids: HashSet<&str> = old.live().iter().map(|r| r.id.as_str()).collect();
+    let new_ids: HashSet<&str> = new.live().iter().map(|r| r.id.as_str()).collect();
+    (
+        new_ids.difference(&old_ids).count(),
+        old_ids.difference(&new_ids).count(),
+    )
+}
+
 /// Folded state of all `memory_recorded` events in a journal segment:
 /// last line per id wins (log-compaction semantics), insertion order kept.
 #[derive(Debug, Default, PartialEq)]
@@ -2002,6 +2014,41 @@ mod memory_tests {
         assert_eq!(s.avg_confidence, 0.0);
         assert_eq!(s.oldest_ts_ms, None);
         assert_eq!(s.newest_ts_ms, None);
+    }
+
+    #[test]
+    fn memory_diff_counts_live_id_additions_removals_and_unchanged() {
+        fn view(ids: &[&str]) -> MemoryView {
+            MemoryView {
+                records: ids.iter().map(|id| rec(id, Status::Promoted)).collect(),
+            }
+        }
+
+        // Unchanged views: zero diff.
+        assert_eq!(
+            memory_diff(&view(&["m1", "m2"]), &view(&["m1", "m2"])),
+            (0, 0)
+        );
+        // One record added: (+1, 0).
+        assert_eq!(
+            memory_diff(&view(&["m1", "m2"]), &view(&["m1", "m2", "m3"])),
+            (1, 0)
+        );
+        // One record removed: (0, 1).
+        assert_eq!(memory_diff(&view(&["m1", "m2"]), &view(&["m2"])), (0, 1));
+
+        // Non-live churn is invisible: a superseded line and a fresh
+        // provisional record change neither side's live-id set.
+        let mut base = view(&["m1"]);
+        let mut sup = rec("m2", Status::Promoted);
+        sup.superseded_by = Some("m1".into());
+        base.records.push(sup);
+        let mut churned = view(&["m1"]);
+        let mut sup = rec("m2", Status::Promoted);
+        sup.superseded_by = Some("m1".into());
+        churned.records.push(sup);
+        churned.records.push(rec("m4", Status::Provisional));
+        assert_eq!(memory_diff(&base, &churned), (0, 0));
     }
 
     #[test]

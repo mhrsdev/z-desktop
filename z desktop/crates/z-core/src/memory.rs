@@ -220,6 +220,48 @@ pub fn retrieve(view: &MemoryView, query_terms: &[&str], cap: usize) -> Vec<Rank
     ranked
 }
 
+/// Exponential recency decay for one confidence value (mem-013):
+/// `confidence * 0.5^(age_days / half_life_days)`, clamped to [0, 1].
+pub fn decay_confidence(confidence: f32, age_days: u32, half_life_days: f32) -> f32 {
+    if half_life_days <= 0.0 {
+        // Degenerate half-life: skip decay rather than produce NaN/inf.
+        return confidence.clamp(0.0, 1.0);
+    }
+    (confidence * 0.5f32.powf(age_days as f32 / half_life_days)).clamp(0.0, 1.0)
+}
+
+/// [`retrieve`] with recency-decayed confidence (mem-013): each candidate's
+/// `0.3 * confidence` term is recomputed from
+/// [`decay_confidence`] using its provenance capture time vs `now_ms`;
+/// the query-term overlap term is unchanged. Re-sorted and capped.
+pub fn retrieve_with_decay(
+    view: &MemoryView,
+    query_terms: &[&str],
+    cap: usize,
+    now_ms: u128,
+    half_life_days: f32,
+) -> Vec<RankedMemory> {
+    const MS_PER_DAY: u128 = 86_400_000;
+    let mut ranked = retrieve(view, query_terms, usize::MAX);
+    for hit in ranked.iter_mut() {
+        let Some(r) = view.records.iter().find(|r| r.id == hit.record_id) else {
+            continue;
+        };
+        let age_days =
+            ((now_ms.saturating_sub(r.provenance.ts_ms)) / MS_PER_DAY).min(u32::MAX as u128) as u32;
+        hit.score +=
+            0.3 * decay_confidence(r.confidence, age_days, half_life_days) - 0.3 * r.confidence;
+    }
+    ranked.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.record_id.cmp(&b.record_id))
+    });
+    ranked.truncate(cap);
+    ranked
+}
+
 /// User correction (mem-010, ADR-0014): folds the journal to find the live
 /// original, then appends TWO `memory_recorded` events — the original
 /// re-recorded with `superseded_by` pointing at the replacement, and a new
@@ -1116,5 +1158,50 @@ mod memory_tests {
             let conf = view.records.iter().find(|r| r.id == h.record_id).unwrap().confidence;
             assert!((h.score - 0.3 * conf).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn decay_halves_at_half_life_and_zero_age_is_identity() {
+        assert!((decay_confidence(0.8, 7, 7.0) - 0.4).abs() < 1e-5, "halves");
+        assert!((decay_confidence(0.8, 14, 7.0) - 0.2).abs() < 1e-5, "quarters");
+        assert_eq!(decay_confidence(0.8, 0, 7.0), 0.8, "zero age unchanged");
+        // Degenerate half-life must not produce NaN/inf.
+        assert_eq!(decay_confidence(0.8, 5, 0.0), 0.8);
+    }
+
+    #[test]
+    fn decay_confidence_stays_within_unit_range() {
+        for (c, age, hl) in [
+            (1.0, 0, 0.001),
+            (1.0, 50_000, 0.5),
+            (1.0, u32::MAX, 1.0),
+            (0.0, 10, 1.0),
+            (0.37, 123, 456.0),
+        ] {
+            let d = decay_confidence(c, age, hl);
+            assert!((0.0..=1.0).contains(&d), "{c}/{age}/{hl} -> {d}");
+        }
+    }
+
+    #[test]
+    fn retrieve_with_decay_ranks_fresh_above_old_on_equal_match() {
+        const DAY_MS: u128 = 86_400_000;
+        let rec_at = |id: &str, ts_ms: u128| {
+            let mut p = prov("msg-1");
+            p.ts_ms = ts_ms;
+            MemoryRecord::new(id, Layer::Project, "deploys on tuesday", p, 0.9, Status::Promoted)
+                .expect("valid record")
+        };
+        let mut view = MemoryView::default();
+        view.records.push(rec_at("old", 0));
+        view.records.push(rec_at("fresh", DAY_MS));
+
+        let hits = retrieve_with_decay(&view, &["deploys"], 10, 2 * DAY_MS, 1.0);
+        assert_eq!(hits[0].record_id, "fresh", "{hits:?}");
+        // score = 0.3 * 0.9 * 0.5^(age/half_life) + 1.0 overlap.
+        assert!((hits[0].score - (0.3 * 0.9 * 0.5 + 1.0)).abs() < 1e-5);
+        assert!((hits[1].score - (0.3 * 0.9 * 0.25 + 1.0)).abs() < 1e-5);
+        // Cap still enforced through the decay path.
+        assert_eq!(retrieve_with_decay(&view, &[], 1, 2 * DAY_MS, 1.0).len(), 1);
     }
 }

@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## mem-013 Recency Decay — 2026-08-23 COMPLETE
+
+1. ✅ **mem-013**: decay_confidence (c × 0.5^(age/half_life), clamped,
+   degenerate half-life safe) + retrieve_with_decay re-ranking by
+   provenance.ts_ms age; fresh beats old on equal matches (tested with
+   exact score math).
+
+Verification: full workspace suite green — **463 tests, 0 failed**
+(460 → 463). Ledger: 101 IMPLEMENTED.
+
+Next work continues → core-027 build_request perf benchmark, sup-016
+requirement-skew detector, or mem-014 daily write cap.
+
 ## prov-006 Router Decision Logging — 2026-08-23 COMPLETE
 
 1. ✅ **prov-006**: Decision {model, caps, reason} + decide() wrapping

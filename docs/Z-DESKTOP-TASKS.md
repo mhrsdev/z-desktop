@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 98 |
+| IMPLEMENTED | 99 |
 | PARTIAL | 2 |
-| PLANNED | 623 |
+| PLANNED | 622 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -728,7 +728,7 @@
 ### [PLANNED] mem-012 — Memory inspector panel
 - depends: ui-060
 
-### [PLANNED] mem-013 — Recency decay in confidence scoring
+### [IMPLEMENTED] mem-013 — Recency decay in confidence scoring
 - depends: mem-006
 
 ### [PLANNED] mem-014 — Daily write cap enforcement

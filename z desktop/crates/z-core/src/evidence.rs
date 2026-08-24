@@ -284,6 +284,21 @@ fn scan_markers(text: &str, markers: &[&str]) -> bool {
     })
 }
 
+/// sup-012: stricter sibling of sup-007's gate. Fires when at least one
+/// success claim exists, EVERY claim went unlinked (no ok same-kind evidence),
+/// and the final text declares completion — even when unrelated ok evidence
+/// exists (sup-007 passes those as ambiguous; this doesn't).
+pub fn detect_fake_completion(
+    claims: &[ClaimSpan],
+    evidence: &[Evidence],
+    final_text: &str,
+) -> bool {
+    const MARKERS: [&str; 4] = ["done", "complete", "finished", "all set"];
+    !claims.is_empty()
+        && link_claims(claims, evidence).unlinked.len() == claims.len()
+        && scan_markers(final_text, &MARKERS)
+}
+
 /// Best-effort append of one evidence record. Journal failures are warned
 /// and dropped (same policy as every other lifecycle append).
 pub fn record(journal: &Mutex<Journal>, e: &Evidence) {
@@ -604,6 +619,34 @@ mod evidence_tests {
         );
         assert!(!detect_mock_in_prod("fn real_response() {}"));
         assert!(!detect_mock_in_prod(""));
+    }
+
+    #[test]
+    fn fake_completion_needs_claims_all_unlinked_and_a_marker() {
+        let claims = vec![
+            ClaimSpan { text: "tests pass".into(), kind: EvidenceKind::Tests },
+            ClaimSpan { text: "build succeeds".into(), kind: EvidenceKind::Build },
+        ];
+        // All unlinked + completion marker -> fires.
+        assert!(detect_fake_completion(&claims, &[], "All done."));
+        assert!(detect_fake_completion(
+            &claims,
+            &[Evidence::diff("t", "u", true, "wrote file")],
+            "Everything is finished."
+        ));
+        assert!(detect_fake_completion(&claims, &[], "we are all set"));
+        // A claim linked (ok same-kind evidence exists) -> quiet.
+        assert!(!detect_fake_completion(
+            &claims,
+            &[Evidence::tests("t", "u", 5, 0, "cargo test")],
+            "All done."
+        ));
+        // No completion marker -> quiet even when fully unlinked.
+        assert!(!detect_fake_completion(&claims, &[], "Tests still failing."));
+        // Whole-word rule: glued words are not markers.
+        assert!(!detect_fake_completion(&claims, &[], "undone business abounds"));
+        // Clean text, no claims -> quiet.
+        assert!(!detect_fake_completion(&[], &[], "All done."));
     }
 
     #[test]

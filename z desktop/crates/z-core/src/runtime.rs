@@ -972,6 +972,13 @@ fn run_turn(
                             crate::evidence::detect_unexecuted_build(&claims, &turn_evidence);
                         let ignored_failures =
                             crate::evidence::detect_ignored_failures(&turn_evidence, &outcome.text);
+                        // sup-012: observability only — never gates (strictness
+                        // escalation comes later).
+                        let fake_completion = crate::evidence::detect_fake_completion(
+                            &claims,
+                            &turn_evidence,
+                            &outcome.text,
+                        );
                         let mut fired: Vec<&str> = Vec::new();
                         if unexecuted_tests {
                             fired.push("unexecuted-tests");
@@ -1028,6 +1035,17 @@ fn run_turn(
                                 claims.len(),
                                 report.unlinked.iter().map(|c| c.kind).collect::<Vec<_>>()
                             );
+                            // sup-012: stricter fake-completion tripwire —
+                            // every claim unlinked AND a completion marker in
+                            // the final text. Warn-only; gating unchanged.
+                            if fake_completion {
+                                let ok = turn_evidence.iter().filter(|e| e.ok).count();
+                                log::warn!(
+                                    "supervision: fake-completion suspected in turn {turn_id} (kinds: {:?}, evidence: {ok}/{total} ok)",
+                                    report.unlinked.iter().map(|c| c.kind).collect::<Vec<_>>(),
+                                    total = turn_evidence.len()
+                                );
+                            }
                         }
                     }
                     Err(err) => log::warn!("supervision: evidence fold failed: {err}"),

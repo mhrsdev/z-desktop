@@ -204,7 +204,7 @@ DOMAINS = [
         ("009", "unexecuted-tests detector", ["006"], "IMPLEMENTED"),
         ("010", "unexecuted-build detector", ["006"], "IMPLEMENTED"),
         ("011", "ignored-failure detector", ["006"], "IMPLEMENTED"),
-        ("012", "fake-completion detector", ["006"], "PLANNED"),
+        ("012", "fake-completion detector", ["006"], "IMPLEMENTED"),
         ("013", "premature-stop detector (checklist coverage)", ["006"], "PLANNED"),
         ("014", "placeholder-code detector (diff scan)", ["004"], "IMPLEMENTED"),
         ("015", "mock-in-prod detector", ["004"], "IMPLEMENTED"),

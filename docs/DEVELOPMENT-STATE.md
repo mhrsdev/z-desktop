@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## sup-012 Fake-Completion Detector — 2026-08-23 COMPLETE
+
+1. ✅ **sup-012**: detect_fake_completion — fires when claims exist, ALL
+   are unlinked (even unrelated ok evidence doesn't suppress), and the
+   final text has a whole-word completion marker. Warn-only alongside the
+   sup-009/010/011 detectors; gating escalation deferred.
+
+Verification: full workspace suite green — **450 tests, 0 failed**
+(449 → 450). Ledger: 95 IMPLEMENTED.
+
+Next work continues → sup-013 premature-stop detector, sup-017 appeal
+flow, or prov-006 decision logging.
+
 ## jour-011 Corrupt-Tail Repair — 2026-08-23 COMPLETE
 
 1. ✅ **jour-011**: truncate_corrupt_tail(path) removes a torn final write

@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## mem-014 Daily Write Cap — 2026-08-23 COMPLETE
+
+1. ✅ **mem-014**: DAILY_RECORD_CAP=200 (record-count proxy for the
+   ADR-0014 ≤10 MB/day budget); count_today folds by UTC day index;
+   promote_candidates stops mid-pass when today's quota is exhausted —
+   partial success, no error. Corrupt journal counts as full (fail-safe).
+
+Verification: full workspace suite green — **466 tests, 0 failed**
+(463 → 466). Ledger: 102 IMPLEMENTED.
+
+Next work continues → sup-016 requirement-skew detector, mem-015 replay
+from journal, or core-027 perf benchmark.
+
 ## mem-013 Recency Decay — 2026-08-23 COMPLETE
 
 1. ✅ **mem-013**: decay_confidence (c × 0.5^(age/half_life), clamped,

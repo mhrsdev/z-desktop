@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 99 |
+| IMPLEMENTED | 100 |
 | PARTIAL | 2 |
-| PLANNED | 622 |
+| PLANNED | 621 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -731,7 +731,7 @@
 ### [IMPLEMENTED] mem-013 — Recency decay in confidence scoring
 - depends: mem-006
 
-### [PLANNED] mem-014 — Daily write cap enforcement
+### [IMPLEMENTED] mem-014 — Daily write cap enforcement
 - depends: mem-006
 
 ### [PLANNED] mem-015 — Memory replay from journal

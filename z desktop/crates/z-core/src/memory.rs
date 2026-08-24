@@ -122,6 +122,32 @@ pub fn record(journal: &Mutex<Journal>, r: &MemoryRecord) {
     }
 }
 
+/// Daily write budget (mem-014, ADR-0014 §104.3): ≤10 MB of new memory writes
+/// per day; at bounded per-record prose this resolves to a 200-record/day cap.
+/// Bulk writers stop early (partial success) rather than error past it.
+pub const DAILY_RECORD_CAP: usize = 200;
+
+/// Number of folded `memory_recorded` records whose provenance capture time
+/// falls on the same UTC day as `now_ms` (mem-014). Counts distinct ids
+/// post-compaction — superseded/provisional lines still occupy journal space.
+/// An unreadable journal returns `usize::MAX`: corrupt storage must block
+/// further writes, not invite unbounded ones.
+pub fn count_today(journal: &Mutex<Journal>, now_ms: u128) -> usize {
+    const MS_PER_DAY: u128 = 86_400_000;
+    let path = journal.lock().unwrap().path().to_path_buf();
+    match MemoryView::fold(&path) {
+        Ok(view) => view
+            .records
+            .iter()
+            .filter(|r| r.provenance.ts_ms / MS_PER_DAY == now_ms / MS_PER_DAY)
+            .count(),
+        Err(e) => {
+            log::warn!("memory: cannot fold journal for daily cap, blocking writes: {e}");
+            usize::MAX
+        }
+    }
+}
+
 /// Folded state of all `memory_recorded` events in a journal segment:
 /// last line per id wins (log-compaction semantics), insertion order kept.
 #[derive(Debug, Default, PartialEq)]
@@ -485,8 +511,15 @@ pub fn promote_candidates(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
+    // Daily budget (mem-014): records already written today count first;
+    // past [`DAILY_RECORD_CAP`] we stop before writing and return the partial
+    // count — a full day's quota is not an error condition.
+    let mut today_count = count_today(journal, now_ms);
     let mut written = 0usize;
     for (i, c) in candidates.iter().enumerate() {
+        if today_count >= DAILY_RECORD_CAP {
+            break;
+        }
         let content = c.content.trim();
         if !existing.insert(content.to_lowercase()) {
             continue;
@@ -509,6 +542,7 @@ pub fn promote_candidates(
             Ok(r) => {
                 record(journal, &r);
                 written += 1;
+                today_count += 1;
             }
             Err(e) => log::warn!("memory: skipping invalid extracted candidate: {e}"),
         }
@@ -915,6 +949,106 @@ mod memory_tests {
         assert_eq!(view.records[1].layer, Layer::Semantic);
         // Provisional records are never live (D4 predicate holds).
         assert!(view.live().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn rec_at(id: &str, ts_ms: u128) -> MemoryRecord {
+        let mut p = prov("msg-1");
+        p.ts_ms = ts_ms;
+        MemoryRecord::new(
+            id,
+            Layer::Project,
+            format!("content of {id}"),
+            p,
+            0.9,
+            Status::Promoted,
+        )
+        .expect("valid record")
+    }
+
+    fn now_ms() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn daily_cap_admits_everything_under_the_budget() {
+        let dir = temp_dir("daily-cap-under");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let candidates: Vec<ExtractedCandidate> = (0..DAILY_RECORD_CAP)
+            .map(|i| ExtractedCandidate {
+                content: format!("unique fact number {i}"),
+                layer: Layer::Project,
+                confidence: 0.6,
+            })
+            .collect();
+
+        let written =
+            promote_candidates(&journal, &dir, &candidates, "thread-1", "turn-1").expect("promote");
+        assert_eq!(written, DAILY_RECORD_CAP, "under-cap pass writes everything");
+        assert_eq!(count_today(&journal, now_ms()), DAILY_RECORD_CAP);
+        drop(journal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_daily_quota_blocks_next_pass_as_partial_success() {
+        let dir = temp_dir("daily-cap-blocked");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let now = now_ms();
+        for i in 0..DAILY_RECORD_CAP {
+            record(&journal, &rec_at(&format!("mem-seed-{i}"), now));
+        }
+
+        let candidates: Vec<ExtractedCandidate> = (0..5)
+            .map(|i| ExtractedCandidate {
+                content: format!("blocked fact {i}"),
+                layer: Layer::Project,
+                confidence: 0.6,
+            })
+            .collect();
+        let written =
+            promote_candidates(&journal, &dir, &candidates, "thread-1", "turn-1").expect("promote");
+        assert_eq!(written, 0, "quota exhausted: stop writing, report partial");
+        drop(journal);
+
+        let view = MemoryView::fold(&path).expect("fold");
+        assert_eq!(view.records.len(), DAILY_RECORD_CAP, "nothing extra landed");
+        assert!(!view.records.iter().any(|r| r.id.starts_with("mem-ext-")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn yesterdays_records_do_not_count_against_todays_cap() {
+        const DAY_MS: u128 = 86_400_000;
+        let dir = temp_dir("daily-cap-yesterday");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let now = now_ms();
+        let yesterday = now - DAY_MS;
+        for i in 0..DAILY_RECORD_CAP {
+            record(&journal, &rec_at(&format!("mem-old-{i}"), yesterday));
+        }
+        assert_eq!(count_today(&journal, yesterday), DAILY_RECORD_CAP);
+        assert_eq!(count_today(&journal, now), 0, "UTC day boundary respected");
+
+        let candidates: Vec<ExtractedCandidate> = (0..5)
+            .map(|i| ExtractedCandidate {
+                content: format!("fresh fact {i}"),
+                layer: Layer::Project,
+                confidence: 0.6,
+            })
+            .collect();
+        let written =
+            promote_candidates(&journal, &dir, &candidates, "thread-1", "turn-1").expect("promote");
+        assert_eq!(written, 5, "yesterday's quota does not block today");
+
+        let view = MemoryView::fold(&path).expect("fold");
+        assert_eq!(view.records.len(), DAILY_RECORD_CAP + 5);
+        drop(journal);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

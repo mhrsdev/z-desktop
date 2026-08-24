@@ -62,6 +62,33 @@ pub fn lookup(model: &str) -> Capabilities {
     REGISTRY.get_or_init(Registry::default).lookup(model)
 }
 
+/// prov-006: what the router resolved for one model, plus why. Pure data —
+/// the runtime logs it once per turn; nothing else consumes it yet.
+#[derive(Debug, Clone)]
+pub struct Decision {
+    pub model: String,
+    pub caps: Capabilities,
+    pub reason: String,
+}
+
+/// prov-006: resolve `model` against `registry` with a human-readable reason
+/// ("family match '<prefix>'", or "fallback" when nothing matched).
+pub fn decide(registry: &Registry, model: &str) -> Decision {
+    let caps = registry.lookup(model);
+    let m = model.to_lowercase();
+    let reason = match registry
+        .entries
+        .iter()
+        .filter(|(p, _)| m.starts_with(p.as_str()))
+        .max_by_key(|(p, _)| p.len())
+        .map(|(p, _)| p.as_str())
+    {
+        Some(p) => format!("family match '{p}'"),
+        None => "fallback".into(),
+    };
+    Decision { model: model.to_string(), caps, reason }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +139,28 @@ mod tests {
         assert_eq!(fallback.context_window, 16_384);
         // Empty name (nothing configured yet) behaves the same way.
         assert_eq!(Registry::default().lookup(""), Capabilities::default());
+    }
+
+    #[test]
+    fn decide_carries_matched_family_in_reason() {
+        let d = decide(&Registry::default(), "gpt-4o");
+        assert_eq!(d.model, "gpt-4o");
+        assert!(d.reason.contains("family match 'gpt-'"), "{}", d.reason);
+        assert_eq!(d.caps.context_window, 128_000);
+        // Longest prefix wins in the reason too.
+        let mut r = Registry::default();
+        r.entries.push((
+            "gpt-4o-mini".into(),
+            Capabilities { context_window: 1, supports_tools: false },
+        ));
+        assert!(decide(&r, "gpt-4o-mini-x").reason.contains("'gpt-4o-mini'"));
+    }
+
+    #[test]
+    fn decide_unknown_model_reports_fallback() {
+        let d = decide(&Registry::default(), "mystery-model-v9");
+        assert_eq!(d.reason, "fallback");
+        assert_eq!(d.caps, Capabilities::default());
+        assert_eq!(decide(&Registry::default(), "").reason, "fallback");
     }
 }

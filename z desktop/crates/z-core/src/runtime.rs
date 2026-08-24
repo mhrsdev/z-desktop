@@ -918,6 +918,19 @@ fn run_turn(
         return;
     };
 
+    // prov-006: one router decision per turn, logged for observability.
+    let decision = {
+        static REGISTRY: std::sync::OnceLock<router::Registry> = std::sync::OnceLock::new();
+        router::decide(REGISTRY.get_or_init(router::Registry::default), provider.model())
+    };
+    log::info!(
+        "router: model {} -> tools={} ctx={} ({})",
+        decision.model,
+        decision.caps.supports_tools,
+        decision.caps.context_window,
+        decision.reason
+    );
+
     // prov-005 (ADR-0011 D2): models whose registry entry lacks tool support
     // run tool-less instead of failing mid-stream. build_request applies the
     // gate every round; say it once here per turn.

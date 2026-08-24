@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 97 |
+| IMPLEMENTED | 98 |
 | PARTIAL | 2 |
-| PLANNED | 624 |
+| PLANNED | 623 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -816,7 +816,7 @@
 ### [PLANNED] prov-005 — Router policy DSL parser
 - depends: prov-004
 
-### [PLANNED] prov-006 — Router decision logging (reason per call)
+### [IMPLEMENTED] prov-006 — Router decision logging (reason per call)
 - depends: prov-005
 
 ### [PLANNED] prov-007 — Fallback chain evaluation

@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-23
 
+## prov-006 Router Decision Logging — 2026-08-23 COMPLETE
+
+1. ✅ **prov-006**: Decision {model, caps, reason} + decide() wrapping
+   lookup with "family match 'x'" / "fallback" reasons; run_turn logs one
+   info line per turn with tools/ctx/reason.
+
+Verification: full workspace suite green — **460 tests, 0 failed**
+(458 → 460). Ledger: 100 IMPLEMENTED — the century mark.
+
+Next work continues → mem-013 recency decay, core-027 build_request perf
+benchmark, or sup-016 requirement-skew detector.
+
 ## sup-013 Premature-Stop Detector — 2026-08-23 COMPLETE
 
 1. ✅ **sup-013**: ChecklistExpectation + detect_premature_stop — pure

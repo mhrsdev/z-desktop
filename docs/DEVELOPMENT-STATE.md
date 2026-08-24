@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 32 (orch-020 + ctx-021 + set-015) — 2026-08-24 COMPLETE
+
+1. ✅ **orch-020**: tasks_export_json — id/status/timeline rows.
+2. ✅ **ctx-021**: context_export_json — full-item pretty dump.
+3. ✅ **set-015**: settings_summary — n-settings/changed line.
+
+Verification: full workspace suite green — **776 tests, 0 failed**
+(770 → 776). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 31 (sup-028 + mem-025 + term-020) — 2026-08-24 COMPLETE
 
 1. ✅ **sup-028**: evidence_export_json — full-record pretty dump.

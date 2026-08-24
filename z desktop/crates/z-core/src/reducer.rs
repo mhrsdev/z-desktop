@@ -471,6 +471,23 @@ pub fn task_timeline(view: &TasksView, id: &str) -> Vec<(String, Option<u128>)> 
     view.timeline.get(id).cloned().unwrap_or_default()
 }
 
+/// orch-020: pretty-printed JSON array of `{id, status, timeline_len}` for all
+/// tasks sorted by id — full-state export built on [`task_state_events`] +
+/// [`task_timeline`].
+pub fn tasks_export_json(view: &TasksView) -> String {
+    let items: Vec<Value> = task_state_events(view)
+        .into_iter()
+        .map(|(id, status)| {
+            serde_json::json!({
+                "id": id,
+                "status": status,
+                "timeline_len": task_timeline(view, &id).len(),
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".into())
+}
+
 /// jour-022: idempotent re-sync batch — one shape-only draft per task whose
 /// folded status differs from its LAST `task_state_changed` event (or that
 /// has no recorded event yet). Each draft is identical in shape to what
@@ -827,6 +844,51 @@ pub(crate) mod reducer_tests {
         assert!(text.contains('\n'), "pretty-printed");
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&text).expect("parses");
         assert_eq!(parsed, vec![json!({ "id": "t-1", "status": "pending" })]);
+    }
+
+    #[test]
+    fn tasks_export_json_lists_sorted_rows_with_timeline_len() {
+        let mut view = TasksView::default();
+        for (id, status, timeline) in [
+            (
+                "b",
+                TaskStatus::Done,
+                vec![
+                    ("running".to_string(), Some(2)),
+                    ("done".to_string(), Some(3)),
+                ],
+            ),
+            (
+                "a",
+                TaskStatus::Pending,
+                vec![("pending".to_string(), Some(1))],
+            ),
+        ] {
+            view.tasks.insert(
+                id.into(),
+                TaskRecord {
+                    id: id.into(),
+                    status,
+                    deps: vec![],
+                },
+            );
+            view.timeline.insert(id.into(), timeline);
+        }
+        let text = tasks_export_json(&view);
+        assert!(text.contains('\n'), "pretty-printed");
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&text).expect("parses");
+        assert_eq!(
+            parsed,
+            vec![
+                json!({ "id": "a", "status": "pending", "timeline_len": 1 }),
+                json!({ "id": "b", "status": "done", "timeline_len": 2 }),
+            ]
+        );
+    }
+
+    #[test]
+    fn tasks_export_of_empty_view_is_bare_array() {
+        assert_eq!(tasks_export_json(&TasksView::default()), "[]");
     }
 
     #[test]

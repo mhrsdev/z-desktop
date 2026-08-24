@@ -467,6 +467,13 @@ pub fn items_by_layer(items: &[ContextItem]) -> Vec<(Layer, usize)> {
     .collect()
 }
 
+/// ctx-021: pretty JSON array export for the inspector/external tooling —
+/// one object per item with layer, text, est_tokens, pinned, stale,
+/// compacted. Empty slice serializes as "[]". Pure.
+pub fn context_export_json(items: &[ContextItem]) -> String {
+    serde_json::to_string_pretty(items).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1143,5 +1150,44 @@ mod tests {
     #[test]
     fn stale_report_empty_is_zeros() {
         assert_eq!(stale_report(&[], 0), "0 items, 0 stale (0%)");
+    }
+
+    // ctx-021
+    #[test]
+    fn context_export_json_seeded_is_valid_with_all_fields() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys prompt", 7),
+            item(Layer::Session, "history", 4),
+        ];
+        items[1].pinned = true;
+        items[1].stale = true;
+        items[1].compacted = true;
+        let json = context_export_json(&items);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let arr = parsed.as_array().expect("array");
+        assert_eq!(arr.len(), 2);
+        for obj in arr {
+            let obj = obj.as_object().unwrap();
+            assert_eq!(obj.len(), 6);
+            assert!(obj.contains_key("layer"));
+            assert!(obj.contains_key("text"));
+            assert!(obj.contains_key("est_tokens"));
+            assert!(obj.contains_key("pinned"));
+            assert!(obj.contains_key("stale"));
+            assert!(obj.contains_key("compacted"));
+        }
+        assert_eq!(arr[0]["layer"], "prefix");
+        assert_eq!(arr[0]["text"], "sys prompt");
+        assert_eq!(arr[0]["est_tokens"], 7);
+        assert_eq!(arr[0]["pinned"], false);
+        assert_eq!(arr[1]["layer"], "session");
+        assert_eq!(arr[1]["pinned"], true);
+        assert_eq!(arr[1]["stale"], true);
+        assert_eq!(arr[1]["compacted"], true);
+    }
+
+    #[test]
+    fn context_export_json_empty_is_empty_array() {
+        assert_eq!(context_export_json(&[]), "[]");
     }
 }

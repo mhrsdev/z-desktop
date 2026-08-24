@@ -434,6 +434,17 @@ pub fn diff_from_default(current: &Settings) -> Vec<(String, String)> {
         .collect()
 }
 
+/// set-015: one-line summary of `current` — `"{n} settings, {d} changed
+/// from default"` where `n` counts every [`schema_defs`] key and `d` comes
+/// from [`diff_from_default`], so "changed" can never drift from the schema.
+pub fn settings_summary(current: &Settings) -> String {
+    format!(
+        "{} settings, {} changed from default",
+        schema_defs().len(),
+        diff_from_default(current).len()
+    )
+}
+
 /// Validate a numeric value against the schema bounds for `key`. The unknown-
 /// key path never silently ignores: an unrecognized key is rejected with an
 /// "unknown setting \\"key\\"" message so hand-edited typos surface instead of
@@ -1107,5 +1118,25 @@ mod settings_tests {
                 ("doom_threshold".to_string(), "7".to_string()),
             ]
         );
+    }
+
+    // ---- set-015: one-line summary -----------------------------------------
+
+    #[test]
+    fn settings_summary_fresh_defaults_report_zero_changed() {
+        let s = settings_summary(&Settings::default());
+        assert_eq!(
+            s,
+            format!("{} settings, 0 changed from default", schema_defs().len())
+        );
+        assert_eq!(s, "3 settings, 0 changed from default", "documented count");
+    }
+
+    #[test]
+    fn settings_summary_counts_one_changed_field() {
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 60;
+        let out = settings_summary(&s);
+        assert_eq!(out, "3 settings, 1 changed from default");
     }
 }

@@ -471,6 +471,28 @@ pub fn task_counts(view: &TasksView) -> (usize, usize, usize, usize) {
     counts
 }
 
+/// orch-022: ids of tasks whose current status matches `status`, using the
+/// same snake_case spelling as the journal ("pending"|"running"|"done"|
+/// "failed"). Unknown statuses yield an empty list. Sorted for deterministic
+/// order, like [`TasksView::ready_set`].
+pub fn tasks_by_status(view: &TasksView, status: &str) -> Vec<String> {
+    let want = match status {
+        "pending" => TaskStatus::Pending,
+        "running" => TaskStatus::Running,
+        "done" => TaskStatus::Done,
+        "failed" => TaskStatus::Failed,
+        _ => return Vec::new(),
+    };
+    let mut ids: Vec<String> = view
+        .tasks
+        .values()
+        .filter(|t| t.status == want)
+        .map(|t| t.id.clone())
+        .collect();
+    ids.sort();
+    ids
+}
+
 /// orch-021: one-line human summary of task health.
 pub fn task_health_line(view: &TasksView) -> String {
     let (done, running, failed, pending) = task_counts(view);
@@ -1262,6 +1284,38 @@ pub(crate) mod reducer_tests {
         assert_eq!(task_counts(&view), (0, 0, 0, 0));
         assert!(fold_twice_equal(&path).expect("fold twice"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // orch-022 ---------------------------------------------------------------
+
+    #[test]
+    fn tasks_by_status_filters_seeded_ids_and_unknown_status_is_empty() {
+        let mut view = TasksView::default();
+        for (id, status) in [
+            ("t-done", TaskStatus::Done),
+            ("b-pending", TaskStatus::Pending),
+            ("a-pending", TaskStatus::Pending),
+            ("run", TaskStatus::Running),
+            ("boom", TaskStatus::Failed),
+        ] {
+            view.tasks.insert(
+                id.into(),
+                TaskRecord {
+                    id: id.into(),
+                    status,
+                    deps: vec![],
+                },
+            );
+        }
+        assert_eq!(
+            tasks_by_status(&view, "pending"),
+            vec!["a-pending".to_string(), "b-pending".to_string()]
+        );
+        assert_eq!(tasks_by_status(&view, "done"), vec!["t-done".to_string()]);
+        assert_eq!(tasks_by_status(&view, "running"), vec!["run".to_string()]);
+        assert_eq!(tasks_by_status(&view, "failed"), vec!["boom".to_string()]);
+        assert!(tasks_by_status(&view, "archived").is_empty());
+        assert!(tasks_by_status(&TasksView::default(), "done").is_empty());
     }
 
     // orch-021 ---------------------------------------------------------------

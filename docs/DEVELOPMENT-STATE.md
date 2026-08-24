@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 36 (orch-022 + sup-030 + mem-027) — 2026-08-24 COMPLETE
+
+1. ✅ **orch-022**: tasks_by_status id filter.
+2. ✅ **sup-030**: evidence_by_kind replay-order filter.
+3. ✅ **mem-027**: memory_by_layer live-record filter.
+
+Verification: full workspace suite green — **799 tests, 0 failed**
+(794 → 799). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 35 (jour-026 + ctx-023 + set-017) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-026**: journal_export_json — metadata-only record dump.

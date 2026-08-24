@@ -292,6 +292,14 @@ impl MemoryView {
             .filter(|r| r.status == Status::Promoted && r.superseded_by.is_none())
             .collect()
     }
+
+    /// Live records of exactly one layer (mem-027), insertion order.
+    pub fn memory_by_layer(&self, layer: Layer) -> Vec<&MemoryRecord> {
+        self.live()
+            .into_iter()
+            .filter(|r| r.layer == layer)
+            .collect()
+    }
 }
 
 /// One ranked retrieval hit (mem-008, ADR-0014): a live record plus its
@@ -1133,6 +1141,38 @@ mod memory_tests {
             "superseded + provisional excluded"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_by_layer_returns_only_matching_live_records_in_insertion_order() {
+        let layer_rec = |id: &str, layer: Layer| {
+            MemoryRecord::new(id, layer, format!("content of {id}"), prov("msg-1"), 0.9, Status::Promoted)
+                .expect("valid record")
+        };
+        let mut view = MemoryView::default();
+        view.records.push(layer_rec("mem-p1", Layer::Project));
+        view.records.push(layer_rec("mem-s1", Layer::Semantic));
+        view.records.push(layer_rec("mem-e1", Layer::Episodic));
+        view.records.push(layer_rec("mem-p2", Layer::Project));
+        // Non-live records must be filtered out even when the layer matches.
+        let mut sup = layer_rec("mem-s0", Layer::Semantic);
+        sup.superseded_by = Some("mem-s1".into());
+        view.records.push(sup);
+        let mut prov_rec = layer_rec("mem-e2", Layer::Episodic);
+        prov_rec.status = Status::Provisional;
+        view.records.push(prov_rec);
+
+        let project: Vec<&str> = view.memory_by_layer(Layer::Project).iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(project, vec!["mem-p1", "mem-p2"], "insertion order kept");
+        let semantic: Vec<&str> = view.memory_by_layer(Layer::Semantic).iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(semantic, vec!["mem-s1"], "superseded excluded");
+        let episodic: Vec<&str> = view.memory_by_layer(Layer::Episodic).iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(episodic, vec!["mem-e1"], "provisional excluded");
+    }
+
+    #[test]
+    fn memory_by_layer_on_empty_view_is_empty() {
+        assert!(MemoryView::default().memory_by_layer(Layer::Semantic).is_empty());
     }
 
     #[test]

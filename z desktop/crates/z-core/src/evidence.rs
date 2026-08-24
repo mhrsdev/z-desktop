@@ -463,6 +463,11 @@ pub fn evidence_by_thread<'a>(view: &'a EvidenceView, thread_id: &str) -> Vec<&'
         .collect()
 }
 
+/// sup-030: all evidence of `kind`, in journal replay order.
+pub fn evidence_by_kind<'a>(view: &'a EvidenceView, kind: EvidenceKind) -> Vec<&'a Evidence> {
+    view.items.iter().filter(|e| e.kind == kind).collect()
+}
+
 // ---------------------------------------------------------------------------
 // sup-021 extension: bench history + trend analysis over a folded view.
 // ---------------------------------------------------------------------------
@@ -1611,5 +1616,29 @@ mod evidence_tests {
             evidence_health_line(&EvidenceView::default()),
             "no evidence"
         );
+    }
+
+    // sup-030: filter by kind.
+
+    #[test]
+    fn evidence_by_kind_filters_seeded_multikind_view_in_replay_order() {
+        let mut view = EvidenceView::default();
+        let a = Evidence::build("t", "u", Some(0), "make");
+        let b = Evidence::tests("t", "u", 3, 0, "cargo test");
+        let c = Evidence::build("t", "u", Some(1), "make");
+        view.items.extend([a.clone(), b.clone(), c.clone()]);
+        let builds = evidence_by_kind(&view, EvidenceKind::Build);
+        assert_eq!(builds.len(), 2);
+        assert!(builds.iter().all(|e| e.kind == EvidenceKind::Build));
+        assert_eq!(builds[0].id, a.id);
+        assert_eq!(builds[1].id, c.id);
+        assert_eq!(evidence_by_kind(&view, EvidenceKind::Tests)[0].id, b.id);
+        // Kind absent from the view -> empty.
+        assert!(evidence_by_kind(&view, EvidenceKind::Bench).is_empty());
+    }
+
+    #[test]
+    fn evidence_by_kind_is_empty_for_an_empty_view() {
+        assert!(evidence_by_kind(&EvidenceView::default(), EvidenceKind::Diff).is_empty());
     }
 }

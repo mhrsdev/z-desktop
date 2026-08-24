@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 134 |
+| IMPLEMENTED | 137 |
 | PARTIAL | 5 |
-| PLANNED | 584 |
+| PLANNED | 581 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -678,7 +678,7 @@
 ### [IMPLEMENTED] tok-021 — Repo-map cache keyed by input fingerprints
 - depends: tok-003
 
-### [PLANNED] tok-022 — Estimator accuracy benchmark suite
+### [IMPLEMENTED] tok-022 — Estimator accuracy benchmark suite
 - depends: tok-013
 
 ### [PLANNED] tok-023 — Summary quality regression fixtures
@@ -973,7 +973,7 @@
 ### [PLANNED] term-016 — Provenance badge for agent-launched runs
 - depends: term-013
 
-### [PLANNED] term-017 — Terminal throughput benchmark
+### [IMPLEMENTED] term-017 — Terminal throughput benchmark
 - depends: term-007
 
 ### [IMPLEMENTED] term-018 — Unbounded-output memory safety test
@@ -1597,7 +1597,7 @@
 ### [PLANNED] set-006 — Unknown-key keep+warn behavior
 - depends: set-005
 
-### [PLANNED] set-007 — Migration framework (versioned files)
+### [IMPLEMENTED] set-007 — Migration framework (versioned files)
 - depends: set-001
 
 ### [PLANNED] set-008 — Search index over schema

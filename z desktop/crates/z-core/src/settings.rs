@@ -31,7 +31,9 @@ const MAX_APPROVAL_TIMEOUT_SECS: u64 = 3600;
 const MIN_DOOM_THRESHOLD: u64 = 1;
 const MAX_DOOM_THRESHOLD_CAP: u64 = 10;
 
-const VERSION: u32 = 1;
+/// Current on-disk schema version (set-007). Bump only alongside a new
+/// vN→vN+1 step in [`migrate`].
+pub const SETTINGS_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -153,7 +155,7 @@ pub fn apply(s: &Settings, key: &str, value: &serde_json::Value) -> Result<Setti
 /// semantics when the command path lands.
 pub fn store(data_dir: &Path, s: &Settings) -> Result<(), String> {
     let pretty = serde_json::to_string_pretty(&json!({
-        "version": VERSION,
+        "version": SETTINGS_VERSION,
         "values": {
             "max_tool_rounds": s.max_tool_rounds,
             "approval_timeout_secs": s.approval_timeout_secs,
@@ -162,6 +164,39 @@ pub fn store(data_dir: &Path, s: &Settings) -> Result<(), String> {
     }))
     .map_err(|e| e.to_string())?;
     crate::atomic_write::atomic_write(&data_dir.join("settings.json"), pretty.as_bytes())
+}
+
+/// set-007: migrate raw `settings.json` text up to [`SETTINGS_VERSION`],
+/// returning the (possibly rewritten) payload and its new version.
+///
+/// - version == [`SETTINGS_VERSION`] ⇒ byte-for-byte passthrough.
+/// - version < [`SETTINGS_VERSION`] ⇒ run the chained per-step migrations
+///   (one `fn vN_to_vN_plus_1(doc) -> Value` each, applied oldest-first).
+///   None exist yet — the chain below is where future steps slot in.
+/// - version > [`SETTINGS_VERSION`] ⇒ Err: the file was written by a newer
+///   build and silently downgrading could drop fields.
+/// - Anything else (bad JSON, missing/non-integer `version`) ⇒ Err.
+pub fn migrate(raw: &str) -> Result<(String, u32), String> {
+    let mut doc: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|e| format!("settings.json is not valid JSON: {e}"))?;
+    let version = doc
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "settings.json has no integer \"version\" field".to_string())?
+        as u32;
+    if version > SETTINGS_VERSION {
+        return Err(format!(
+            "settings.json version {version} is newer than this build understands \
+             (supported: {SETTINGS_VERSION}); please upgrade the application"
+        ));
+    }
+    if version == SETTINGS_VERSION {
+        return Ok((raw.to_string(), version));
+    }
+    // Future migration chain, oldest first:
+    // if version < 2 { doc = v1_to_v2(doc); }
+    // if version < 3 { doc = v2_to_v3(doc); }
+    Ok((doc.to_string(), SETTINGS_VERSION))
 }
 
 /// Type of one setting's value in the schema (set-002).
@@ -517,5 +552,38 @@ mod settings_tests {
             };
             assert_eq!(rendered, expected, "{key} default parity with Settings::default()");
         }
+    }
+
+    // ---- set-007: migration framework -----------------------------------
+
+    #[test]
+    fn migrate_same_version_is_byte_passthrough() {
+        let raw = r#"{"version":1,"values":{"doom_threshold":7}}"#;
+        let (out, v) = migrate(raw).expect("same version passes through");
+        assert_eq!(v, SETTINGS_VERSION);
+        assert_eq!(out, raw, "byte-for-byte passthrough");
+    }
+
+    #[test]
+    fn migrate_older_version_upgrades_and_keeps_values() {
+        let raw = r#"{"version":0,"values":{"max_tool_rounds":10}}"#;
+        let (out, v) = migrate(raw).expect("older version migrates up");
+        assert_eq!(v, SETTINGS_VERSION);
+        let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(doc["values"]["max_tool_rounds"], 10, "values survive migration");
+    }
+
+    #[test]
+    fn migrate_newer_version_is_err() {
+        let err = migrate(r#"{"version":999,"values":{}}"#).unwrap_err();
+        assert!(err.contains("newer"), "error explains the problem: {err}");
+        assert!(err.contains("999"), "error names the file's version: {err}");
+    }
+
+    #[test]
+    fn migrate_rejects_malformed_input() {
+        assert!(migrate("{not json").is_err(), "bad JSON => Err");
+        assert!(migrate(r#"{"values":{}}"#).is_err(), "missing version => Err");
+        assert!(migrate(r#"{"version":"one"}"#).is_err(), "non-integer version => Err");
     }
 }

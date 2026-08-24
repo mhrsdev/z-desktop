@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-24
 
+## Wave 11 (set-007 + tok-022 + term-017) — 2026-08-24 COMPLETE
+
+1. ✅ **set-007**: SETTINGS_VERSION + migrate() — passthrough/upgrade/
+   newer-version-refusal, chained-migration seam documented.
+2. ✅ **tok-022**: estimator_error MAPE harness + worst_sample().
+3. ✅ **term-017**: throughput benchmark (measured MB/s printed,
+   scrollback cap asserted under load).
+
+Verification: full workspace suite green — **633 tests, 0 failed**
+(623 → 633). Ledger: 139 IMPLEMENTED.
+
+Next work continues → ext-001 plugin manifest research, ui-050 usage
+dashboard panel data, or mcp-001 MCP integration study.
+
 ## Wave 10 (ctx-009 weights + jour-016 lag metric) — 2026-08-24 COMPLETE
 
 1. ✅ **ctx-009**: PriorityWeights (per-layer f32, default 1.0) +

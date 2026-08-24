@@ -67,6 +67,47 @@ pub fn estimate_tool_def(name: &str, description: &str, parameters_json: &str) -
     estimate(name) + estimate(description) + estimate(parameters_json) + MESSAGE_OVERHEAD
 }
 
+/// One calibration data point: a known-good token count for some text
+/// (e.g. from real provider usage numbers).
+#[derive(Debug, Clone)]
+pub struct AccuracySample {
+    pub text: String,
+    pub actual_tokens: u32,
+}
+
+/// Mean absolute percentage error of [`estimate`] vs actual across samples.
+///
+/// Samples with zero actual tokens are skipped (percentage error undefined);
+/// returns `None` when no usable samples remain.
+pub fn estimator_error(samples: &[AccuracySample]) -> Option<f32> {
+    let mut sum = 0.0f32;
+    let mut count = 0u32;
+    for s in samples {
+        if s.actual_tokens == 0 {
+            continue;
+        }
+        let err = (estimate(&s.text) as f32 - s.actual_tokens as f32).abs()
+            / s.actual_tokens as f32;
+        sum += err;
+        count += 1;
+    }
+    if count == 0 { None } else { Some(sum / count as f32 * 100.0) }
+}
+
+/// The sample with the largest percentage error, as (text, error %).
+pub fn worst_sample(samples: &[AccuracySample]) -> Option<(&str, f32)> {
+    samples
+        .iter()
+        .filter(|s| s.actual_tokens > 0)
+        .map(|s| {
+            let err = (estimate(&s.text) as f32 - s.actual_tokens as f32).abs()
+                / s.actual_tokens as f32
+                * 100.0;
+            (s.text.as_str(), err)
+        })
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+}
+
 /// Budget verdict for a would-be request.
 #[derive(Debug, PartialEq)]
 pub enum Budget {
@@ -228,5 +269,50 @@ mod tests {
     #[test]
     fn cache_hit_rate_all_hits_is_one() {
         assert_eq!(cache_hit_rate(5, 0), 1.0);
+    }
+
+    fn sample(text: &str, actual_tokens: u32) -> AccuracySample {
+        AccuracySample { text: text.to_string(), actual_tokens }
+    }
+
+    #[test]
+    fn estimator_error_empty_is_none() {
+        assert_eq!(estimator_error(&[]), None);
+        assert_eq!(worst_sample(&[]), None);
+    }
+
+    #[test]
+    fn estimator_error_perfect_is_zero() {
+        let samples = vec![sample("hello world", estimate("hello world") as u32)];
+        assert_eq!(estimator_error(&samples), Some(0.0));
+    }
+
+    #[test]
+    fn estimator_error_averages_known_errors() {
+        // estimate("hello world") = 3. Craft samples with known error:
+        // actual 6 → |3-6|/6 = 50%, actual 12 → 75%. Mean of (50, 75) = 62.5%.
+        let samples = vec![sample("hello world", 6), sample("hello world", 12)];
+        let err = estimator_error(&samples).unwrap();
+        assert!((err - 62.5).abs() < 1e-4, "got {err}");
+    }
+
+    #[test]
+    fn zero_actual_samples_are_skipped() {
+        // Only a zero-actual sample → no usable data.
+        assert_eq!(estimator_error(&[sample("hello", 0)]), None);
+        assert_eq!(worst_sample(&[sample("hello", 0)]), None);
+        // Mixed: zero-actual ignored, others averaged.
+        let samples = vec![sample("hello world", 0), sample("hello world", 6)];
+        let err = estimator_error(&samples).unwrap();
+        assert!((err - 50.0).abs() < 1e-4, "got {err}");
+    }
+
+    #[test]
+    fn worst_sample_returns_largest_error() {
+        // estimate("hello world") = 3: error vs 12 is 75%, vs 6 is 50% → worst is 12.
+        let samples = vec![sample("hello world", 12), sample("hello world", 6)];
+        let (text, err) = worst_sample(&samples).unwrap();
+        assert_eq!(text, "hello world");
+        assert!((err - 75.0).abs() < 1e-4, "got {err}");
     }
 }

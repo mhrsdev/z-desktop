@@ -560,6 +560,43 @@ mod tests {
         );
     }
 
+    // -- term-017: terminal throughput benchmark ------------------------------
+
+    /// End-to-end throughput gate: 8 MiB piped through the REAL exec path
+    /// (`run`: spawn → concurrent drain threads → capture) must finish in
+    /// under 3 s, and the captured output fed through the Scrollback ring
+    /// must stay pinned at `SCROLLBACK_CAP`. Prints MB/s on every run.
+    /// ponytail: `#[cfg(unix)]` — `head -c N /dev/zero`; a Windows variant
+    /// needs the slow echo loop, add one only if Windows numbers matter.
+    #[test]
+    #[cfg(unix)]
+    fn terminal_throughput_8mib_exec_under_3s_and_scrollback_capped() {
+        const BYTES: usize = 8 * 1024 * 1024;
+        let started = Instant::now();
+        let outcome = run(
+            &format!("head -c {BYTES} /dev/zero"),
+            std::env::temp_dir().as_path(),
+            Some(Duration::from_secs(10)),
+        )
+        .unwrap();
+        let elapsed = started.elapsed();
+
+        // Honest benchmark: prove every byte actually made it through.
+        assert_eq!(outcome.code, Some(0));
+        assert_eq!(outcome.stdout.len(), BYTES, "expected exactly {BYTES} bytes");
+        assert!(elapsed < Duration::from_secs(3), "8 MiB exec took too long: {elapsed:?}");
+        eprintln!(
+            "term-017 throughput: {:.1} MB/s ({elapsed:?} for 8 MiB)",
+            (BYTES as f64 / elapsed.as_secs_f64()) / (1024.0 * 1024.0)
+        );
+
+        // 8 MiB fits under the 10 MiB cap: ring retains it whole, never grows.
+        let mut sb = Scrollback::new(SCROLLBACK_CAP);
+        sb.push(outcome.stdout.as_bytes());
+        assert!(sb.len() <= SCROLLBACK_CAP, "ring grew past cap: {}", sb.len());
+        assert_eq!(sb.len(), BYTES);
+    }
+
     // -- term-004: kill-on-close child guards --------------------------------
 
     /// Dropping the guard must SIGKILL the child's process group: a `sleep`

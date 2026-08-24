@@ -718,6 +718,35 @@ fn classify_provider_error(e: &str) -> RetryClass {
     }
 }
 
+/// core-017 (ADR-0017 D3): seconds the provider hinted to wait before
+/// retrying — "retry after 5" or "retry-after: 5" in the error text.
+/// ponytail: parsed from the error string until providers surface
+/// structured errors; then only this body changes.
+fn parse_retry_after(e: &str) -> Option<u64> {
+    let l = e.to_lowercase();
+    for pat in ["retry after", "retry-after"] {
+        if let Some(i) = l.find(pat) {
+            let rest = &l[i + pat.len()..];
+            let digits: String = rest
+                .chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(n) = digits.parse::<u64>() {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Backoff before a non-network retry: honor the provider's Retry-After
+/// hint, capped at 30 s so a hostile hint can't stall a turn; flat 1 s
+/// default when no hint is present.
+fn retry_backoff_secs(e: &str) -> u64 {
+    parse_retry_after(e).map_or(1, |n| n.min(30))
+}
+
 /// prov-004/005 (ADR-0011 D2): capabilities of the currently configured
 /// model, read from the active provider slot. Nothing configured (or a mock
 /// without a model id) resolves to the conservative fallback caps.
@@ -817,6 +846,10 @@ fn run_turn(
     // sup-007: did this turn execute ANY tool call? A final text claiming
     // success after real execution should have left ok evidence behind.
     let mut turn_had_tool_call = false;
+    // core-018 (ADR-0017 D4): when set, the next loop round replays this
+    // exact ChatRequest object instead of rebuilding it, so the retry
+    // payload is byte-identical to the failed one.
+    let mut pending_retry: Option<provider::ChatRequest> = None;
 
     for round in 0..max_tool_rounds {
         if is_cancelled(&shared, &thread_id) {
@@ -825,11 +858,15 @@ fn run_turn(
             return;
         }
 
+        let retrying = pending_retry.is_some();
+
         // Steering drain (core-006): between tool rounds, queued user text
         // is appended as one combined user message so the next provider
         // round sees it. Round 0 drains only what arrived before the turn's
-        // provider call; later rounds pick up mid-turn steering.
-        if round > 0 {
+        // provider call; later rounds pick up mid-turn steering. Skipped on
+        // a retry replay so queued steering stays queued (it would not be
+        // part of the byte-identical request anyway) rather than dropped.
+        if round > 0 && !retrying {
             let drained = Runtime::drain_steering(&shared, &thread_id);
             if !drained.is_empty() {
                 if let Some(steering_msg) = Runtime::combine_steering(drained) {
@@ -843,7 +880,10 @@ fn run_turn(
             }
         }
 
-        let request = build_request(provider.as_ref(), &thread, &shared, &root);
+        // core-018: a pending retry replays the exact request that failed;
+        // only a fresh round builds a new one.
+        let request =
+            pending_retry.take().unwrap_or_else(|| build_request(provider.as_ref(), &thread, &shared, &root));
         let outcome = {
             let tx = event_tx.clone();
             let result = provider.stream(&request, &mut |item| {
@@ -860,18 +900,32 @@ fn run_turn(
                 Err(e) => {
                     // core-016 partial (ADR-0017 D2): classified single retry,
                     // round 0 only. Network retries immediately; rate-limit/
-                    // server errors back off 1 s first. Auth/Other fail now —
-                    // same key, same answer. Either way the user's message
-                    // is never lost.
+                    // server errors back off first — core-017 honors a
+                    // provider Retry-After hint (capped at 30 s), else flat
+                    // 1 s. Auth/Other fail now — same key, same answer.
+                    // Either way the user's message is never lost.
                     let class = classify_provider_error(&e);
+                    // core-019 (ADR-0017 D5): every failed attempt leaves one
+                    // provider_error breadcrumb. attempt 1 = initial call,
+                    // 2 = the replayed retry (the retry executes at round 1).
+                    Runtime::journal_record(
+                        &journal,
+                        JournalKind::ProviderError,
+                        Some(thread_id.clone()),
+                        json!({
+                            "attempt": round + 1,
+                            "class": format!("{class:?}").to_lowercase(),
+                        }),
+                    );
                     let retryable = matches!(
                         class,
                         RetryClass::Network | RetryClass::RateLimited | RetryClass::ServerError
                     );
                     if retryable && round == 0 {
                         if !matches!(class, RetryClass::Network) {
-                            std::thread::sleep(std::time::Duration::from_secs(1));
+                            std::thread::sleep(std::time::Duration::from_secs(retry_backoff_secs(&e)));
                         }
+                        pending_retry = Some(request);
                         continue;
                     }
                     persist(&thread);
@@ -2796,6 +2850,154 @@ mod doom_loop_retry_tests {
             1,
             "exactly one steering message injected"
         );
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn parse_retry_after_table() {
+        let cases: &[(&str, Option<u64>)] = &[
+            ("HTTP 429 too many requests, retry after 5", Some(5)),
+            ("provider returned HTTP 429: rate limit exceeded", None),
+            ("slow down; Retry-After: 12 seconds", Some(12)),
+            ("RETRY AFTER 90 before trying again", Some(90)),
+            ("retry after soon-ish", None), // no digits -> no parse
+            ("retry-after:", None),
+            ("plain network failure: connection refused", None),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(&parse_retry_after(text), expected, "case: {text}");
+        }
+    }
+
+    #[test]
+    fn retry_backoff_honors_hint_capped_and_defaults_to_one_second() {
+        // Hint honored...
+        assert_eq!(retry_backoff_secs("retry after 5"), 5);
+        // ...capped at 30 s so a hostile hint can't stall a turn...
+        assert_eq!(retry_backoff_secs("retry after 3600"), 30);
+        // ...flat 1 s default when no hint is present.
+        assert_eq!(retry_backoff_secs("no hint here"), 1);
+    }
+
+    /// Fails the first call with a retryable rate-limit error, then answers
+    /// with final text. Captures every request's Debug form so the retry can
+    /// be proven byte-identical.
+    struct FailOnceProvider {
+        calls: std::sync::atomic::AtomicUsize,
+        requests: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl provider::Provider for FailOnceProvider {
+        fn describe(&self) -> String {
+            "fail-once".into()
+        }
+        fn stream(
+            &self,
+            req: &provider::ChatRequest,
+            on_item: &mut dyn FnMut(provider::StreamItem),
+        ) -> Result<provider::StreamOutcome, String> {
+            self.requests.lock().unwrap().push(format!("{req:?}")); // full structural snapshot
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n == 0 {
+                return Err("provider returned HTTP 429: rate limit exceeded".into());
+            }
+            let text = "recovered on retry".to_string();
+            on_item(provider::StreamItem::TextDelta(text.clone()));
+            Ok(provider::StreamOutcome { text, tool_calls: Vec::new() })
+        }
+    }
+
+    /// core-017/018/019 together: one retryable failure then success means
+    /// (a) exactly two provider attempts, (b) the retry passed the SAME
+    /// request bytes as the failed first call, (c) exactly one provider_error
+    /// breadcrumb carrying {attempt: 1, class: "ratelimited"}, (d) the turn
+    /// still finishes ok.
+    #[test]
+    fn single_retry_replays_identical_request_journals_attempt_breadcrumb() {
+        let data_dir = unique_data_dir("retry");
+        let provider = Arc::new(FailOnceProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            requests: std::sync::Mutex::new(Vec::new()),
+        });
+        let shared = Shared {
+            provider: Mutex::new(Some(provider.clone() as Arc<dyn provider::Provider>)),
+            provider_label: Mutex::new("fail-once".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+        };
+        let (rt, _cmd_tx, _runtime_events) = make_runtime_at(Arc::new(shared), data_dir.clone());
+
+        let thread = Thread {
+            id: "retry-thread".into(),
+            title: "retry".into(),
+            messages: vec![StoredMessage {
+                role: z_protocol::Role::User,
+                text: "try me".into(),
+                tool_calls: Vec::new(),
+            }],
+            updated_ms: 0,
+        };
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        run_turn(
+            Arc::clone(&rt.shared),
+            event_tx,
+            Arc::new(Mutex::new(())),
+            data_dir.clone(),
+            rt.journal.clone(),
+            thread,
+            "turn-retry".into(),
+        );
+
+        // (d) turn finished OK despite the transient failure.
+        let mut finished_ok = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let Event::TurnFinished { ok, .. } = event {
+                finished_ok = ok;
+            }
+        }
+        assert!(finished_ok, "transient failure must not fail the turn");
+
+        // (a) exactly two recorded attempts.
+        assert_eq!(
+            provider.calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "one failed call plus one successful retry"
+        );
+
+        // (b) core-018: the retried request is byte-identical to the first.
+        let reqs = provider.requests.lock().unwrap();
+        assert_eq!(reqs.len(), 2, "every provider call captured its request");
+        assert_eq!(
+            reqs[0], reqs[1],
+            "retry must replay the same request object byte-for-byte"
+        );
+        drop(reqs);
+
+        // (c) core-019: exactly one error breadcrumb with the attempt field.
+        let records = Journal::replay(&data_dir.join("journal").join("runtime.jsonl"))
+            .expect("journal replayable");
+        let crumbs: Vec<&Record> = records
+            .iter()
+            .filter(|r| r.kind == JournalKind::ProviderError)
+            .collect();
+        assert_eq!(crumbs.len(), 1, "exactly one provider_error breadcrumb");
+        assert_eq!(crumbs[0].payload["attempt"], 1, "breadcrumb marks attempt 1");
+        assert_eq!(
+            crumbs[0].payload["class"], "ratelimited",
+            "breadcrumb names the retry class"
+        );
+        assert_eq!(crumbs[0].thread_id.as_deref(), Some("retry-thread"));
+
+        // Final answer still landed in the persisted history.
+        let saved =
+            std::fs::read_to_string(data_dir.join("threads").join("retry-thread.json"))
+                .expect("thread persisted");
+        assert!(saved.contains("recovered on retry"), "final text persisted");
         let _ = std::fs::remove_dir_all(&data_dir);
     }
 }

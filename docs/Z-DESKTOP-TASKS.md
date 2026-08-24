@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 88 |
+| IMPLEMENTED | 91 |
 | PARTIAL | 2 |
-| PLANNED | 633 |
+| PLANNED | 630 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -66,13 +66,13 @@
 ### [IMPLEMENTED] core-016 — Provider retry classification (network/429/5xx/auth)
 - depends: —
 
-### [PLANNED] core-017 — Retry-After honoring for 429
+### [IMPLEMENTED] core-017 — Retry-After honoring for 429
 - depends: core-016
 
-### [PLANNED] core-018 — Byte-identical retry payloads
+### [IMPLEMENTED] core-018 — Byte-identical retry payloads
 - depends: core-016
 
-### [PLANNED] core-019 — Retry journaling (attempt field)
+### [IMPLEMENTED] core-019 — Retry journaling (attempt field)
 - depends: core-016
 
 ### [IMPLEMENTED] core-020 — Protocol extension: EnqueueMessage/Pause/Resume variants

@@ -36,6 +36,8 @@ pub struct ToolDef {
     pub parameters: Value,
 }
 
+/// Derives Debug so tests can snapshot a request byte-for-byte.
+#[derive(Debug)]
 pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub tools: Vec<ToolDef>,

@@ -53,6 +53,10 @@ pub enum JournalKind {
     /// A thread was deleted (core-023 tombstone; shape-only payload, the
     /// snapshot file itself is gone — replay/reducers use this to exclude it).
     ThreadDeleted,
+    /// A provider call failed (core-019, ADR-0017 D5). One breadcrumb per
+    /// failed attempt; payload carries `attempt` (1 = initial call,
+    /// 2 = the single retry) and the retry `class`.
+    ProviderError,
     /// Escape hatch for kinds this build does not know yet.
     Other(String),
 }
@@ -68,6 +72,7 @@ impl JournalKind {
             JournalKind::EvidenceRecorded => "evidence_recorded",
             JournalKind::MemoryRecorded => "memory_recorded",
             JournalKind::ThreadDeleted => "thread_deleted",
+            JournalKind::ProviderError => "provider_error",
             JournalKind::Other(s) => s.as_str(),
         }
     }
@@ -82,6 +87,7 @@ impl JournalKind {
             "evidence_recorded" => JournalKind::EvidenceRecorded,
             "memory_recorded" => JournalKind::MemoryRecorded,
             "thread_deleted" => JournalKind::ThreadDeleted,
+            "provider_error" => JournalKind::ProviderError,
             _ => JournalKind::Other(s),
         }
     }

@@ -6,6 +6,22 @@
 
 Last updated: 2026-08-23
 
+## core-017/018/019 Retry Hardening — 2026-08-23 COMPLETE
+
+1. ✅ **core-017**: parse_retry_after ("retry after N" / "retry-after: N")
+   with min(N, 30) sleep for RateLimited; default 1s otherwise.
+2. ✅ **core-018**: pending_retry slot replays the SAME ChatRequest object
+   on retry (steering drain skipped on the replay round); capturing
+   provider test asserts byte-for-byte request identity.
+3. ✅ **core-019**: additive JournalKind::ProviderError breadcrumbs
+   {attempt, class} per failed attempt.
+
+Verification: full workspace suite green — **445 tests, 0 failed**
+(442 → 445). Ledger: 93 IMPLEMENTED.
+
+Next work continues → sup-012 fake-completion detector, prov-006 decision
+logging, or jour-011 corrupt-tail repair.
+
 ## jour-010 Seq-Gap Tolerance — 2026-08-23 COMPLETE
 
 1. ✅ **jour-010**: reducer::fold calls first_seq_gap after replay and

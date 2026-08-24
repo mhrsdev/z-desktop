@@ -6,7 +6,7 @@
 //! writes are append-only events. Unknown future kinds deserialize into
 //! [`JournalKind::Other`] and are simply ignored by every view here.
 
-use crate::journal::{first_seq_gap, Journal, JournalKind, Record, RecordDraft};
+use crate::journal::{first_seq_gap, lag_stats, Journal, JournalKind, Record, RecordDraft};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -171,6 +171,16 @@ pub fn redacted_summary(path: &Path) -> Result<usize, String> {
             crate::redact::redact(&text) == text
         })
         .count())
+}
+
+/// jour-024: one-line journal size report — record count (via
+/// [`lag_stats`]) plus on-disk bytes as a percentage of the 10 MB segment cap.
+pub fn journal_size_report(path: &Path) -> Result<String, String> {
+    const CAP_BYTES: u64 = 10 * 1024 * 1024;
+    let records = lag_stats(&Journal::replay(path)?).records;
+    let bytes = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    let pct = bytes.saturating_mul(100) / CAP_BYTES;
+    Ok(format!("{records} records, {bytes} bytes ({pct}% of 10MB cap)"))
 }
 
 /// jour-017: generates a synthetic, deterministic journal segment at `path`.
@@ -1654,6 +1664,32 @@ pub(crate) mod reducer_tests {
             drafts[0].payload,
             json!({"id": "t1", "status": TaskStatus::Done})
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_size_report_seeded_matches_real_bytes_and_count() {
+        let dir = temp_dir("jour-024");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        let path = dir.join("main.jsonl");
+        let bytes = std::fs::metadata(&path).expect("metadata").len();
+        let pct = bytes * 100 / (10 * 1024 * 1024);
+        assert_eq!(
+            journal_size_report(&path).expect("report"),
+            format!("3 records, {bytes} bytes ({pct}% of 10MB cap)")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_size_report_missing_file_is_err() {
+        let dir = temp_dir("jour-024-missing");
+        assert!(journal_size_report(&dir.join("nope.jsonl")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

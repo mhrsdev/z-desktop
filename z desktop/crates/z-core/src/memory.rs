@@ -690,6 +690,17 @@ pub fn memory_health(store: &MemoryStore, journal_path: &Path) -> Result<String,
     ))
 }
 
+/// One-line layer summary (mem-024): live-record count for one layer's
+/// derived view, using the ADR-0014 D4 predicate via [`MemoryView::live`].
+/// An unreadable view counts as 0 — views are caches, not truth.
+pub fn layer_report(store: &MemoryStore, layer: Layer) -> String {
+    let n = store
+        .read_layer(layer)
+        .map(|records| MemoryView { records }.live().len())
+        .unwrap_or(0);
+    format!("{}: {n} live records", layer.as_str())
+}
+
 /// One heuristic hit from post-turn text extraction (mem-005, ADR-0014 D5).
 /// Lands Provisional only; promotion is mem-007's job.
 #[derive(Debug, Clone, PartialEq)]
@@ -1981,6 +1992,70 @@ mod memory_tests {
             memory_health(&MemoryStore::open(&dir), &path).expect("health"),
             "0 events, 0 live (0 project/0 semantic/0 episodic), 0 provisional"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn layer_report_seeded_store_matches_exact_strings() {
+        let dir = temp_dir("layer-report");
+        let store = MemoryStore::open(&dir);
+        // Project: 1 superseded + 1 live + 1 provisional -> only live counts.
+        let mut sup = rec("mem-a", Status::Promoted);
+        sup.superseded_by = Some("mem-b".into());
+        store
+            .write_layer_view(
+                Layer::Project,
+                &[
+                    sup,
+                    rec("mem-b", Status::Promoted),
+                    rec("mem-c", Status::Provisional),
+                ],
+            )
+            .expect("write project view");
+        let semantic = |id: &str| {
+            MemoryRecord::new(
+                id,
+                Layer::Semantic,
+                "semantic note",
+                prov("pass-2"),
+                0.6,
+                Status::Promoted,
+            )
+            .expect("valid")
+        };
+        store
+            .write_layer_view(
+                Layer::Semantic,
+                &[semantic("mem-s1"), semantic("mem-s2")],
+            )
+            .expect("write semantic view");
+
+        assert_eq!(
+            layer_report(&store, Layer::Project),
+            "project: 1 live records"
+        );
+        assert_eq!(
+            layer_report(&store, Layer::Semantic),
+            "semantic: 2 live records"
+        );
+        assert_eq!(
+            layer_report(&store, Layer::Episodic),
+            "episodic: 0 live records"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn layer_report_empty_store_is_zero_live_records() {
+        let dir = temp_dir("layer-report-empty");
+        let store = MemoryStore::open(&dir);
+        for layer in [Layer::Project, Layer::Semantic, Layer::Episodic] {
+            assert_eq!(
+                layer_report(&store, layer),
+                format!("{}: 0 live records", layer.as_str()),
+                "{layer:?}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

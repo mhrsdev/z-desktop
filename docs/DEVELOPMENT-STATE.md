@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 29 (jour-024 + mem-024 + term-019) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-024**: journal_size_report — records/bytes/pct-of-cap line.
+2. ✅ **mem-024**: layer_report per-layer live-record lines.
+3. ✅ **term-019**: exec_report one-line run summary.
+
+Verification: full workspace suite green — **759 tests, 0 failed**
+(751 → 759). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 28 (orch-019 + ctx-019 + tok-024) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-019**: task_timeline per-task status history (TasksView

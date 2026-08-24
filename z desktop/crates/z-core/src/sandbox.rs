@@ -76,10 +76,33 @@ impl Scrollback {
 /// killed, so the model sees what happened before the timeout.
 #[derive(Debug)]
 pub struct ExecOutcome {
+    /// The command as passed to [`run`] (term-019: echoed by [`exec_report`]).
+    pub cmd: String,
     pub stdout: String,
     pub stderr: String,
     pub code: Option<i32>,
     pub timed_out: bool,
+}
+
+/// term-019: alias for the sandbox run result (`exec_report` input).
+pub type RunResult = ExecOutcome;
+
+/// term-019: one-line report for a finished exec run, e.g.
+/// `cargo test -> exit 0, 1234ms, 42B stdout`. A killed/timed-out child has
+/// no exit code, reported as `exit signal`. Command text is truncated to
+/// 40 characters (char-safe).
+pub fn exec_report(result: &RunResult, wall_ms: u64) -> String {
+    let exit = match result.code {
+        Some(code) => code.to_string(),
+        None => "signal".to_string(),
+    };
+    format!(
+        "{} -> exit {}, {}ms, {}B stdout",
+        result.cmd.chars().take(40).collect::<String>(),
+        exit,
+        wall_ms,
+        result.stdout.len()
+    )
 }
 
 /// Spawn `command` in `cwd`, drain its pipes, enforce the timeout, kill the
@@ -149,7 +172,13 @@ pub fn run(command: &str, cwd: &Path, timeout: Option<Duration>) -> Result<ExecO
     let stdout = String::from_utf8_lossy(&out_reader.join().unwrap_or_default()).to_string();
     let stderr = String::from_utf8_lossy(&err_reader.join().unwrap_or_default()).to_string();
 
-    Ok(ExecOutcome { stdout, stderr, code: status.and_then(|s| s.code()), timed_out })
+    Ok(ExecOutcome {
+        cmd: command.to_string(),
+        stdout,
+        stderr,
+        code: status.and_then(|s| s.code()),
+        timed_out,
+    })
 }
 
 fn read_capped(pipe: &mut impl Read, cap: usize) -> Vec<u8> {
@@ -640,5 +669,71 @@ mod tests {
         assert_eq!(outcome.code, None);
         let elapsed = started.elapsed();
         assert!(elapsed < Duration::from_secs(5), "timeout took too long: {elapsed:?}");
+    }
+
+    // -- term-019: exec report formatting -------------------------------------
+
+    #[test]
+    fn exec_report_formats_cmd_exit_ms_and_stdout_bytes() {
+        let r = RunResult {
+            cmd: "cargo test".into(),
+            stdout: "ok\n".into(),
+            stderr: String::new(),
+            code: Some(0),
+            timed_out: false,
+        };
+        assert_eq!(exec_report(&r, 1234), "cargo test -> exit 0, 1234ms, 3B stdout");
+    }
+
+    #[test]
+    fn exec_report_truncates_cmd_to_40_chars() {
+        let long = "abcdefghij".repeat(6); // 60 chars
+        let r = RunResult {
+            cmd: long.clone(),
+            stdout: String::new(),
+            stderr: String::new(),
+            code: Some(2),
+            timed_out: false,
+        };
+        assert_eq!(
+            exec_report(&r, 7),
+            format!("{} -> exit 2, 7ms, 0B stdout", &long[..40])
+        );
+        // Char-safe: multibyte text must not panic on a char boundary.
+        let multibyte = RunResult {
+            cmd: "é".repeat(45),
+            stdout: "x".into(),
+            stderr: String::new(),
+            code: Some(1),
+            timed_out: false,
+        };
+        let report = exec_report(&multibyte, 1);
+        assert!(report.starts_with(&"é".repeat(40)));
+        assert!(report.ends_with("-> exit 1, 1ms, 1B stdout"));
+    }
+
+    #[test]
+    fn exec_report_reports_signal_when_exit_code_is_missing() {
+        let r = RunResult {
+            cmd: "sleep 30".into(),
+            stdout: "started".into(),
+            stderr: String::new(),
+            code: None,
+            timed_out: true,
+        };
+        assert_eq!(exec_report(&r, 1000), "sleep 30 -> exit signal, 1000ms, 7B stdout");
+    }
+
+    /// term-019: `run` must carry the command through so `exec_report` can
+    /// echo it without an extra parameter.
+    #[test]
+    #[cfg(unix)]
+    fn run_populates_cmd_for_exec_report() {
+        let outcome = run("echo hi", std::env::temp_dir().as_path(), None).unwrap();
+        assert_eq!(outcome.cmd, "echo hi");
+        assert_eq!(
+            exec_report(&outcome, 5),
+            "echo hi -> exit 0, 5ms, 3B stdout"
+        );
     }
 }

@@ -145,6 +145,16 @@ pub fn apply(s: &Settings, key: &str, value: &serde_json::Value) -> Result<Setti
                 ))
             }
         },
+        "doom_threshold" => match value.as_u64() {
+            Some(n) if (MIN_DOOM_THRESHOLD..=MAX_DOOM_THRESHOLD_CAP).contains(&n) => {
+                out.doom_threshold = n as usize;
+            }
+            _ => {
+                return Err(format!(
+                    "{key} must be an integer in {MIN_DOOM_THRESHOLD}..={MAX_DOOM_THRESHOLD_CAP}"
+                ))
+            }
+        },
         other => return Err(format!("unknown setting \"{other}\"")),
     }
     Ok(out)
@@ -308,6 +318,31 @@ pub fn validate(key: &str, value: f64) -> Result<(), String> {
             lo as i64, hi as i64
         ))
     }
+}
+
+/// set-005: pretty constraint message for an out-of-range value, or None if
+/// `value` is valid for `key`. Thin wrapper over [`validate`] so callers get
+/// Option-shaped ergonomics without re-deriving bounds.
+pub fn constraint_error(key: &str, value: f64) -> Option<String> {
+    validate(key, value).err()
+}
+
+/// set-005: restore one key's documented default into `current` via [`apply`],
+/// so resets can never drift from the command path's validation. Returns
+/// Ok(false) for unknown keys (nothing to reset); Err only on internal
+/// inconsistency (a schema default failing its own bounds).
+pub fn reset_to_default(key: &str, current: &mut Settings) -> Result<bool, String> {
+    let Some(def) = schema_defs().iter().find(|d| d.key == key) else {
+        return Ok(false);
+    };
+    let value = match def.default {
+        SettingDefault::U64(v) => serde_json::Value::from(v),
+        SettingDefault::F32(v) => serde_json::Value::from(v),
+        SettingDefault::Bool(v) => serde_json::Value::from(v),
+        SettingDefault::String(v) => serde_json::Value::from(v),
+    };
+    *current = apply(current, key, &value)?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -585,5 +620,48 @@ mod settings_tests {
         assert!(migrate("{not json").is_err(), "bad JSON => Err");
         assert!(migrate(r#"{"values":{}}"#).is_err(), "missing version => Err");
         assert!(migrate(r#"{"version":"one"}"#).is_err(), "non-integer version => Err");
+    }
+
+    // ---- set-005: constraint messages + per-key reset --------------------
+
+    #[test]
+    fn constraint_error_names_key_and_bounds_when_invalid() {
+        let err = constraint_error("max_tool_rounds", 5000.0)
+            .expect("out-of-range value yields a message");
+        assert!(err.contains("max_tool_rounds"), "names the key: {err}");
+        assert!(
+            err.contains('1') && err.contains("200"),
+            "message carries the bounds: {err}"
+        );
+        assert!(
+            constraint_error("max_tool_rounds", 24.0).is_none(),
+            "valid value => no error"
+        );
+        // Unknown keys surface through the same Option path.
+        let err = constraint_error("nope", 5.0).expect("unknown key yields a message");
+        assert!(err.contains("unknown setting") && err.contains("nope"), "{err}");
+    }
+
+    #[test]
+    fn reset_to_default_restores_one_key_via_apply() {
+        let mut s =
+            Settings { max_tool_rounds: 199, approval_timeout_secs: 60, doom_threshold: 9 };
+        assert!(reset_to_default("max_tool_rounds", &mut s).unwrap());
+        assert_eq!(s.max_tool_rounds, DEFAULT_MAX_TOOL_ROUNDS, "key reset");
+        assert_eq!(s.approval_timeout_secs, 60, "siblings untouched");
+        assert_eq!(s.doom_threshold, 9, "siblings untouched");
+        // Every schema key resets to its documented default.
+        let mut all = Settings { max_tool_rounds: 1, approval_timeout_secs: 5, doom_threshold: 1 };
+        for def in schema_defs() {
+            assert!(reset_to_default(def.key, &mut all).expect("schema default applies"));
+        }
+        assert_eq!(all, Settings::default());
+    }
+
+    #[test]
+    fn reset_unknown_key_is_ok_false_without_mutating() {
+        let mut s = Settings::default();
+        assert_eq!(reset_to_default("future_key", &mut s), Ok(false));
+        assert_eq!(s, Settings::default(), "nothing changed on unknown key");
     }
 }

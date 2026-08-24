@@ -273,6 +273,27 @@ impl TasksView {
     }
 }
 
+/// ctx-012: jour-012 double-replay determinism as a runtime-checkable helper —
+/// folds the segment into [`TasksView`] twice (two fully separate replays of
+/// the same bytes) and reports whether the views are deeply equal.
+pub fn fold_twice_equal(path: &Path) -> Result<bool, String> {
+    Ok(TasksView::fold(path)? == TasksView::fold(path)?)
+}
+
+/// ctx-012: counts tasks by status as (done, running, failed, pending).
+pub fn task_counts(view: &TasksView) -> (usize, usize, usize, usize) {
+    let mut counts = (0, 0, 0, 0);
+    for task in view.tasks.values() {
+        match task.status {
+            TaskStatus::Done => counts.0 += 1,
+            TaskStatus::Running => counts.1 += 1,
+            TaskStatus::Failed => counts.2 += 1,
+            TaskStatus::Pending => counts.3 += 1,
+        }
+    }
+    counts
+}
+
 /// orch-001: appends `task_state_changed` journal events; state is read back
 /// with [`TasksView::fold`]. Stateless by design — each call re-observes the
 /// tail sequence so separate calls keep one continuous seq stream (single-
@@ -702,6 +723,58 @@ pub(crate) mod reducer_tests {
 
         assert_eq!(tasks_forward, tasks_reverse);
         assert_eq!(threads_forward, threads_reverse);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ctx-012 ---------------------------------------------------------------
+
+    #[test]
+    fn task_counts_seeded_journal_matches_lifecycle_statuses() {
+        let dir = temp_dir("ctx012-counts");
+        TaskStore::create(&dir, "d").expect("create d");
+        TaskStore::create(&dir, "r").expect("create r");
+        TaskStore::create(&dir, "f").expect("create f");
+        TaskStore::create(&dir, "p").expect("create p");
+        TaskStore::transition(&dir, "d", TaskStatus::Done).expect("d done");
+        TaskStore::transition(&dir, "r", TaskStatus::Running).expect("r running");
+        TaskStore::transition(&dir, "f", TaskStatus::Failed).expect("f failed");
+
+        let view = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl"))).expect("fold");
+        assert_eq!(
+            task_counts(&view),
+            (1, 1, 1, 1),
+            "one done, one running, one failed, one pending"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fold_twice_equal_on_seeded_journal_returns_true() {
+        let dir = temp_dir("ctx012-twice");
+        TaskStore::create_with_deps(&dir, "b", &["a".into()]).expect("create b");
+        TaskStore::create(&dir, "a").expect("create a");
+        TaskStore::transition(&dir, "a", TaskStatus::Done).expect("a done");
+        TaskStore::transition(&dir, "b", TaskStatus::Running).expect("b running");
+
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+        assert!(
+            fold_twice_equal(&path).expect("fold twice"),
+            "two separate replays of the same bytes must fold identically"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_journal_task_counts_are_zeroed_and_fold_twice_holds() {
+        let dir = temp_dir("ctx012-empty");
+        {
+            // Create the file with no records (drop flushes/closes it).
+            Journal::open(&dir, TASKS_SEGMENT).expect("open");
+        }
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+        let view = TasksView::fold(&path).expect("fold");
+        assert_eq!(task_counts(&view), (0, 0, 0, 0));
+        assert!(fold_twice_equal(&path).expect("fold twice"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -21,8 +21,9 @@ pub struct TrigramIndex {
     /// chars have no trigrams and are indexed under the special key "" so
     /// they remain reachable via postings.
     map: HashMap<String, Vec<u32>>,
-    /// Stored document texts by doc id.
-    docs: Vec<String>,
+    /// Stored document texts by doc id; None marks a removed slot, kept
+    /// reserved so later adds never reuse the id.
+    docs: Vec<Option<String>>,
 }
 
 /// Lowercased character trigrams of `text`; empty vec when len < 3.
@@ -34,20 +35,70 @@ fn trigrams(text: &str) -> Vec<String> {
     lower.windows(3).map(|w| w.iter().collect()).collect()
 }
 
+/// Posting-map keys a lowercased doc text is indexed under: its trigrams,
+/// or the single empty-string key when it has none (< 3 chars).
+fn posting_keys(lower: &str) -> Vec<String> {
+    let mut keys = trigrams(lower);
+    if keys.is_empty() {
+        keys.push(String::new());
+    }
+    keys
+}
+
 impl TrigramIndex {
     /// Store a document and index its lowercase trigrams. Returns its doc id.
     pub fn add(&mut self, text: &str) -> u32 {
         let id = self.docs.len() as u32;
         let lower = text.to_lowercase();
-        if lower.chars().count() < 3 {
-            self.map.entry(String::new()).or_default().push(id);
-        } else {
-            for tri in trigrams(text) {
-                self.map.entry(tri).or_default().push(id);
+        self.index_text(id, &lower);
+        self.docs.push(Some(lower));
+        id
+    }
+
+    /// Re-index an existing doc in place: drop its old trigram postings,
+    /// then index `text` under the same id. Errors when `id` is out of range
+    /// or already removed; removed slots stay reserved either way.
+    pub fn incremental_add(&mut self, id: u32, text: &str) -> Result<(), String> {
+        let lower = text.to_lowercase();
+        let old = self.live_doc_text(id)?;
+        self.unindex(id, &old);
+        self.index_text(id, &lower);
+        self.docs[id as usize] = Some(lower);
+        Ok(())
+    }
+
+    /// Drop every posting for `id`, making it unreachable; its slot stays
+    /// reserved. Errors when `id` is out of range or already removed.
+    pub fn remove(&mut self, id: u32) -> Result<(), String> {
+        let old = self.live_doc_text(id)?;
+        self.unindex(id, &old);
+        self.docs[id as usize] = None;
+        Ok(())
+    }
+
+    fn live_doc_text(&self, id: u32) -> Result<String, String> {
+        self.docs
+            .get(id as usize)
+            .cloned()
+            .flatten()
+            .ok_or_else(|| format!("unknown or removed doc id {id}"))
+    }
+
+    fn unindex(&mut self, id: u32, lower: &str) {
+        for key in posting_keys(lower) {
+            if let Some(postings) = self.map.get_mut(&key) {
+                postings.retain(|&d| d != id);
+                if postings.is_empty() {
+                    self.map.remove(&key);
+                }
             }
         }
-        self.docs.push(lower);
-        id
+    }
+
+    fn index_text(&mut self, id: u32, lower: &str) {
+        for key in posting_keys(lower) {
+            self.map.entry(key).or_default().push(id);
+        }
     }
 
     /// Union of postings for every query trigram, deduped and sorted.
@@ -69,6 +120,7 @@ impl TrigramIndex {
     pub fn verify(&self, id: u32, query: &str) -> bool {
         self.docs
             .get(id as usize)
+            .and_then(|doc| doc.as_deref())
             .is_some_and(|doc| doc.contains(&query.to_lowercase()))
     }
 
@@ -107,7 +159,9 @@ impl TrigramIndex {
             .into_iter()
             .map(|id| {
                 let dset: HashSet<String> =
-                    trigrams(&self.docs[id as usize]).into_iter().collect();
+                    trigrams(self.docs[id as usize].as_deref().expect("live doc"))
+                        .into_iter()
+                        .collect();
                 let matched = qtris.iter().filter(|q| dset.contains(*q)).count();
                 SearchHit {
                     doc_id: id,
@@ -229,5 +283,45 @@ mod tests {
             );
             assert!(hits.iter().all(|h| h.score == 1.0));
         }
+    }
+
+    #[test]
+    fn incremental_add_replaces_postings_under_same_id() {
+        let mut idx = TrigramIndex::default();
+        let id = idx.add("alpha beta");
+        assert_eq!(idx.search("alpha"), vec![id]);
+        idx.incremental_add(id, "gamma delta").unwrap();
+        assert_eq!(idx.search("gamma"), vec![id]);
+        assert_eq!(idx.search("delta"), vec![id]);
+        assert_eq!(idx.search("alpha"), Vec::<u32>::new());
+        // Re-indexing below 3 chars must move the doc to/from the
+        // empty-key postings cleanly.
+        idx.incremental_add(id, "ok").unwrap();
+        assert_eq!(idx.search("ok"), vec![id]);
+        assert_eq!(idx.search("gamma"), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn remove_drops_hits_but_keeps_slot_reserved() {
+        let mut idx = TrigramIndex::default();
+        let gone = idx.add("removable content");
+        let kept = idx.add("permanent material");
+        idx.remove(gone).unwrap();
+        assert_eq!(idx.search("removable"), Vec::<u32>::new());
+        assert_eq!(idx.search("permanent"), vec![kept]);
+        assert!(!idx.verify(gone, "content"));
+        // Reserved: the next add skips the freed id instead of reusing it.
+        assert_eq!(idx.add("fresh text"), kept + 1);
+    }
+
+    #[test]
+    fn unknown_or_removed_ids_error() {
+        let mut idx = TrigramIndex::default();
+        assert!(idx.incremental_add(0, "nope").is_err());
+        assert!(idx.remove(0).is_err());
+        let id = idx.add("temporary");
+        idx.remove(id).unwrap();
+        assert!(idx.incremental_add(id, "again").is_err());
+        assert!(idx.remove(id).is_err());
     }
 }

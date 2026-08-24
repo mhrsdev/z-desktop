@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-24
 
+## Wave 13 (ctx-012 + set-005 + idx-019) — 2026-08-24 COMPLETE
+
+1. ✅ **ctx-012**: fold_twice_equal runtime determinism check +
+   task_counts() by status.
+2. ✅ **set-005**: constraint_error pretty messages + reset_to_default
+   per-key restore.
+3. ✅ **idx-019**: incremental_add/remove with doc→trigram reverse map;
+   removed ids stay reserved (slot reuse deferred).
+
+Verification: full workspace suite green — **648 tests, 0 failed**
+(639 → 648). Ledger: 142 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 12 (sup-023 verify + prov-002 + edit-005 backup) — 2026-08-24 COMPLETE
 
 1. ✅ **sup-023**: verified EvidenceRecorded wiring complete; added

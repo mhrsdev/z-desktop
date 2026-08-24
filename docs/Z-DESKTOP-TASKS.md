@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 138 |
+| IMPLEMENTED | 140 |
 | PARTIAL | 5 |
-| PLANNED | 580 |
+| PLANNED | 578 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -301,7 +301,7 @@
 ### [IMPLEMENTED] idx-018 — Trigram index structure
 - depends: —
 
-### [PLANNED] idx-019 — Trigram incremental postings update
+### [IMPLEMENTED] idx-019 — Trigram incremental postings update
 - depends: idx-018, idx-012
 
 ### [IMPLEMENTED] idx-020 — Lexical search query path (intersect+verify)
@@ -1591,7 +1591,7 @@
 ### [IMPLEMENTED] set-004 — SetSetting command + change events
 - depends: set-003
 
-### [PLANNED] set-005 — Validation + constraint reset-with-warning
+### [IMPLEMENTED] set-005 — Validation + constraint reset-with-warning
 - depends: set-001
 
 ### [PLANNED] set-006 — Unknown-key keep+warn behavior

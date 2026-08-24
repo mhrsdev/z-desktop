@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-24
 
+## Wave 34 (orch-021 + sup-029 + mem-026) — 2026-08-24 COMPLETE
+
+1. ✅ **orch-021**: task_health_line — status breakdown line.
+2. ✅ **sup-029**: evidence_health_line — noise | ok-rate combined.
+3. ✅ **mem-026**: memory_health_line — health | export-report combined.
+
+All six core subsystems now expose one-line health summaries —
+StatusPanel wiring is the next UI phase.
+
+Verification: full workspace suite green — **788 tests, 0 failed**
+(782 → 788). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 33 (jour-025 + ctx-022 + set-016) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-025**: journal_health_line — seq_health | size combined.

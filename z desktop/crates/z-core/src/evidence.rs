@@ -457,7 +457,10 @@ pub fn evidence_for_turn<'a>(view: &'a EvidenceView, turn_id: &str) -> Vec<&'a E
 
 /// sup-027: all evidence recorded for `thread_id`, in journal replay order.
 pub fn evidence_by_thread<'a>(view: &'a EvidenceView, thread_id: &str) -> Vec<&'a Evidence> {
-    view.items.iter().filter(|e| e.thread_id == thread_id).collect()
+    view.items
+        .iter()
+        .filter(|e| e.thread_id == thread_id)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -489,12 +492,11 @@ pub fn bench_history(view: &EvidenceView, name: &str) -> Vec<BenchPoint> {
             let value_ms = digits.parse().ok()?;
             // ponytail: ts falls back to 0 on a corrupt id rather than
             // dropping the measurement; upgrade path is skipping instead.
-            let ts_ms = e
-                .id
-                .split('-')
-                .nth(1)
-                .and_then(|hex| u128::from_str_radix(hex, 16).ok())
-                .unwrap_or(0);
+            let ts_ms =
+                e.id.split('-')
+                    .nth(1)
+                    .and_then(|hex| u128::from_str_radix(hex, 16).ok())
+                    .unwrap_or(0);
             Some(BenchPoint {
                 name: name.to_string(),
                 value_ms,
@@ -631,6 +633,16 @@ pub fn detector_noise_report(view: &EvidenceView) -> String {
         .filter(|k| view.items.iter().any(|e| e.kind == **k))
         .count();
     format!("{n} evidence records, {ok_pct}% ok, {kinds} kinds")
+}
+
+/// sup-029: one-line health line combining [`detector_noise_report`] and
+/// [`overall_ok_rate`] — `"{noise} | {pct}% ok"`. A view with no records at
+/// all reports "no evidence".
+pub fn evidence_health_line(view: &EvidenceView) -> String {
+    match overall_ok_rate(view) {
+        Some(rate) => format!("{} | {}% ok", detector_noise_report(view), rate * 100.0),
+        None => "no evidence".to_string(),
+    }
 }
 
 /// sup-028: pretty JSON array of every record in the view, projected to
@@ -781,9 +793,18 @@ mod evidence_tests {
     #[test]
     fn link_claims_needs_ok_evidence_of_same_kind() {
         let claims = vec![
-            ClaimSpan { text: "tests pass".into(), kind: EvidenceKind::Tests },
-            ClaimSpan { text: "build succeeds".into(), kind: EvidenceKind::Build },
-            ClaimSpan { text: "no regressions".into(), kind: EvidenceKind::Regression },
+            ClaimSpan {
+                text: "tests pass".into(),
+                kind: EvidenceKind::Tests,
+            },
+            ClaimSpan {
+                text: "build succeeds".into(),
+                kind: EvidenceKind::Build,
+            },
+            ClaimSpan {
+                text: "no regressions".into(),
+                kind: EvidenceKind::Regression,
+            },
         ];
         // ok Tests + failed Build + wrong-turn Tests: only the Tests claim links.
         let evidence = vec![
@@ -823,7 +844,10 @@ mod evidence_tests {
         assert!(!evaluate_claims(&empty, 0).blocked);
 
         // Some claim linked -> pass (even with zero ok evidence counted).
-        let linked = link_claims(&claims[..1], &[Evidence::tests("t", "u1", 3, 0, "cargo test")]);
+        let linked = link_claims(
+            &claims[..1],
+            &[Evidence::tests("t", "u1", 3, 0, "cargo test")],
+        );
         assert!(!evaluate_claims(&linked, 0).blocked);
 
         // Everything unlinked, zero ok evidence of any kind -> blocked, with
@@ -968,8 +992,14 @@ mod evidence_tests {
     #[test]
     fn fake_completion_needs_claims_all_unlinked_and_a_marker() {
         let claims = vec![
-            ClaimSpan { text: "tests pass".into(), kind: EvidenceKind::Tests },
-            ClaimSpan { text: "build succeeds".into(), kind: EvidenceKind::Build },
+            ClaimSpan {
+                text: "tests pass".into(),
+                kind: EvidenceKind::Tests,
+            },
+            ClaimSpan {
+                text: "build succeeds".into(),
+                kind: EvidenceKind::Build,
+            },
         ];
         // All unlinked + completion marker -> fires.
         assert!(detect_fake_completion(&claims, &[], "All done."));
@@ -986,9 +1016,17 @@ mod evidence_tests {
             "All done."
         ));
         // No completion marker -> quiet even when fully unlinked.
-        assert!(!detect_fake_completion(&claims, &[], "Tests still failing."));
+        assert!(!detect_fake_completion(
+            &claims,
+            &[],
+            "Tests still failing."
+        ));
         // Whole-word rule: glued words are not markers.
-        assert!(!detect_fake_completion(&claims, &[], "undone business abounds"));
+        assert!(!detect_fake_completion(
+            &claims,
+            &[],
+            "undone business abounds"
+        ));
         // Clean text, no claims -> quiet.
         assert!(!detect_fake_completion(&[], &[], "All done."));
     }
@@ -1008,23 +1046,38 @@ mod evidence_tests {
             &claims,
             &evidence,
             &[
-                ChecklistExpectation { kind: EvidenceKind::Tests, count: 1 },
-                ChecklistExpectation { kind: EvidenceKind::Build, count: 1 },
+                ChecklistExpectation {
+                    kind: EvidenceKind::Tests,
+                    count: 1
+                },
+                ChecklistExpectation {
+                    kind: EvidenceKind::Build,
+                    count: 1
+                },
             ]
         ));
         // Shortfall: expected a test run, none recorded -> fires.
         assert!(detect_premature_stop(
             &claims,
             &[],
-            &[ChecklistExpectation { kind: EvidenceKind::Tests, count: 1 }]
+            &[ChecklistExpectation {
+                kind: EvidenceKind::Tests,
+                count: 1
+            }]
         ));
         // Kinds are independent: met Tests does not cover missing Bench.
         assert!(detect_premature_stop(
             &claims,
             &evidence,
             &[
-                ChecklistExpectation { kind: EvidenceKind::Tests, count: 1 },
-                ChecklistExpectation { kind: EvidenceKind::Bench, count: 2 },
+                ChecklistExpectation {
+                    kind: EvidenceKind::Tests,
+                    count: 1
+                },
+                ChecklistExpectation {
+                    kind: EvidenceKind::Bench,
+                    count: 2
+                },
             ]
         ));
         // Empty checklist = nothing demanded -> never fires.
@@ -1082,10 +1135,7 @@ mod evidence_tests {
         let view = EvidenceView::fold(&path).expect("fold");
         assert_eq!(view.items, vec![d, e]);
         assert_eq!(view.items[0].kind, EvidenceKind::Diff);
-        assert_eq!(
-            view.items[0].summary,
-            "wrote 42 bytes to src/lib.rs"
-        );
+        assert_eq!(view.items[0].summary, "wrote 42 bytes to src/lib.rs");
         assert_eq!(view.items[1].kind, EvidenceKind::Tests);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1099,7 +1149,10 @@ mod evidence_tests {
         assert_eq!(e.summary, "provider_first_round: 1234ms");
         let zero = Evidence::bench("t", "u2", "x", 0);
         assert_eq!(zero.summary, "x: 0ms");
-        assert!(zero.ok, "a recorded duration is a measurement, not a verdict");
+        assert!(
+            zero.ok,
+            "a recorded duration is a measurement, not a verdict"
+        );
     }
 
     #[test]
@@ -1191,7 +1244,8 @@ mod evidence_tests {
             "ev-19e5aa4b1a01-1",
             "provider_first_round: 1200ms",
         ));
-        view.items.push(Evidence::tests("t", "u2", 3, 0, "cargo test"));
+        view.items
+            .push(Evidence::tests("t", "u2", 3, 0, "cargo test"));
         // Same "{name}:" text but wrong KIND must never appear.
         view.items.push(Evidence::tests(
             "t",
@@ -1263,19 +1317,16 @@ mod evidence_tests {
     #[test]
     fn regression_history_parses_seeded_records_in_order() {
         let mut view = EvidenceView::default();
-        view.items.push(Evidence::tests("t", "u2", 3, 0, "cargo test"));
+        view.items
+            .push(Evidence::tests("t", "u2", 3, 0, "cargo test"));
         view.items.extend([
             Evidence::regression("t", "u1", "a_test", true),
             Evidence::regression("t", "u1", "b_test", false),
             Evidence::regression("t", "u3", "c_test", true),
         ]);
         // Same "regression:" text but wrong KIND must never appear.
-        view.items.push(Evidence::diff(
-            "t",
-            "u4",
-            true,
-            "regression: ghost FAIL",
-        ));
+        view.items
+            .push(Evidence::diff("t", "u4", true, "regression: ghost FAIL"));
         assert_eq!(
             regression_history(&view),
             vec![
@@ -1535,5 +1586,30 @@ mod evidence_tests {
     #[test]
     fn evidence_export_json_empty_view_is_bare_array() {
         assert_eq!(evidence_export_json(&EvidenceView::default()), "[]");
+    }
+
+    // sup-029: one-line health line.
+
+    #[test]
+    fn evidence_health_line_formats_seeded_view_exactly() {
+        let mut view = EvidenceView::default();
+        view.items.extend([
+            Evidence::build("t", "u", Some(0), "make"),    // ok
+            Evidence::build("t", "u", Some(1), "make"),    // failed
+            Evidence::tests("t", "u", 3, 0, "cargo test"), // ok
+            Evidence::diff("t", "u", false, "wrote x"),    // failed
+        ]);
+        assert_eq!(
+            evidence_health_line(&view),
+            "4 evidence records, 50% ok, 3 kinds | 50% ok"
+        );
+    }
+
+    #[test]
+    fn evidence_health_line_is_no_evidence_for_an_empty_view() {
+        assert_eq!(
+            evidence_health_line(&EvidenceView::default()),
+            "no evidence"
+        );
     }
 }

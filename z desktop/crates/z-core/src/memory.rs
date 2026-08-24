@@ -699,6 +699,18 @@ pub fn memory_health(store: &MemoryStore, journal_path: &Path) -> Result<String,
     ))
 }
 
+/// One-line combined status (mem-026): [`memory_health`] plus
+/// [`memory_export_report`] over the folded journal, joined with " | ".
+/// A failing half degrades in place rather than losing the whole line.
+pub fn memory_health_line(store: &MemoryStore, journal_path: &Path) -> String {
+    let health =
+        memory_health(store, journal_path).unwrap_or_else(|e| format!("unavailable ({e})"));
+    let export = MemoryView::fold(journal_path)
+        .map(|view| memory_export_report(&view))
+        .unwrap_or_else(|e| format!("unavailable ({e})"));
+    format!("{health} | {export}")
+}
+
 /// One-line layer summary (mem-024): live-record count for one layer's
 /// derived view, using the ADR-0014 D4 predicate via [`MemoryView::live`].
 /// An unreadable view counts as 0 — views are caches, not truth.
@@ -2000,6 +2012,46 @@ mod memory_tests {
         assert_eq!(
             memory_health(&MemoryStore::open(&dir), &path).expect("health"),
             "0 events, 0 live (0 project/0 semantic/0 episodic), 0 provisional"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_health_line_seeded_combines_both_halves() {
+        let dir = temp_dir("memory-health-line");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        record(&journal, &rec("mem-a", Status::Promoted));
+        record(&journal, &rec("mem-b", Status::Promoted));
+        let mut a = rec("mem-a", Status::Promoted);
+        a.superseded_by = Some("mem-b".into());
+        record(&journal, &a);
+        drop(journal);
+
+        let store = MemoryStore::open(&dir);
+        store.rebuild_views(&path).expect("rebuild");
+
+        // Health half: journal replay + layer views (supersede re-record
+        // updates mem-a in place, so 3 records fold to 2 live-tracked ids);
+        // export half: fold stats.
+        assert_eq!(
+            memory_health_line(&store, &path),
+            "2 events, 1 live (1 project/0 semantic/0 episodic), 0 provisional \
+             | 1 live / 2 records (50% live)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_health_line_empty_journal_is_all_zeros() {
+        let dir = temp_dir("memory-health-line-empty");
+        let path = dir.join("runtime.jsonl");
+        drop(Journal::open(&dir, "runtime").expect("open"));
+
+        assert_eq!(
+            memory_health_line(&MemoryStore::open(&dir), &path),
+            "0 events, 0 live (0 project/0 semantic/0 episodic), 0 provisional \
+             | 0 live / 0 records (0% live)"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

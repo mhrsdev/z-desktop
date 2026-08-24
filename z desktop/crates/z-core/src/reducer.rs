@@ -447,6 +447,19 @@ pub fn task_counts(view: &TasksView) -> (usize, usize, usize, usize) {
     counts
 }
 
+/// orch-021: one-line human summary of task health.
+pub fn task_health_line(view: &TasksView) -> String {
+    let (done, running, failed, pending) = task_counts(view);
+    format!(
+        "{} tasks: {} done, {} running, {} failed, {} pending",
+        done + running + failed + pending,
+        done,
+        running,
+        failed,
+        pending
+    )
+}
+
 /// orch-018: every task's current status as `(id, status)` sorted by id, for
 /// UI/state export. Status strings use the journal's snake_case spelling.
 pub fn task_state_events(view: &TasksView) -> Vec<(String, String)> {
@@ -1224,6 +1237,41 @@ pub(crate) mod reducer_tests {
         let view = TasksView::fold(&path).expect("fold");
         assert_eq!(task_counts(&view), (0, 0, 0, 0));
         assert!(fold_twice_equal(&path).expect("fold twice"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // orch-021 ---------------------------------------------------------------
+
+    #[test]
+    fn task_health_line_seeded_matches_counts() {
+        let dir = temp_dir("orch021-seeded");
+        TaskStore::create(&dir, "d").expect("create d");
+        TaskStore::create(&dir, "r").expect("create r");
+        TaskStore::create(&dir, "f").expect("create f");
+        TaskStore::create(&dir, "p").expect("create p");
+        TaskStore::transition(&dir, "d", TaskStatus::Done).expect("d done");
+        TaskStore::transition(&dir, "r", TaskStatus::Running).expect("r running");
+        TaskStore::transition(&dir, "f", TaskStatus::Failed).expect("f failed");
+
+        let view = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl"))).expect("fold");
+        assert_eq!(
+            task_health_line(&view),
+            "4 tasks: 1 done, 1 running, 1 failed, 1 pending"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_health_line_empty_is_all_zeros() {
+        let dir = temp_dir("orch021-empty");
+        {
+            Journal::open(&dir, TASKS_SEGMENT).expect("open");
+        }
+        let view = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl"))).expect("fold");
+        assert_eq!(
+            task_health_line(&view),
+            "0 tasks: 0 done, 0 running, 0 failed, 0 pending"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

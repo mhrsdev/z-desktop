@@ -1,5 +1,5 @@
 //! Reducer views over the journal (jour-006 fold API, jour-007 threads view,
-//! jour-008/orch-001 task view + store).
+//! jour-008/orch-001 task view + store, jour-009 usage counters).
 //!
 //! ADR-0012: task records exist only as journal events folded by a reducer —
 //! there is no tasks.json. Views are pure folds over [`Journal::replay`];
@@ -89,6 +89,29 @@ impl ThreadsView {
         }
         entry.last_kind = record.kind.clone();
     }
+}
+
+/// jour-009: lifetime usage counters folded from journal events.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct UsageView {
+    pub turns_started: u64,
+    pub commands_total: u64,
+    pub messages_persisted: u64,
+    pub provider_errors: u64,
+}
+
+/// Folds a journal segment into [`UsageView`], counting TurnStarted,
+/// CommandReceived, MessagePersisted, and ProviderError records.
+pub fn usage_fold(path: &Path) -> Result<UsageView, String> {
+    crate::reducer::fold(path, UsageView::default(), |view, record| {
+        match record.kind {
+            JournalKind::TurnStarted => view.turns_started += 1,
+            JournalKind::CommandReceived => view.commands_total += 1,
+            JournalKind::MessagePersisted => view.messages_persisted += 1,
+            JournalKind::ProviderError => view.provider_errors += 1,
+            _ => {}
+        }
+    })
 }
 
 /// orch-001: a task record and its lifecycle status.
@@ -632,6 +655,85 @@ mod reducer_tests {
 
         assert_eq!(tasks_forward, tasks_reverse);
         assert_eq!(threads_forward, threads_reverse);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-009 ---------------------------------------------------------------
+
+    #[test]
+    fn usage_fold_counts_known_kinds_exactly() {
+        let dir = temp_dir("usage-counts");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::CommandReceived, Some("t1"), json!({}));
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"text": "hi"}),
+            );
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(
+                &mut j,
+                JournalKind::ProviderError,
+                None,
+                json!({"attempt": 1}),
+            );
+            // Second turn: command + turn again.
+            append(&mut j, JournalKind::CommandReceived, Some("t1"), json!({}));
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+        }
+        let view = usage_fold(&dir.join("main.jsonl")).expect("fold");
+        assert_eq!(
+            view,
+            UsageView {
+                turns_started: 2,
+                commands_total: 2,
+                messages_persisted: 2,
+                provider_errors: 1,
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn usage_fold_on_empty_journal_is_zeroed() {
+        let dir = temp_dir("usage-empty");
+        {
+            // Create the file with no records (drop flushes/closes it).
+            Journal::open(&dir, "main").expect("open");
+        }
+        let view = usage_fold(&dir.join("main.jsonl")).expect("fold");
+        assert_eq!(view, UsageView::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn usage_fold_ignores_unknown_and_other_kinds() {
+        let dir = temp_dir("usage-unknown");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(
+                &mut j,
+                JournalKind::Other("brand_new_future_kind".into()),
+                Some("t1"),
+                json!({}),
+            );
+            append(&mut j, JournalKind::TurnFinished, Some("t1"), json!({}));
+            append(
+                &mut j,
+                JournalKind::TaskStateChanged,
+                None,
+                json!({"id": "x"}),
+            );
+        }
+        let view = usage_fold(&dir.join("main.jsonl")).expect("fold");
+        assert_eq!(
+            view,
+            UsageView::default(),
+            "only the four counted kinds move counters"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

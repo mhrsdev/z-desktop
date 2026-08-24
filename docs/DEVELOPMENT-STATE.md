@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-23
 
+## jour-009 Usage Stats Reducer — 2026-08-23 COMPLETE
+
+1. ✅ **jour-009**: UsageView {turns_started, commands_total,
+   messages_persisted, provider_errors} + usage_fold over the generic
+   fold; unknown kinds ignored.
+
+Verification: full workspace suite green — **481 tests, 0 failed**
+(478 → 481). Ledger: 107 IMPLEMENTED.
+
+Next work continues → sup-020 scripted dishonest-agent integration test,
+prov-007 fallback chain, or ui thread selection.
+
 ## sup-016 Requirement-Skew Detector — 2026-08-23 COMPLETE
 
 1. ✅ **sup-016**: detect_requirement_skew — extracts quoted strings and

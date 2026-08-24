@@ -68,7 +68,7 @@ DOMAINS = [
         ("006", "Reducer registration API", ["005"], "IMPLEMENTED"),
         ("007", "Threads view reducer", ["006"], "IMPLEMENTED"),
         ("008", "Task view reducer", ["006"], "IMPLEMENTED"),
-        ("009", "Usage stats reducer", ["006"], "PLANNED"),
+        ("009", "Usage stats reducer", ["006"], "IMPLEMENTED"),
         ("010", "Seq gap tolerance + warning", ["005"], "IMPLEMENTED"),
         ("011", "Corrupt tail truncation repair", ["005"], "IMPLEMENTED"),
         ("012", "Deterministic double-replay equality test", ["007", "008"], "IMPLEMENTED"),

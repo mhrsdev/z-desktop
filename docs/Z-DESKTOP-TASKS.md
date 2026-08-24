@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 104 |
+| IMPLEMENTED | 105 |
 | PARTIAL | 2 |
-| PLANNED | 617 |
+| PLANNED | 616 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -179,7 +179,7 @@
 ### [IMPLEMENTED] jour-008 — Task view reducer
 - depends: jour-006
 
-### [PLANNED] jour-009 — Usage stats reducer
+### [IMPLEMENTED] jour-009 — Usage stats reducer
 - depends: jour-006
 
 ### [IMPLEMENTED] jour-010 — Seq gap tolerance + warning

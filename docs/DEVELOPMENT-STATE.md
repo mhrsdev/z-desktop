@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## sup-020 Dishonest-Agent E2E — 2026-08-23 COMPLETE
+
+1. ✅ **sup-020**: two scripted end-to-end scenarios — dishonest agent
+   (claims tests pass with zero Tests evidence => sup-009 fires, verdict
+   reason carries it) vs honest agent (cargo test exit-0 evidence lands =>
+   clean success). Proves the whole supervision pipeline works live.
+
+Verification: full workspace suite green — **483 tests, 0 failed**
+(481 → 483). Ledger: 108 IMPLEMENTED.
+
+Next work continues → prov-007 fallback chain, ui thread selection, or
+sup-021 benchmark evidence recorder.
+
 ## jour-009 Usage Stats Reducer — 2026-08-23 COMPLETE
 
 1. ✅ **jour-009**: UsageView {turns_started, commands_total,

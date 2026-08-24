@@ -212,7 +212,7 @@ DOMAINS = [
         ("017", "User appeal/override flow (journaled)", ["007"], "IMPLEMENTED"),
         ("018", "Evidence badges in conversation view", ["ui-040"], "IMPLEMENTED"),
         ("019", "Evidence drill-down viewer", ["018"], "PLANNED"),
-        ("020", "Scripted dishonest-agent integration test", ["009", "010"], "PLANNED"),
+        ("020", "Scripted dishonest-agent integration test", ["009", "010"], "IMPLEMENTED"),
         ("021", "Benchmark evidence recorder", ["001"], "PLANNED"),
         ("022", "Regression-test linkage recorder", ["001"], "PLANNED"),
         ("023", "EvidenceRecorded event + journal kind", ["001", "jour-023"], "PLANNED"),

@@ -286,7 +286,7 @@ impl TaskStore {
 }
 
 #[cfg(test)]
-mod reducer_tests {
+pub(crate) mod reducer_tests {
     use super::*;
     use serde_json::json;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -427,11 +427,14 @@ mod reducer_tests {
 
     // jour-010 ---------------------------------------------------------------
 
-    static WARN_LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    static WARN_LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+    pub(crate) static WARN_LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    /// Serializes every test that asserts on WARN_LOG (shared with
+    /// runtime::sup_e2e_tests) so parallel clears can't erase a peer's lines.
+    pub(crate) static LOG_SECTION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static WARN_LOGGER_INIT: std::sync::Once = std::sync::Once::new();
 
     /// Captures `warn!` messages so tests can assert jour-010's warn-through.
-    struct WarnCapture;
+    pub(crate) struct WarnCapture;
     impl log::Log for WarnCapture {
         fn enabled(&self, metadata: &log::Metadata) -> bool {
             metadata.level() <= log::Level::Warn
@@ -449,6 +452,7 @@ mod reducer_tests {
 
     #[test]
     fn fold_on_gapped_journal_warns_and_still_produces_view() {
+        let _section = LOG_SECTION.lock().expect("log section lock");
         WARN_LOGGER_INIT.call_once(|| {
             let _ = log::set_boxed_logger(Box::new(WarnCapture));
             log::set_max_level(log::LevelFilter::Warn);

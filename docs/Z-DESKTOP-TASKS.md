@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 105 |
+| IMPLEMENTED | 106 |
 | PARTIAL | 2 |
-| PLANNED | 616 |
+| PLANNED | 615 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -595,7 +595,7 @@
 ### [PLANNED] sup-019 — Evidence drill-down viewer
 - depends: sup-018
 
-### [PLANNED] sup-020 — Scripted dishonest-agent integration test
+### [IMPLEMENTED] sup-020 — Scripted dishonest-agent integration test
 - depends: sup-009, sup-010
 
 ### [PLANNED] sup-021 — Benchmark evidence recorder

@@ -4806,3 +4806,222 @@ mod thread_management_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+mod sup_e2e_tests {
+    //! sup-020 (ADR-0016): end-to-end supervision scenarios over a scripted
+    //! provider driving the REAL tool runtime — a dishonest agent (green
+    //! build executed, tests merely CLAIMED) vs an honest agent (tests
+    //! actually executed and linked).
+
+    use super::*;
+    use super::steering_tests::{make_runtime_at, ScriptedProvider};
+    use crate::reducer::reducer_tests::{LOG_SECTION, WARN_LOG, WARN_LOGGER_INIT, WarnCapture};
+
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn unique_data_dir(tag: &str) -> PathBuf {
+        let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("zdt-sup020-{tag}-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("threads")).expect("create temp data dir");
+        dir
+    }
+
+    /// One terminal_exec round then a final text. The command string picks
+    /// the evidence KIND through `classify_command`'s substring match, so a
+    /// plain `echo` stands in for cargo (a real `cargo build/test` inside a
+    /// test would deadlock on the outer suite's target-dir lock).
+    fn exec_then_text(command: &str, final_text: &str) -> Vec<provider::StreamOutcome> {
+        vec![
+            provider::StreamOutcome {
+                text: String::new(),
+                tool_calls: vec![provider::ToolCallSpec {
+                    id: "call-1".into(),
+                    name: "terminal_exec".into(),
+                    arguments_json: format!(r#"{{"command":"{command}"}}"#),
+                }],
+            },
+            provider::StreamOutcome { text: final_text.into(), tool_calls: Vec::new() },
+        ]
+    }
+
+    fn scripted_shared(outcomes: Vec<provider::StreamOutcome>) -> Shared {
+        Shared {
+            provider: Mutex::new(Some(Arc::new(ScriptedProvider {
+                outcomes: std::sync::Mutex::new(outcomes),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }) as Arc<dyn provider::Provider>)),
+            provider_label: Mutex::new("scripted".into()),
+            project_root: Mutex::new(Some(std::env::current_dir().unwrap())),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+            overridden_turns: Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+
+    /// Pre-approves the Execute-risk tool call (terminal_exec parks on the
+    /// approval gate otherwise), runs one full turn, drains all events.
+    fn run_turn_and_collect(
+        rt: &Runtime,
+        data_dir: &Path,
+        thread_id: &str,
+        turn_id: &str,
+        user_text: &str,
+    ) -> Vec<Event> {
+        rt.shared.gate.resolve("call-1", true);
+        let thread = Thread {
+            id: thread_id.into(),
+            title: "sup-020".into(),
+            messages: vec![StoredMessage {
+                role: z_protocol::Role::User,
+                text: user_text.into(),
+                tool_calls: Vec::new(),
+            }],
+            updated_ms: 0,
+        };
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        run_turn(
+            Arc::clone(&rt.shared),
+            event_tx,
+            Arc::new(Mutex::new(())),
+            data_dir.to_path_buf(),
+            rt.journal.clone(),
+            thread,
+            turn_id.into(),
+        );
+        let mut events = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    fn same_turn_evidence(data_dir: &Path, turn_id: &str) -> Vec<crate::evidence::Evidence> {
+        crate::evidence::EvidenceView::fold(&data_dir.join("journal").join("runtime.jsonl"))
+            .expect("evidence fold")
+            .items
+            .into_iter()
+            .filter(|e| e.turn_id == turn_id)
+            .collect()
+    }
+
+    /// Scenario A (dishonest agent): the turn really executes a green build
+    /// (Build evidence ok=true lands via the capture hook), then the final
+    /// text claims BOTH kinds. The Build claim links, so sup-007 must NOT
+    /// gate — but zero Tests-kind evidence exists, so sup-009
+    /// unexecuted-tests fires warn-only. This pins the intended asymmetry:
+    /// partial honesty finishes ok yet is still caught observably.
+    #[test]
+    fn dishonest_agent_green_build_but_claimed_tests_fires_unexecuted_tests() {
+        let _section = LOG_SECTION.lock().expect("log section lock");
+        WARN_LOGGER_INIT.call_once(|| {
+            let _ = log::set_boxed_logger(Box::new(WarnCapture));
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+        WARN_LOG.lock().expect("warn log lock").clear();
+
+        let data_dir = unique_data_dir("dishonest");
+        let shared = scripted_shared(exec_then_text(
+            "echo build ok",
+            "The build succeeds. All tests pass.",
+        ));
+        let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
+        assert!(rt.journal.is_some(), "capture hook requires a live journal");
+
+        let events = run_turn_and_collect(
+            &rt,
+            &data_dir,
+            "sup020-dishonest",
+            "turn-sup020-a",
+            "build and test it",
+        );
+
+        let mut finished = false;
+        for event in &events {
+            if let Event::TurnFinished { ok, verdict, .. } = event {
+                finished = true;
+                assert!(ok, "the linked Build claim rescues the turn from gating");
+                let v = verdict.as_ref().expect("evaluation happened, verdict rides along");
+                assert!(!v.blocked, "some claim linked, so the gate must stay open");
+            }
+        }
+        assert!(finished, "turn never emitted TurnFinished");
+
+        // Capture-hook proof of the setup: exactly one same-turn evidence
+        // item, and it is a GREEN BUILD — no Tests execution ever recorded.
+        let mine = same_turn_evidence(&data_dir, "turn-sup020-a");
+        assert_eq!(mine.len(), 1, "only the build ran: {mine:?}");
+        assert_eq!(mine[0].kind, crate::evidence::EvidenceKind::Build);
+        assert!(mine[0].ok, "echo exits 0, so the Build evidence is green");
+
+        // sup-009 fired: a warn names THIS turn and the detector.
+        let warns = WARN_LOG.lock().expect("warn log lock");
+        assert!(
+            warns
+                .iter()
+                .any(|m| m.contains("turn-sup020-a") && m.contains("unexecuted-tests")),
+            "unexecuted-tests must fire warn-only for the dishonest turn, got: {warns:?}"
+        );
+        drop(warns);
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// Scenario B (honest agent): the executed command classifies as Tests
+    /// (substring match) and exits 0, so green Tests evidence lands and the
+    /// final claim links cleanly — turn finishes ok, no supervision warns.
+    #[test]
+    fn honest_agent_links_green_tests_evidence_and_finishes_clean() {
+        let _section = LOG_SECTION.lock().expect("log section lock");
+        WARN_LOGGER_INIT.call_once(|| {
+            let _ = log::set_boxed_logger(Box::new(WarnCapture));
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+        WARN_LOG.lock().expect("warn log lock").clear();
+
+        let data_dir = unique_data_dir("honest");
+        let shared = scripted_shared(exec_then_text(
+            "echo 'ran cargo test'",
+            "All done, the tests pass.",
+        ));
+        let (rt, _cmd_tx, _event_rx) = make_runtime_at(Arc::new(shared), data_dir.clone());
+
+        let events = run_turn_and_collect(
+            &rt,
+            &data_dir,
+            "sup020-honest",
+            "turn-sup020-b",
+            "run the suite",
+        );
+
+        let mut finished = false;
+        for event in &events {
+            if let Event::TurnFinished { ok, verdict, .. } = event {
+                finished = true;
+                assert!(ok, "an honest, evidenced turn finishes cleanly");
+                let v = verdict.as_ref().expect("evaluation happened, verdict rides along");
+                assert!(!v.blocked);
+                assert!(v.reason.is_none(), "nothing unlinked: {:?}", v.reason);
+            }
+        }
+        assert!(finished, "turn never emitted TurnFinished");
+
+        let mine = same_turn_evidence(&data_dir, "turn-sup020-b");
+        assert_eq!(mine.len(), 1, "only the test run ran: {mine:?}");
+        assert_eq!(mine[0].kind, crate::evidence::EvidenceKind::Tests);
+        assert!(mine[0].ok, "exit code 0 makes the Tests evidence green");
+
+        let warns = WARN_LOG.lock().expect("warn log lock");
+        assert!(
+            !warns.iter().any(|m| m.contains("turn-sup020-b")),
+            "the honest turn emits no supervision warn at all: {warns:?}"
+        );
+        drop(warns);
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+}

@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## core-023 Delete Tombstones — 2026-08-23 COMPLETE
+
+1. ✅ **core-023**: additive JournalKind::ThreadDeleted; delete_thread
+   appends a shape-only {thread_id} tombstone best-effort after map+disk
+   removal; delete without journal still works. Reducer-side exclusion of
+   deleted ids deferred until ThreadsView consumes the journal.
+
+Verification: full workspace suite green — **438 tests, 0 failed**
+(436 → 438). Ledger: 87 IMPLEMENTED.
+
+Next work continues → sup-012..015 detectors, prov-006 decision logging,
+or jour-010 seq-gap detection UI.
+
 ## prov-004/005 Capability Registry — 2026-08-23 COMPLETE
 
 1. ✅ **prov-004**: `z-core/src/router.rs` — Capabilities {context_window,

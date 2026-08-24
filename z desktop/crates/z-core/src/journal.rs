@@ -50,6 +50,9 @@ pub enum JournalKind {
     /// A memory record was written (mem-001, ADR-0014; folded by the
     /// MemoryView reducer into the per-layer JSONL views).
     MemoryRecorded,
+    /// A thread was deleted (core-023 tombstone; shape-only payload, the
+    /// snapshot file itself is gone — replay/reducers use this to exclude it).
+    ThreadDeleted,
     /// Escape hatch for kinds this build does not know yet.
     Other(String),
 }
@@ -64,6 +67,7 @@ impl JournalKind {
             JournalKind::TaskStateChanged => "task_state_changed",
             JournalKind::EvidenceRecorded => "evidence_recorded",
             JournalKind::MemoryRecorded => "memory_recorded",
+            JournalKind::ThreadDeleted => "thread_deleted",
             JournalKind::Other(s) => s.as_str(),
         }
     }
@@ -77,6 +81,7 @@ impl JournalKind {
             "task_state_changed" => JournalKind::TaskStateChanged,
             "evidence_recorded" => JournalKind::EvidenceRecorded,
             "memory_recorded" => JournalKind::MemoryRecorded,
+            "thread_deleted" => JournalKind::ThreadDeleted,
             _ => JournalKind::Other(s),
         }
     }
@@ -358,6 +363,11 @@ mod journal_tests {
                 JournalKind::MemoryRecorded,
                 Some("thread-1".into()),
                 json!({"id": "mem-1", "content": "project uses pnpm"}),
+            ),
+            RecordDraft::new(
+                JournalKind::ThreadDeleted,
+                Some("thread-2".into()),
+                json!({"thread_id": "thread-2"}),
             ),
         ]
     }

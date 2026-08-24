@@ -35,7 +35,7 @@ DOMAINS = [
         ("020", "Protocol extension: EnqueueMessage/Pause/Resume variants", [], "IMPLEMENTED"),
         ("021", "Multi-thread UI wiring (thread list panel)", ["ui-030"], "IMPLEMENTED"),
         ("022", "Thread rename/delete/duplicate commands", ["021"], "IMPLEMENTED"),
-        ("023", "Thread delete tombstone in journal", ["022", "jour-001"], "PLANNED"),
+        ("023", "Thread delete tombstone in journal", ["022", "jour-001"], "IMPLEMENTED"),
         ("024", "Active-turn delete rejection", ["022"], "PLANNED"),
         ("025", "Startup auto-open most recent thread", ["021"], "PARTIAL"),
         ("026", "Corrupt-thread skip surfaced in thread list", ["021"], "IMPLEMENTED"),

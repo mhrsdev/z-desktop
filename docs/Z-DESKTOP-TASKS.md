@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 84 |
+| IMPLEMENTED | 85 |
 | PARTIAL | 2 |
-| PLANNED | 637 |
+| PLANNED | 636 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -84,7 +84,7 @@
 ### [IMPLEMENTED] core-022 — Thread rename/delete/duplicate commands
 - depends: core-021
 
-### [PLANNED] core-023 — Thread delete tombstone in journal
+### [IMPLEMENTED] core-023 — Thread delete tombstone in journal
 - depends: core-022, jour-001
 
 ### [PLANNED] core-024 — Active-turn delete rejection

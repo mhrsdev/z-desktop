@@ -637,6 +637,14 @@ impl Runtime {
         if let Err(e) = std::fs::remove_file(&path) {
             log::warn!("delete_thread: could not remove {path:?}: {e}");
         }
+        // core-023: tombstone so replay/audit (and ThreadsView-style reducers)
+        // can see the deletion after the snapshot file is gone. Best-effort.
+        Runtime::journal_record(
+            &self.journal,
+            JournalKind::ThreadDeleted,
+            Some(thread_id.clone()),
+            json!({ "thread_id": thread_id }),
+        );
         self.send_thread_list();
     }
 
@@ -2324,6 +2332,69 @@ mod journal_wiring_tests {
         assert_eq!(persisted[0].payload["count"], 1);
         assert_eq!(persisted[0].payload["last_role"], "agent");
 
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// core-023: deleting a journalled thread appends a shape-only
+    /// ThreadDeleted tombstone carrying the deleted id.
+    #[test]
+    fn serve_delete_thread_journals_thread_deleted_tombstone() {
+        let data_dir = unique_data_dir("delete-tombstone");
+        let (rt, cmd_tx, event_rx) =
+            make_runtime_at(Arc::new(scripted_shared("journaled answer")), data_dir.clone());
+        let server = std::thread::spawn(move || rt.serve());
+
+        cmd_tx.send((1, Command::SendMessage { thread_id: "doomed-thread".into(), text: "hi".into() })).expect("send");
+        // Wait for the turn so the thread exists in the map before deleting.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            assert!(std::time::Instant::now() < deadline, "turn did not finish in time");
+            match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(Event::TurnFinished { ok: true, thread_id: t, .. }) if t == "doomed-thread" => break,
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        cmd_tx.send((2, Command::DeleteThread { thread_id: "doomed-thread".into() })).expect("send delete");
+        drop(cmd_tx);
+        server.join().expect("serve loop must not panic");
+
+        assert!(
+            !data_dir.join("threads").join("doomed-thread.json").exists(),
+            "snapshot file removed"
+        );
+        let records = Journal::replay(&data_dir.join("journal").join("runtime.jsonl"))
+            .expect("journal replayable");
+        let deleted: Vec<&Record> = records.iter()
+            .filter(|r| r.kind == JournalKind::ThreadDeleted)
+            .collect();
+        assert_eq!(deleted.len(), 1, "exactly one ThreadDeleted tombstone");
+        assert_eq!(deleted[0].thread_id.as_deref(), Some("doomed-thread"));
+        assert_eq!(deleted[0].payload["thread_id"], "doomed-thread");
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    /// core-023: delete still works when the journal is disabled (None) —
+    /// no crash, file still removed.
+    #[test]
+    fn delete_thread_works_without_journal() {
+        let data_dir = unique_data_dir("delete-no-journal");
+        let (mut rt, cmd_tx, _event_rx) =
+            make_runtime_at(Arc::new(empty_shared()), data_dir.clone());
+        rt.journal = None;
+        rt.threads.lock().unwrap().insert(
+            "bare-thread".into(),
+            Thread { id: "bare-thread".into(), title: "t".into(), messages: Vec::new(), updated_ms: 1 },
+        );
+        let server = std::thread::spawn(move || rt.serve());
+        cmd_tx.send((1, Command::DeleteThread { thread_id: "bare-thread".into() })).expect("send delete");
+        drop(cmd_tx);
+        server.join().expect("serve loop must not panic"); // the no-crash assertion
+
+        assert!(
+            !data_dir.join("threads").join("bare-thread.json").exists(),
+            "deletion still removes the snapshot"
+        );
         let _ = std::fs::remove_dir_all(&data_dir);
     }
 

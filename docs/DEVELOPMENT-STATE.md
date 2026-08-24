@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 26 (sup-027 + set-013 + diff-021) — 2026-08-24 COMPLETE
+
+1. ✅ **sup-027**: evidence_by_thread filter + thread_ok_rate.
+2. ✅ **set-013**: diff_from_default — changed-key pairs for UI display.
+3. ✅ **diff-021**: hunks() context-expanded merged ranges.
+
+Verification: full workspace suite green — **740 tests, 0 failed**
+(731 → 740). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 25 (jour-022 + ctx-009 ext + idx-012) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-022**: task_state_journal_events idempotent re-sync drafts.

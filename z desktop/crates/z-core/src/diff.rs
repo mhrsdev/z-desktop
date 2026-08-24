@@ -228,6 +228,27 @@ pub fn stats(lines: &[DiffLine]) -> (usize, usize) {
     (added, removed)
 }
 
+/// diff-021: `(start_index, len)` ranges of changed regions in `lines`,
+/// each expanded by `context` lines on either side, merged when the
+/// expansions overlap or touch.
+pub fn hunks(lines: &[DiffLine], context: usize) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        if l.kind == LineKind::Context {
+            continue;
+        }
+        let start = i.saturating_sub(context);
+        let end = (i + context + 1).min(lines.len());
+        match out.last_mut() {
+            // Ranges are pushed in order; merge into the previous hunk when
+            // this one starts before (or exactly at) its end.
+            Some(last) if start <= last.0 + last.1 => last.1 = end - last.0,
+            _ => out.push((start, end - start)),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +436,56 @@ mod tests {
         assert_eq!(d[2].new_no, Some(2));
         assert_eq!(d[5].old_no, Some(5));
         assert_eq!(d[5].new_no, Some(5));
+    }
+
+    // ---- diff-021: hunk grouping ----
+
+    #[test]
+    fn single_change_is_one_hunk_expanded_by_context() {
+        // a X b c d e f  (X changed at index 1)
+        let d = unified("a\nb\nc\nd\ne\nf\n", "a\nZ\nc\nd\ne\nf\n");
+        assert_eq!(hunks(&d, 1), vec![(0, 4)]); // ctx a, -b +Z, ctx c
+        assert_eq!(hunks(&d, 0), vec![(1, 2)]); // -b +Z are adjacent
+        // context clamped at slice bounds
+        assert_eq!(hunks(&d, 10), vec![(0, d.len())]);
+    }
+
+    #[test]
+    fn two_distant_changes_are_two_hunks() {
+        let d = unified("X\nb\nc\nd\ne\nf\ng\nY\n", "a\nb\nc\nd\ne\nf\ng\nb\n");
+        assert_eq!(stats(&d).0 + stats(&d).1 >= 2, true);
+        let h = hunks(&d, 1);
+        assert_eq!(h.len(), 2);
+        for (s, l) in &h {
+            assert!(*s + *l <= d.len());
+            assert!(d[*s..*s + *l].iter().any(|x| x.kind != LineKind::Context));
+        }
+    }
+
+    #[test]
+    fn adjacent_changes_merge_when_context_meets() {
+        // changes at indices 2 and 6; context 2 makes ranges [0..5) and [4..9)
+        // which touch -> one hunk. With context 1 they stay separate.
+        let d: Vec<DiffLine> = (0..10)
+            .map(|i| DiffLine {
+                kind: if i == 2 || i == 6 {
+                    LineKind::Added
+                } else {
+                    LineKind::Context
+                },
+                old_no: None,
+                new_no: Some(i),
+                text: format!("l{i}"),
+            })
+            .collect();
+        assert_eq!(hunks(&d, 2), vec![(0, 9)]);
+        assert_eq!(hunks(&d, 1), vec![(1, 3), (5, 3)]);
+    }
+
+    #[test]
+    fn no_changes_yields_no_hunks() {
+        let d = unified("a\nb\n", "a\nb\n");
+        assert!(hunks(&d, 1).is_empty());
+        assert!(hunks(&[], 3).is_empty());
     }
 }

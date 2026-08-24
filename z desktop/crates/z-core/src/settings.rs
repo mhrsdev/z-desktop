@@ -415,6 +415,25 @@ pub fn defaults_map() -> Vec<(&'static str, String)> {
         .collect()
 }
 
+/// set-013: schema-keyed `(key, value)` pairs where `current` differs from its
+/// documented default, both sides rendered as strings; order mirrors
+/// [`schema_defs`]. Fresh defaults ⇒ empty. Defaults come from [`defaults_map`]
+/// so this can never drift from the schema.
+pub fn diff_from_default(current: &Settings) -> Vec<(String, String)> {
+    defaults_map()
+        .into_iter()
+        .filter_map(|(key, default)| {
+            let value = match key {
+                "max_tool_rounds" => Some(current.max_tool_rounds.to_string()),
+                "approval_timeout_secs" => Some(current.approval_timeout_secs.to_string()),
+                "doom_threshold" => Some(current.doom_threshold.to_string()),
+                _ => None,
+            }?;
+            (value != default).then_some((key.to_string(), value))
+        })
+        .collect()
+}
+
 /// Validate a numeric value against the schema bounds for `key`. The unknown-
 /// key path never silently ignores: an unrecognized key is rejected with an
 /// "unknown setting \\"key\\"" message so hand-edited typos surface instead of
@@ -997,5 +1016,46 @@ mod settings_tests {
         }
         // Header + separator + one row per def.
         assert_eq!(rows, schema_defs().len() + 2);
+    }
+
+    // ---- set-013: diff from default ---------------------------------------
+
+    #[test]
+    fn diff_from_default_fresh_settings_is_empty() {
+        assert!(diff_from_default(&Settings::default()).is_empty());
+    }
+
+    #[test]
+    fn diff_from_default_reports_only_changed_field() {
+        let mut s = Settings::default();
+        s.doom_threshold = 5;
+        assert_eq!(
+            diff_from_default(&s),
+            vec![("doom_threshold".to_string(), "5".to_string())]
+        );
+    }
+
+    #[test]
+    fn diff_from_default_all_changed_lists_all_keys_in_schema_order() {
+        let s = Settings {
+            max_tool_rounds: 1,       // default 24
+            approval_timeout_secs: 2, // default 300
+            doom_threshold: 7,        // default 3
+        };
+        let d = diff_from_default(&s);
+        assert_eq!(d.len(), schema_defs().len(), "one pair per changed key");
+        assert_eq!(
+            d.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            known_keys(),
+            "order mirrors schema_defs"
+        );
+        assert_eq!(
+            d,
+            vec![
+                ("max_tool_rounds".to_string(), "1".to_string()),
+                ("approval_timeout_secs".to_string(), "2".to_string()),
+                ("doom_threshold".to_string(), "7".to_string()),
+            ]
+        );
     }
 }

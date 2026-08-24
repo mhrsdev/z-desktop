@@ -455,6 +455,11 @@ pub fn evidence_for_turn<'a>(view: &'a EvidenceView, turn_id: &str) -> Vec<&'a E
     view.items.iter().filter(|e| e.turn_id == turn_id).collect()
 }
 
+/// sup-027: all evidence recorded for `thread_id`, in journal replay order.
+pub fn evidence_by_thread<'a>(view: &'a EvidenceView, thread_id: &str) -> Vec<&'a Evidence> {
+    view.items.iter().filter(|e| e.thread_id == thread_id).collect()
+}
+
 // ---------------------------------------------------------------------------
 // sup-021 extension: bench history + trend analysis over a folded view.
 // ---------------------------------------------------------------------------
@@ -588,6 +593,16 @@ pub fn overall_ok_rate(view: &EvidenceView) -> Option<f32> {
     (!view.items.is_empty()).then(|| {
         let ok = view.items.iter().filter(|e| e.ok).count() as f32;
         ok / view.items.len() as f32
+    })
+}
+
+/// sup-027: [`overall_ok_rate`] scoped to one thread. `None` when the thread
+/// has no records — no data is not a 0% rate.
+pub fn thread_ok_rate(view: &EvidenceView, thread_id: &str) -> Option<f32> {
+    let items = evidence_by_thread(view, thread_id);
+    (!items.is_empty()).then(|| {
+        let ok = items.iter().filter(|e| e.ok).count() as f32;
+        ok / items.len() as f32
     })
 }
 
@@ -1398,6 +1413,46 @@ mod evidence_tests {
         // Failing Build/Diff records must not drag Tests' rate down.
         approx(ok_rate(&view, EvidenceKind::Tests), 1.0);
         approx(overall_ok_rate(&view), 0.5); // 2 of 4 across all kinds
+    }
+
+    // sup-027: per-thread evidence filtering.
+
+    #[test]
+    fn evidence_by_thread_filters_seeded_multithread_view() {
+        let mut view = EvidenceView::default();
+        let a = Evidence::build("t1", "u1", Some(0), "make");
+        let b = Evidence::tests("t2", "u1", 3, 0, "cargo test");
+        let c = Evidence::diff("t1", "u2", false, "wrote x");
+        view.items.extend([a.clone(), b.clone(), c.clone()]);
+        let t1 = evidence_by_thread(&view, "t1");
+        assert_eq!(t1.len(), 2);
+        assert!(t1.iter().all(|e| e.thread_id == "t1"));
+        assert_eq!(t1[0].id, a.id);
+        assert_eq!(t1[1].id, c.id);
+        let t2 = evidence_by_thread(&view, "t2");
+        assert_eq!(t2.len(), 1);
+        assert_eq!(t2[0].id, b.id);
+        // Unknown thread -> empty.
+        assert!(evidence_by_thread(&view, "missing").is_empty());
+    }
+
+    #[test]
+    fn thread_ok_rate_scopes_to_one_thread() {
+        let approx = |got: Option<f32>, want: f32| {
+            assert!((got.expect("some") - want).abs() < 1e-4);
+        };
+        // No records at all -> None.
+        assert_eq!(thread_ok_rate(&EvidenceView::default(), "t1"), None);
+        let mut view = EvidenceView::default();
+        view.items.extend([
+            Evidence::build("t1", "u", Some(0), "make"),
+            Evidence::build("t1", "u", Some(1), "make"),
+            Evidence::bench("t2", "u", "b", 5), // t2 only
+        ]);
+        approx(thread_ok_rate(&view, "t1"), 0.5);
+        approx(thread_ok_rate(&view, "t2"), 1.0);
+        // Data exists elsewhere, unknown thread -> still None.
+        assert_eq!(thread_ok_rate(&view, "missing"), None);
     }
 
     // sup-025: one-line detector-noise report.

@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 128 |
+| IMPLEMENTED | 129 |
 | PARTIAL | 4 |
-| PLANNED | 591 |
+| PLANNED | 590 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -828,7 +828,7 @@
 ### [PLANNED] prov-009 — Router settings UI (dev mode)
 - depends: prov-005, set-002
 
-### [PLANNED] prov-010 — Provider SSE line-limit hardening
+### [IMPLEMENTED] prov-010 — Provider SSE line-limit hardening
 - depends: —
 
 ### [PLANNED] prov-011 — Response size caps

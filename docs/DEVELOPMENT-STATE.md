@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-24
 
+## Wave 7 (prov-010 verify + usage-by-day + mem export + bench trend) — 2026-08-24 COMPLETE
+
+1. ✅ **prov-010**: verified already landed in wave 5 (MAX_SSE_LINE cap
+   present, committed 40d14c0) — ledger flipped to IMPLEMENTED.
+2. ✅ **jour-009 ext**: usage_by_day(path) — UTC-day turn buckets.
+3. ✅ **mem-019**: export_json/import_records round-trip via journal.
+4. ✅ **sup-021 ext**: BenchPoint/bench_history/trend — benchmark
+   regression tracking over evidence.
+
+Verification: full workspace suite green — **596 tests, 0 failed**
+(587 → 596). Ledger: 131 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, term-006 VT
+parser research (clone vte-rs reference), or ctx context-delta research.
+
 ## Wave 6 (retries + lazy manifests + symbol table) — 2026-08-24 COMPLETE
 
 1. ✅ **red-002** (retry OK): RedactionReport/RedactionStats counters —

@@ -448,6 +448,51 @@ pub fn dependents_of(view: &MemoryView, id: &str) -> Vec<String> {
     out
 }
 
+/// Exports the view's live records (ADR-0014 D4 predicate) as a pretty JSON
+/// array — the portable form consumed by [`import_records`] (mem-019).
+pub fn export_json(view: &MemoryView) -> String {
+    let live = view.live();
+    serde_json::to_string_pretty(&live).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Imports an array of MemoryRecord-shaped JSON objects (mem-019): each entry
+/// is validated through [`MemoryRecord::new`] (provenance + confidence rules)
+/// and recorded best-effort via [`record`]. Malformed entries are skipped with
+/// a warning; an [`Err`] is returned only when the payload is not a JSON array
+/// or every entry was rejected. Returns how many records landed in the journal.
+pub fn import_records(json: &str, journal: &Mutex<Journal>) -> Result<usize, String> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(json)
+        .map_err(|e| format!("memory: import payload is not a JSON array: {e}"))?;
+    let total = entries.len();
+    let mut imported = 0usize;
+    for entry in entries {
+        let validated = match serde_json::from_value::<MemoryRecord>(entry) {
+            // Re-validate through the only constructor so hand-written
+            // payloads cannot bypass provenance/confidence invariants.
+            Ok(r) => MemoryRecord::new(
+                r.id,
+                r.layer,
+                r.content,
+                r.provenance,
+                r.confidence,
+                r.status,
+            ),
+            Err(e) => Err(e.to_string()),
+        };
+        match validated {
+            Ok(r) => {
+                record(journal, &r);
+                imported += 1;
+            }
+            Err(e) => log::warn!("memory: skipping malformed import entry: {e}"),
+        }
+    }
+    if total > 0 && imported == 0 {
+        return Err(format!("memory: all {total} import entries were malformed"));
+    }
+    Ok(imported)
+}
+
 /// Owns the `data/memory/` view directory: one append-only JSONL file per
 /// layer, rebuilt from the journal (delete any of them and replaying
 /// reproduces equivalent state — ADR-0014 D2).
@@ -1619,5 +1664,106 @@ mod memory_tests {
         assert_eq!(s.newest_ts_ms, Some(5 * DAY_MS));
         // Insertion order must not leak into min/max.
         assert!(s.oldest_ts_ms.unwrap() < s.newest_ts_ms.unwrap());
+    }
+
+    #[test]
+    fn export_import_round_trip_preserves_live_count_and_content() {
+        let src_dir = temp_dir("mem-export");
+        let src_path = src_dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&src_dir, "runtime").expect("open"));
+        record(&journal, &rec_conf("mem-a", "alpha fact", 0.7, Status::Promoted));
+        record(&journal, &rec_conf("mem-b", "beta fact", 0.9, Status::Promoted));
+        record(&journal, &rec_conf("mem-c", "draft fact", 0.4, Status::Provisional));
+        drop(journal);
+
+        let view = MemoryView::fold(&src_path).expect("fold");
+        assert_eq!(view.live().len(), 2);
+        let json = export_json(&view);
+        assert!(json.starts_with("[\n"), "pretty array expected: {json}");
+
+        let dst_dir = temp_dir("mem-import");
+        let dst_path = dst_dir.join("runtime.jsonl");
+        let dst = Mutex::new(Journal::open(&dst_dir, "runtime").expect("open"));
+        let imported = import_records(&json, &dst).expect("import");
+        drop(dst);
+
+        let pair = |v: &MemoryView| -> Vec<(String, String)> {
+            v.live().iter().map(|r| (r.id.clone(), r.content.clone())).collect()
+        };
+        assert_eq!(imported, view.live().len());
+        assert_eq!(pair(&MemoryView::fold(&dst_path).expect("fold")), pair(&view));
+        let _ = std::fs::remove_dir_all(&src_dir);
+        let _ = std::fs::remove_dir_all(&dst_dir);
+    }
+
+    #[test]
+    fn import_rejects_invalid_json_and_accepts_empty_array() {
+        let dir = temp_dir("mem-import-bad");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let err = import_records("{not json", &journal).err().unwrap();
+        assert!(err.contains("not a JSON array"), "{err}");
+        assert_eq!(import_records("[]", &journal).expect("empty ok"), 0);
+        assert!(
+            MemoryView::fold(&dir.join("runtime.jsonl"))
+                .expect("fold")
+                .records
+                .is_empty(),
+            "nothing landed"
+        );
+        drop(journal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_skips_malformed_entries_and_fails_only_when_all_fail() {
+        let dir = temp_dir("mem-import-partial");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let good = serde_json::json!({
+            "id": "mem-g",
+            "layer": "project",
+            "content": "good fact",
+            "provenance": {
+                "kind": "user",
+                "ref": "msg-1",
+                "thread_id": "t",
+                "turn_id": "u",
+                "ts_ms": 42
+            },
+            "confidence": 0.8,
+            "status": "promoted"
+        });
+        // One good entry, one shape-broken, one confidence-out-of-range.
+        let arr = serde_json::json!([
+            good,
+            {},
+            {
+                "id": "x",
+                "layer": "project",
+                "content": "",
+                "provenance": {
+                    "kind": "",
+                    "ref": "",
+                    "thread_id": "t",
+                    "turn_id": "u",
+                    "ts_ms": 1
+                },
+                "confidence": 9.0,
+                "status": "promoted"
+            }
+        ]);
+        let imported = import_records(&arr.to_string(), &journal).expect("partial success");
+        assert_eq!(imported, 1, "{arr}");
+        // All-malformed array must fail loud with the rejected count.
+        let err = import_records("[{}, {}]", &journal).err().unwrap();
+        assert!(err.contains("all 2"), "{err}");
+
+        drop(journal);
+        let view = MemoryView::fold(&path).expect("fold");
+        assert_eq!(view.records.len(), 1);
+        assert_eq!(view.records[0].id, "mem-g");
+        assert_eq!(view.records[0].content, "good fact");
+        assert_eq!(view.records[0].status, Status::Promoted, "validated via ::new");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

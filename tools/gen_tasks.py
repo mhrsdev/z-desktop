@@ -295,7 +295,7 @@ DOMAINS = [
         ("007", "Fallback chain evaluation", ["005"], "IMPLEMENTED"),
         ("008", "Hard-requirement bypass for downgrades", ["007"], "PLANNED"),
         ("009", "Router settings UI (dev mode)", ["005", "set-002"], "PLANNED"),
-        ("010", "Provider SSE line-limit hardening", [], "PLANNED"),
+        ("010", "Provider SSE line-limit hardening", [], "IMPLEMENTED"),
         ("011", "Response size caps", ["010"], "PLANNED"),
         ("012", "Provider replay harness (recorded SSE fixtures)", ["fix-005"], "PLANNED"),
         ("013", "OpenAI replay fixture set", ["012"], "PLANNED"),

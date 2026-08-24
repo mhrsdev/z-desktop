@@ -450,6 +450,59 @@ impl EvidenceView {
     }
 }
 
+// ---------------------------------------------------------------------------
+// sup-021 extension: bench history + trend analysis over a folded view.
+// ---------------------------------------------------------------------------
+
+/// One historical benchmark measurement reconstructed from [`EvidenceKind::Bench`]
+/// evidence whose summary reads `{name}: {value}ms`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BenchPoint {
+    pub name: String,
+    pub value_ms: u64,
+    /// Wall-clock capture time in unix ms, taken from the record id
+    /// (`new_id` embeds a hex millisecond timestamp).
+    pub ts_ms: u128,
+}
+
+/// All Bench-kind records named `name`, values parsed from summaries,
+/// ordered by record id. Items arrive from the fold in journal replay order
+/// and `new_id` is monotonic, so preserving item order IS id order. Records
+/// with unparseable summaries are skipped (measurement, not verdict).
+pub fn bench_history(view: &EvidenceView, name: &str) -> Vec<BenchPoint> {
+    let prefix = format!("{name}: ");
+    view.items
+        .iter()
+        .filter(|e| e.kind == EvidenceKind::Bench)
+        .filter_map(|e| {
+            let digits = e.summary.strip_prefix(&prefix)?.strip_suffix("ms")?.trim();
+            let value_ms = digits.parse().ok()?;
+            // ponytail: ts falls back to 0 on a corrupt id rather than
+            // dropping the measurement; upgrade path is skipping instead.
+            let ts_ms = e
+                .id
+                .split('-')
+                .nth(1)
+                .and_then(|hex| u128::from_str_radix(hex, 16).ok())
+                .unwrap_or(0);
+            Some(BenchPoint {
+                name: name.to_string(),
+                value_ms,
+                ts_ms,
+            })
+        })
+        .collect()
+}
+
+/// Percent change from first to last point (negative = faster). `None` when
+/// fewer than two points, or the baseline is zero (division undefined).
+pub fn trend(points: &[BenchPoint]) -> Option<f32> {
+    if points.len() < 2 || points[0].value_ms == 0 {
+        return None;
+    }
+    Some((points[points.len() - 1].value_ms as f32 / points[0].value_ms as f32 - 1.0) * 100.0)
+}
+
 /// Parses the `[exit code: N]` trailer `terminal_exec` appends to its tool
 /// output. Returns `None` when the marker is absent (tool-level error path).
 pub(crate) fn parse_exit_code(text: &str) -> Option<i32> {
@@ -962,5 +1015,109 @@ mod evidence_tests {
         assert_eq!(view.items[0].kind, EvidenceKind::Regression);
         assert_eq!(view.items[0].summary, "regression: sup_022_linkage PASS");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // sup-021 extension: bench_history + trend.
+
+    fn bench_with_summary(id: &str, summary: &str) -> Evidence {
+        let mut e = Evidence::bench("t", "u1", "seed", 1);
+        e.id = id.to_string();
+        e.summary = summary.to_string();
+        e
+    }
+
+    #[test]
+    fn bench_history_yields_ordered_points_for_matching_names() {
+        let mut view = EvidenceView::default();
+        // Ids are new_id-shaped ({prefix}-{ms:x}-{n:x}); seeded ascending so
+        // replay order == id order, exactly like a real fold.
+        view.items.push(bench_with_summary(
+            "ev-19e5aa4b1a01-1",
+            "provider_first_round: 1200ms",
+        ));
+        view.items.push(Evidence::tests("t", "u2", 3, 0, "cargo test"));
+        // Same "{name}:" text but wrong KIND must never appear.
+        view.items.push(Evidence::tests(
+            "t",
+            "u3",
+            3,
+            0,
+            "provider_first_round: 9999ms",
+        ));
+        view.items.push(bench_with_summary(
+            "ev-19e5aa4b1b02-2",
+            "other_bench: 500ms",
+        ));
+        view.items.push(bench_with_summary(
+            "ev-19e5aa4c1c03-3",
+            "provider_first_round: 1000ms",
+        ));
+
+        let points = bench_history(&view, "provider_first_round");
+        assert_eq!(
+            points,
+            vec![
+                BenchPoint {
+                    name: "provider_first_round".into(),
+                    value_ms: 1200,
+                    ts_ms: 0x19e5aa4b1a01,
+                },
+                BenchPoint {
+                    name: "provider_first_round".into(),
+                    value_ms: 1000,
+                    ts_ms: 0x19e5aa4c1c03,
+                },
+            ]
+        );
+        assert!(bench_history(&view, "nope").is_empty());
+    }
+
+    #[test]
+    fn bench_history_skips_malformed_summaries() {
+        let mut view = EvidenceView::default();
+        let malformed = [
+            "ev-a-1|no colon at all",
+            "ev-b-2|x:",
+            "ev-c-3|x: ",
+            "ev-d-4|x: abcms",
+            "ev-e-5|x: -12ms",
+            "ev-f-6|x: 12",
+            "ev-g-7|y: 55ms", // wrong name
+        ];
+        for row in malformed {
+            let (id, summary) = row.split_once('|').expect("test row shape");
+            view.items.push(bench_with_summary(id, summary));
+        }
+        // One good record proves skipping is selective, not total.
+        view.items.push(bench_with_summary("ev-h-8", "x: 42ms"));
+        let points = bench_history(&view, "x");
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].value_ms, 42);
+    }
+
+    #[test]
+    fn trend_is_percent_change_first_to_last() {
+        fn point(v: u64) -> BenchPoint {
+            BenchPoint {
+                name: "n".into(),
+                value_ms: v,
+                ts_ms: 0,
+            }
+        }
+        let approx = |got: Option<f32>, want: f32| {
+            assert!((got.expect("some") - want).abs() < 1e-4);
+        };
+        // Faster: negative percent.
+        approx(trend(&[point(200), point(100)]), -50.0);
+        // Slower: positive percent.
+        approx(trend(&[point(100), point(150)]), 50.0);
+        // Flat.
+        approx(trend(&[point(100), point(100)]), 0.0);
+        // Only first/last matter; middles ignored.
+        approx(trend(&[point(200), point(300), point(100)]), -50.0);
+        // None cases: <2 points, empty slice, zero baseline.
+        assert_eq!(trend(&[]), None);
+        assert_eq!(trend(&[point(100)]), None);
+        assert_eq!(trend(&[point(0), point(50)]), None);
     }
 }

@@ -9,7 +9,7 @@
 use crate::journal::{first_seq_gap, Journal, JournalKind, Record, RecordDraft};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// Replays the journal segment at `path` and folds its records in order.
@@ -112,6 +112,34 @@ pub fn usage_fold(path: &Path) -> Result<UsageView, String> {
             _ => {}
         }
     })
+}
+
+/// jour-009 extension: turns started per UTC day, ascending by day.
+///
+/// Buckets are derived from each TurnStarted record's top-level `ts_ms`
+/// (wall-clock milliseconds, stamped by the journal writer).
+pub fn usage_by_day(path: &Path) -> Result<Vec<(String, u64)>, String> {
+    let mut days: BTreeMap<String, u64> = BTreeMap::new();
+    crate::reducer::fold(path, (), |(), record| {
+        if record.kind == JournalKind::TurnStarted {
+            *days.entry(utc_day(record.ts_ms)).or_insert(0) += 1;
+        }
+    })?;
+    Ok(days.into_iter().collect())
+}
+
+/// UTC calendar day ("YYYY-MM-DD") of a wall-clock millisecond timestamp.
+/// Days-since-epoch → civil date (Howard Hinnant's algorithm); no chrono dep.
+fn utc_day(ts_ms: u128) -> String {
+    let z = (ts_ms / 86_400_000) as i64 + 719_468;
+    let doe = z % 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + 400 * (z / 146_097) + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// orch-001: a task record and its lifecycle status.
@@ -737,6 +765,77 @@ pub(crate) mod reducer_tests {
             view,
             UsageView::default(),
             "only the four counted kinds move counters"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-009 extension: usage_by_day ---------------------------------------
+
+    const DAY_A_MS: u128 = 1_704_067_200_000; // 2024-01-01T00:00:00Z
+    const DAY_B_MS: u128 = 1_704_153_600_000; // 2024-01-02T00:00:00Z
+
+    /// Writes a record with a controlled ts_ms straight into the segment
+    /// file — `Journal::append` stamps wall-clock now, which tests can't set.
+    fn seed_record_at(dir: &Path, seq: u64, ts_ms: u128, kind: JournalKind) {
+        use std::io::Write as _;
+        let record = Record {
+            seq,
+            ts_ms,
+            kind,
+            thread_id: Some("t1".into()),
+            payload: json!({}),
+        };
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("main.jsonl"))
+            .expect("open segment");
+        writeln!(f, "{}", serde_json::to_string(&record).expect("serialize")).expect("write");
+    }
+
+    #[test]
+    fn usage_by_day_buckets_two_days_in_order() {
+        let dir = temp_dir("usage-by-day-two");
+        seed_record_at(&dir, 1, DAY_A_MS, JournalKind::TurnStarted);
+        seed_record_at(&dir, 2, DAY_A_MS, JournalKind::TurnStarted);
+        seed_record_at(&dir, 3, DAY_B_MS, JournalKind::TurnStarted);
+        assert_eq!(
+            usage_by_day(&dir.join("main.jsonl")).expect("fold"),
+            vec![
+                ("2024-01-01".to_string(), 2),
+                ("2024-01-02".to_string(), 1),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn usage_by_day_on_empty_journal_is_empty_vec() {
+        let dir = temp_dir("usage-by-day-empty");
+        {
+            // Create the file with no records (drop flushes/closes it).
+            Journal::open(&dir, "main").expect("open");
+        }
+        let days = usage_by_day(&dir.join("main.jsonl")).expect("fold");
+        assert!(days.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn usage_by_day_groups_single_day_and_counts_only_turns() {
+        let dir = temp_dir("usage-by-day-single");
+        seed_record_at(&dir, 1, DAY_A_MS, JournalKind::TurnStarted);
+        seed_record_at(
+            &dir,
+            2,
+            DAY_A_MS + 86_399_999, // last millisecond of the same UTC day
+            JournalKind::TurnStarted,
+        );
+        // Non-turn kinds never land in buckets.
+        seed_record_at(&dir, 3, DAY_B_MS, JournalKind::CommandReceived);
+        assert_eq!(
+            usage_by_day(&dir.join("main.jsonl")).expect("fold"),
+            vec![("2024-01-01".to_string(), 2)]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

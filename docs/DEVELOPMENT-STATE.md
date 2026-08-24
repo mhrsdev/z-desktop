@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-24
 
+## Wave 16 (ctx-006 + set-009 + sup-019) — 2026-08-24 COMPLETE
+
+1. ✅ **ctx-006**: oldest_message_age_ms freshness helper over the
+   ThreadsView.
+2. ✅ **set-009**: remap_check validated-clamp preview for the remap UI.
+3. ✅ **sup-019**: evidence_summary per-kind totals/oks aggregation
+   (drill-down data; sup-019 marked PARTIAL — UI viewer itself pending).
+
+Verification: full workspace suite green — **670 tests, 0 failed**
+(662 → 670). Ledger: 147 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 15 (ctx-013 + set-008 + sup-024) — 2026-08-24 COMPLETE
 
 1. ✅ **ctx-013**: never_compact_latest_user_invariant runtime check —

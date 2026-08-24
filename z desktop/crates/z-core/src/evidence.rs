@@ -525,6 +525,28 @@ pub fn verdict_effective(overridden: &[String], turn_id: &str) -> bool {
     !overridden.iter().any(|id| id == turn_id)
 }
 
+/// sup-019: per-kind `(kind, total, ok)` drill-down over a folded view, in
+/// [`EvidenceKind`] declaration order. Kinds with zero records are omitted —
+/// an empty view yields an empty summary, callers render absent kinds as 0.
+pub fn evidence_summary(view: &EvidenceView) -> Vec<(EvidenceKind, usize, usize)> {
+    const ORDER: [EvidenceKind; 5] = [
+        EvidenceKind::Build,
+        EvidenceKind::Tests,
+        EvidenceKind::Diff,
+        EvidenceKind::Bench,
+        EvidenceKind::Regression,
+    ];
+    let mut summary = Vec::new();
+    for kind in ORDER {
+        let total = view.items.iter().filter(|e| e.kind == kind).count();
+        if total > 0 {
+            let ok = view.items.iter().filter(|e| e.kind == kind && e.ok).count();
+            summary.push((kind, total, ok));
+        }
+    }
+    summary
+}
+
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
@@ -1164,5 +1186,34 @@ mod evidence_tests {
     fn empty_override_list_is_always_effective() {
         assert!(verdict_effective(&[], "turn-a"));
         assert!(verdict_effective(&[], ""));
+    }
+
+    // sup-019: per-kind drill-down summary.
+    #[test]
+    fn evidence_summary_aggregates_per_kind_in_enum_order() {
+        let mut view = EvidenceView::default();
+        view.items.extend([
+            Evidence::tests("t", "u", 3, 0, "cargo test"),
+            Evidence::build("t", "u", Some(0), "make"),
+            Evidence::diff("t", "u", false, "wrote x"),
+            Evidence::build("t", "u", Some(1), "make"),
+            Evidence::bench("t", "u", "b", 5),
+        ]);
+        // Only present kinds get a row (no Regression records here); rows are
+        // ordered by enum declaration order with exact total/ok counts.
+        assert_eq!(
+            evidence_summary(&view),
+            vec![
+                (EvidenceKind::Build, 2, 1),
+                (EvidenceKind::Tests, 1, 1),
+                (EvidenceKind::Diff, 1, 0),
+                (EvidenceKind::Bench, 1, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn evidence_summary_is_empty_for_an_empty_view() {
+        assert!(evidence_summary(&EvidenceView::default()).is_empty());
     }
 }

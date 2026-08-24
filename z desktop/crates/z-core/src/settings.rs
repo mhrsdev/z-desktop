@@ -340,6 +340,14 @@ pub fn constraint_error(key: &str, value: f64) -> Option<String> {
     validate(key, value).err()
 }
 
+/// set-009: remap-preview helper — validate then hand back the effective
+/// value for a future remap UI. Bounds are inclusive integers, so any
+/// accepted value is already its own effective form; rejection mirrors
+/// [`validate`] exactly.
+pub fn remap_check(key: &str, new_value: f64) -> Result<f64, String> {
+    validate(key, new_value).map(|()| new_value)
+}
+
 /// set-005: restore one key's documented default into `current` via [`apply`],
 /// so resets can never drift from the command path's validation. Returns
 /// Ok(false) for unknown keys (nothing to reset); Err only on internal
@@ -719,5 +727,35 @@ mod settings_tests {
         }
         // Whitespace-only queries match nothing (keys have no spaces).
         assert!(search_defs("   ").is_empty());
+    }
+
+    // ---- set-009: remap preview ------------------------------------------
+
+    #[test]
+    fn remap_check_passes_in_range_values_through() {
+        assert_eq!(remap_check("max_tool_rounds", 24.0), Ok(24.0));
+        // Every schema boundary is inclusive passthrough.
+        for def in schema_defs() {
+            if let (Some(min), Some(max)) = (def.min, def.max) {
+                assert_eq!(remap_check(def.key, min), Ok(min), "{} min bound", def.key);
+                assert_eq!(remap_check(def.key, max), Ok(max), "{} max bound", def.key);
+            }
+        }
+    }
+
+    #[test]
+    fn remap_check_rejects_out_of_range() {
+        assert!(remap_check("max_tool_rounds", 201.0).is_err());
+        assert!(remap_check("max_tool_rounds", 0.0).is_err());
+        assert!(remap_check("approval_timeout_secs", 3601.0).is_err());
+        assert!(remap_check("doom_threshold", 0.0).is_err());
+        assert!(remap_check("doom_threshold", f64::NAN).is_err(), "NaN never valid");
+    }
+
+    #[test]
+    fn remap_check_rejects_unknown_keys() {
+        let err = remap_check("nope", 5.0).unwrap_err();
+        assert!(err.contains("unknown setting"), "got: {err}");
+        assert!(err.contains("nope"), "error names the bad key: {err}");
     }
 }

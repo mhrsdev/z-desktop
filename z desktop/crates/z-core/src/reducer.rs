@@ -91,6 +91,18 @@ impl ThreadsView {
     }
 }
 
+/// ctx-006 freshness: age in ms of the oldest persisted message across all
+/// threads, measured against `now_ms`. `None` when no messages exist.
+pub fn oldest_message_age_ms(path: &Path, now_ms: u128) -> Result<Option<u128>, String> {
+    let mut oldest: Option<u128> = None;
+    crate::reducer::fold(path, (), |(), record| {
+        if record.kind == JournalKind::MessagePersisted && record.thread_id.is_some() {
+            oldest = Some(oldest.unwrap_or(u128::MAX).min(record.ts_ms));
+        }
+    })?;
+    Ok(oldest.map(|ts| now_ms.saturating_sub(ts)))
+}
+
 /// jour-009: lifetime usage counters folded from journal events.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct UsageView {
@@ -1052,6 +1064,69 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             redacted_summary(&dir.join("main.jsonl")).expect("summary"),
             0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ctx-006: oldest_message_age_ms ------------------------------------------
+
+    const MSG_OLD_MS: u128 = 1_700_000_000_000;
+    const MSG_NEW_MS: u128 = 1_710_000_000_000;
+
+    /// Like [`seed_record_at`] but with a controlled thread_id, so messages
+    /// can be spread across threads.
+    fn seed_message_at(dir: &Path, seq: u64, thread: &str, ts_ms: u128) {
+        use std::io::Write as _;
+        let record = Record {
+            seq,
+            ts_ms,
+            kind: JournalKind::MessagePersisted,
+            thread_id: Some(thread.into()),
+            payload: json!({}),
+        };
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("main.jsonl"))
+            .expect("open segment");
+        writeln!(f, "{}", serde_json::to_string(&record).expect("serialize")).expect("write");
+    }
+
+    #[test]
+    fn oldest_message_age_ms_takes_min_across_threads_and_ignores_other_kinds() {
+        let dir = temp_dir("oldest-age-multi");
+        seed_message_at(&dir, 1, "tA", MSG_NEW_MS);
+        seed_message_at(&dir, 2, "tB", MSG_OLD_MS);
+        // Non-message kinds never count toward freshness; tB holds the oldest.
+        seed_record_at(&dir, 3, MSG_OLD_MS - 60_000, JournalKind::TurnStarted);
+        assert_eq!(
+            oldest_message_age_ms(&dir.join("main.jsonl"), MSG_NEW_MS + 1_234).expect("fold"),
+            Some(MSG_NEW_MS + 1_234 - MSG_OLD_MS)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn oldest_message_age_ms_on_empty_journal_is_none() {
+        let dir = temp_dir("oldest-age-empty");
+        {
+            // Create the file with no records (drop flushes/closes it).
+            Journal::open(&dir, "main").expect("open");
+        }
+        assert_eq!(
+            oldest_message_age_ms(&dir.join("main.jsonl"), MSG_NEW_MS).expect("fold"),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn oldest_message_age_ms_single_message_is_its_age() {
+        let dir = temp_dir("oldest-age-single");
+        seed_message_at(&dir, 1, "t1", MSG_OLD_MS);
+        assert_eq!(
+            oldest_message_age_ms(&dir.join("main.jsonl"), MSG_OLD_MS + 5_000).expect("fold"),
+            Some(5_000)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 144 |
-| PARTIAL | 5 |
-| PLANNED | 574 |
+| IMPLEMENTED | 145 |
+| PARTIAL | 6 |
+| PLANNED | 572 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -592,7 +592,7 @@
 ### [IMPLEMENTED] sup-018 — Evidence badges in conversation view
 - depends: ui-040
 
-### [PLANNED] sup-019 — Evidence drill-down viewer
+### [PARTIAL] sup-019 — Evidence drill-down viewer
 - depends: sup-018
 
 ### [IMPLEMENTED] sup-020 — Scripted dishonest-agent integration test
@@ -769,7 +769,7 @@
 ### [PLANNED] ctx-005 — Idempotent compaction per span
 - depends: ctx-004
 
-### [PLANNED] ctx-006 — Freshness metadata on context items
+### [IMPLEMENTED] ctx-006 — Freshness metadata on context items
 - depends: ctx-001
 
 ### [IMPLEMENTED] ctx-007 — Exact-source rehydration before edits

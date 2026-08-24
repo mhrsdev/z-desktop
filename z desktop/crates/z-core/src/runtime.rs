@@ -2141,6 +2141,51 @@ mod capability_gate_tests {
         let req = build_request(&NullProvider, &thread, &shared_with("gpt-4o"), root);
         assert!(!req.tools.is_empty(), "tool-capable model keeps its tools");
     }
+
+    /// core-027: build_request over a 1k-message history stays fast and never
+    /// grows the history. Median of 5 runs < 50ms; enforce_budget on the same
+    /// input, forced over budget, < 20ms. (std::time only, no criterion.)
+    #[test]
+    fn build_request_1k_msg_history_stays_fast() {
+        let turn = "The quick brown fox jumps over the lazy dog near the river bank at dawn. "
+            .repeat(3); // ~220 chars ≈ 50 tokens
+        let msgs: Vec<StoredMessage> = (0..1000)
+            .map(|i| StoredMessage {
+                role: if i % 2 == 0 { z_protocol::Role::User } else { z_protocol::Role::Agent },
+                text: format!("{turn} (#{i})"),
+                tool_calls: Vec::new(),
+            })
+            .collect();
+        let thread =
+            Thread { id: "t".into(), title: "perf".into(), messages: msgs.clone(), updated_ms: 0 };
+
+        let mut times = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let t0 = std::time::Instant::now();
+            let req = build_request(&NullProvider, &thread, &shared_with("offline-7b"), std::path::Path::new("/"));
+            times.push(t0.elapsed());
+            // History portion never grows: system prefix + at most the input.
+            assert!(req.messages.len() - 1 <= thread.messages.len());
+        }
+        times.sort();
+        let median = times[2];
+        println!("build_request 1k-msg: median of 5 = {median:?}");
+        assert!(
+            median < std::time::Duration::from_millis(50),
+            "build_request median {median:?} >= 50ms over 1k messages"
+        );
+
+        // Same 1k messages forced well over budget: full compaction path.
+        let t0 = std::time::Instant::now();
+        let out = enforce_budget(msgs.clone(), 20_000);
+        let elapsed = t0.elapsed();
+        assert!(out.len() <= msgs.len());
+        println!("enforce_budget 1k-msg over budget: {elapsed:?}");
+        assert!(
+            elapsed < std::time::Duration::from_millis(20),
+            "enforce_budget {elapsed:?} >= 20ms over 1k messages"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -39,7 +39,7 @@ DOMAINS = [
         ("024", "Active-turn delete rejection", ["022"], "PLANNED"),
         ("025", "Startup auto-open most recent thread", ["021"], "PARTIAL"),
         ("026", "Corrupt-thread skip surfaced in thread list", ["021"], "IMPLEMENTED"),
-        ("027", "build_request perf benchmark (1k-msg history)", [], "PLANNED"),
+        ("027", "build_request perf benchmark (1k-msg history)", [], "IMPLEMENTED"),
         ("028", "Command→TurnStarted latency benchmark", [], "PLANNED"),
         ("029", "EventQueue drain benchmark (1k events)", [], "PLANNED"),
         ("030", "Runtime soak test harness (memory/thread growth)", [], "PLANNED"),

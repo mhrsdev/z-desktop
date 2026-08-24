@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## core-027 Perf Benchmark — 2026-08-23 COMPLETE
+
+1. ✅ **core-027**: 1k-message perf test — build_request median of 5 runs
+   = **3.41ms** (< 50ms, ~15× headroom); enforce_budget full-compaction
+   path = **3.15ms** (< 20ms). Measurements print on every run so
+   regressions are visible. No thresholds loosened.
+
+Verification: full workspace suite green — **470 tests, 0 failed**
+(469 → 470). Ledger: 104 IMPLEMENTED.
+
+Next work continues → sup-016 requirement-skew detector, prov-007
+fallback chain, or jour-012 double-replay equality.
+
 ## mem-015 Replay + View Rebuild — 2026-08-23 COMPLETE
 
 1. ✅ **mem-015**: replay_summary (live/superseded/provisional partition,

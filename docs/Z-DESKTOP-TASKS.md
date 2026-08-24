@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 101 |
+| IMPLEMENTED | 102 |
 | PARTIAL | 2 |
-| PLANNED | 620 |
+| PLANNED | 619 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -96,7 +96,7 @@
 ### [IMPLEMENTED] core-026 — Corrupt-thread skip surfaced in thread list
 - depends: core-021
 
-### [PLANNED] core-027 — build_request perf benchmark (1k-msg history)
+### [IMPLEMENTED] core-027 — build_request perf benchmark (1k-msg history)
 - depends: —
 
 ### [PLANNED] core-028 — Command→TurnStarted latency benchmark

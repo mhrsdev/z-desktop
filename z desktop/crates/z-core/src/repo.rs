@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::search_index::TrigramIndex;
+
 #[derive(Debug, Clone)]
 pub struct FileEntry {
     pub rel_path: String,
@@ -21,6 +23,10 @@ pub struct FileEntry {
 pub struct RepoIndex {
     pub root: Option<PathBuf>,
     pub files: HashMap<String, FileEntry>,
+    /// Lazy whole-repo lexical index, rebuilt only by `build_search_index`.
+    search_index: TrigramIndex,
+    /// Doc id -> rel path, aligned with insertion order into `search_index`.
+    search_paths: Vec<String>,
 }
 
 /// Directories that never carry source worth indexing.
@@ -31,7 +37,8 @@ const SKIP_DIRS: &[&str] = &[
 
 impl RepoIndex {
     pub fn open(root: &Path) -> Self {
-        let mut index = Self { root: Some(root.to_path_buf()), files: HashMap::new() };
+        let mut index =
+            Self { root: Some(root.to_path_buf()), files: HashMap::new(), ..Default::default() };
         index.rescan();
         index
     }
@@ -90,6 +97,41 @@ impl RepoIndex {
 
     pub fn symbol_count(&self) -> u64 {
         self.files.values().map(|f| f.symbols.len() as u64).sum()
+    }
+
+    /// Rebuild the lexical index from disk over every indexed file. Whole
+    /// rebuild, O(all bytes): no incremental updates yet.
+    // ponytail: full rebuild on demand; switch to incremental trigram updates
+    // when rebuild latency shows up on large repos (idx-021).
+    pub fn build_search_index(&mut self) -> Result<(), String> {
+        let Some(root) = self.root.clone() else {
+            return Err("no repository root configured".into());
+        };
+        let mut paths: Vec<String> = self.files.keys().cloned().collect();
+        paths.sort(); // deterministic doc ids regardless of HashMap order
+        let mut index = TrigramIndex::default();
+        let mut ordered: Vec<String> = Vec::with_capacity(paths.len());
+        for rel in &paths {
+            // Non-UTF8/unreadable files aren't searchable text; skip rather
+            // than fail the whole build.
+            if let Ok(content) = std::fs::read_to_string(root.join(rel)) {
+                index.add(&content);
+                ordered.push(rel.clone());
+            }
+        }
+        self.search_index = index;
+        self.search_paths = ordered;
+        Ok(())
+    }
+
+    /// Lexical search over the last-built index; returns `(rel_path, score)`
+    /// best-first. Empty until `build_search_index` has run.
+    pub fn search(&self, query: &str) -> Vec<(String, f32)> {
+        self.search_index
+            .ranked_search(query)
+            .into_iter()
+            .filter_map(|h| self.search_paths.get(h.doc_id as usize).map(|p| (p.clone(), h.score)))
+            .collect()
     }
 
     /// Compact textual map for the model's system context. Bounded so a huge
@@ -223,5 +265,37 @@ struct Config { name: String }
         let map = index.map_text(50);
         assert!(map.contains("src/"), "{map}");
         assert!(!map.contains("node_modules"), "{map}");
+    }
+
+    #[test]
+    fn search_returns_rel_paths_ranked_best_first() {
+        let root = temp_root("srch");
+        std::fs::write(root.join("src/config.rs"), "pub fn load_configuration() {}\n").unwrap();
+        std::fs::write(root.join("src/readme.md"), "notes about configuration files\n").unwrap();
+        // Non-UTF8 junk must be skipped, not fail the build.
+        std::fs::write(root.join("blob.bin"), [0xffu8, 0xfe, 0x00]).unwrap();
+        let mut index = RepoIndex::open(&root);
+        index.build_search_index().expect("build succeeds despite blob.bin");
+        let hits = index.search("configuration");
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|(p, _)| p != "blob.bin"));
+        assert!(hits.iter().all(|(p, _)| index.files.contains_key(p)), "{hits:?}");
+        // Full-query docs tie at 1.0; the tie breaks by ascending doc id,
+        // which follows sorted rel paths ("config.rs" < "readme.md").
+        assert_eq!(hits[0].0, "src/config.rs", "{hits:?}");
+        assert_eq!(hits[0].1, 1.0);
+        assert!(hits.windows(2).all(|w| w[0].1 >= w[1].1));
+    }
+
+    #[test]
+    fn search_before_build_or_on_empty_repo_is_empty() {
+        let mut index = RepoIndex::default();
+        assert!(index.search("anything").is_empty());
+        assert!(index.build_search_index().is_err(), "no root configured");
+        let root = temp_root("empty");
+        std::fs::remove_file(root.join("src/main.rs")).unwrap();
+        let mut index = RepoIndex::open(&root);
+        index.build_search_index().unwrap();
+        assert!(index.search("main").is_empty());
     }
 }

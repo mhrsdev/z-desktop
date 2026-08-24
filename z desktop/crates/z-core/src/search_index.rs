@@ -8,6 +8,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+/// A scored lexical match: doc id plus trigram-coverage score in [0, 1].
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchHit {
+    pub doc_id: u32,
+    pub score: f32,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct TrigramIndex {
     /// Lowercased trigram -> doc ids containing it. Texts shorter than 3
@@ -79,6 +86,43 @@ impl TrigramIndex {
             .filter(|&id| self.verify(id, query))
             .collect()
     }
+
+    /// Candidates ranked by query-trigram coverage (# of the query's distinct
+    /// trigrams present in the doc / total), descending; ties break by
+    /// ascending doc id. Substring verification is deliberately NOT applied —
+    /// a verified full match contains every query trigram, so filtering first
+    /// would collapse all scores to 1.0 and erase the ranking signal.
+    /// Queries with no trigrams (< 3 chars) fall back to verify()'s linear
+    /// scan, scoring every match 1.0 so ties resolve by doc id.
+    pub fn ranked_search(&self, query: &str) -> Vec<SearchHit> {
+        let qtris: HashSet<String> = trigrams(query).into_iter().collect();
+        if qtris.is_empty() {
+            return (0..self.docs.len() as u32)
+                .filter(|&id| self.verify(id, query))
+                .map(|doc_id| SearchHit { doc_id, score: 1.0 })
+                .collect();
+        }
+        let mut hits: Vec<SearchHit> = self
+            .candidates(query)
+            .into_iter()
+            .map(|id| {
+                let dset: HashSet<String> =
+                    trigrams(&self.docs[id as usize]).into_iter().collect();
+                let matched = qtris.iter().filter(|q| dset.contains(*q)).count();
+                SearchHit {
+                    doc_id: id,
+                    score: matched as f32 / qtris.len() as f32,
+                }
+            })
+            .collect();
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.doc_id.cmp(&b.doc_id))
+        });
+        hits
+    }
 }
 
 #[cfg(test)]
@@ -149,5 +193,41 @@ mod tests {
         assert!(idx.search("anything").is_empty());
         assert!(idx.search("").is_empty());
         assert!(!idx.verify(0, "anything"));
+        assert!(idx.ranked_search("anything").is_empty());
+    }
+
+    #[test]
+    fn ranked_search_orders_by_trigram_coverage_then_doc_id() {
+        let mut idx = TrigramIndex::default();
+        idx.add("plain constant confusion"); // shares a few "configuration" trigrams
+        idx.add("the configuration guide"); // contains the full query: score 1.0
+        idx.add("config maps"); // shares the "conf*" trigrams only
+        let hits = idx.ranked_search("configuration");
+        assert_eq!(hits[0], SearchHit { doc_id: 1, score: 1.0 });
+        assert!(hits[0].score > hits.last().unwrap().score);
+        // Scores are non-increasing; equal coverage keeps ascending doc ids.
+        for w in hits.windows(2) {
+            assert!(w[0].score >= w[1].score);
+            if (w[0].score - w[1].score).abs() < f32::EPSILON {
+                assert!(w[0].doc_id < w[1].doc_id);
+            }
+        }
+    }
+
+    #[test]
+    fn ranked_search_short_query_falls_back_with_full_scores() {
+        let mut idx = TrigramIndex::default();
+        idx.add("bbb x");
+        idx.add("bbb y");
+        idx.add("no match here");
+        for q in ["bb", "bbb"] {
+            let hits = idx.ranked_search(q);
+            assert_eq!(
+                hits.iter().map(|h| h.doc_id).collect::<Vec<_>>(),
+                vec![0, 1],
+                "query {q:?}"
+            );
+            assert!(hits.iter().all(|h| h.score == 1.0));
+        }
     }
 }

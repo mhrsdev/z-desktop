@@ -402,7 +402,15 @@ impl SceneSource for App {
                 true
             }
             Key::Named(NamedKey::Enter) => {
-                if modifiers.shift_key() || self.view.input.trim().is_empty() {
+                // kb-001: a keyboard-selected thread switches first, but only
+                // while the composer holds neither the keyboard nor text —
+                // typing must never be hijacked into a thread switch.
+                if !modifiers.shift_key()
+                    && self.view.input.trim().is_empty()
+                    && self.view.activate_selected_thread()
+                {
+                    true
+                } else if modifiers.shift_key() || self.view.input.trim().is_empty() {
                     self.view.activate_focused(self.viewport)
                 } else {
                     self.send_composer()
@@ -449,8 +457,17 @@ impl SceneSource for App {
                 }
                 true
             }
-            Key::Named(NamedKey::ArrowDown) => self.view.move_focus_in_list(true, self.viewport),
-            Key::Named(NamedKey::ArrowUp) => self.view.move_focus_in_list(false, self.viewport),
+            // kb-001: Up/Down drive the sidebar thread selection when the
+            // composer does not hold the keyboard; otherwise they fall through
+            // to roaming whatever list already has focus.
+            Key::Named(NamedKey::ArrowDown) => {
+                self.view.step_thread_selection(true)
+                    || self.view.move_focus_in_list(true, self.viewport)
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                self.view.step_thread_selection(false)
+                    || self.view.move_focus_in_list(false, self.viewport)
+            }
             Key::Named(NamedKey::End) => {
                 self.view.scroll_chat_to_end();
                 true
@@ -1040,5 +1057,117 @@ mod access_tests {
             Ok((_, Command::SwitchThread { thread_id })) => assert_eq!(thread_id, "t2"),
             other => panic!("expected SwitchThread, got {other:?}"),
         }
+    }
+
+    fn thread(id: &str, title: &str) -> z_protocol::ThreadInfo {
+        z_protocol::ThreadInfo { id: id.into(), title: title.into(), message_count: 1, updated_ms: 0 }
+    }
+
+    #[test]
+    fn arrow_keys_move_the_keyboard_thread_selection_and_clamp_at_both_ends() {
+        let mut app = App::new();
+        app.events.lock().unwrap().push(Event::ThreadList {
+            threads: vec![thread("t1", "One"), thread("t2", "Two"), thread("t3", "Three")],
+        });
+        assert!(app.drain_events());
+
+        let down = Key::Named(NamedKey::ArrowDown);
+        let up = Key::Named(NamedKey::ArrowUp);
+
+        assert!(app.on_key(&down, ModifiersState::empty()));
+        assert_eq!(app.view.selected_thread_ix, Some(0));
+        assert!(app.on_key(&down, ModifiersState::empty()));
+        assert!(app.on_key(&down, ModifiersState::empty()));
+        assert_eq!(app.view.selected_thread_ix, Some(2));
+
+        // A fourth Down clamps at the last row: consumed, but nothing moves.
+        assert!(app.on_key(&down, ModifiersState::empty()));
+        assert_eq!(app.view.selected_thread_ix, Some(2));
+
+        assert!(app.on_key(&up, ModifiersState::empty()));
+        assert_eq!(app.view.selected_thread_ix, Some(1));
+        assert!(app.on_key(&up, ModifiersState::empty()));
+        assert_eq!(app.view.selected_thread_ix, Some(0));
+
+        // Up at the first row clamps there too.
+        assert!(app.on_key(&up, ModifiersState::empty()));
+        assert_eq!(app.view.selected_thread_ix, Some(0));
+    }
+
+    #[test]
+    fn enter_switches_to_the_keyboard_selected_thread() {
+        let mut app = App::new();
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        app.command_tx = cmd_tx.clone();
+        app.view.on_switch_thread = Some(Box::new(move |thread_id| {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = cmd_tx.send((id, Command::SwitchThread { thread_id }));
+        }));
+
+        app.events.lock().unwrap().push(Event::ThreadList {
+            threads: vec![thread("t1", "Alpha"), thread("t2", "Beta")],
+        });
+        assert!(app.drain_events());
+
+        // Two Downs land on the second row without anything being clicked.
+        assert!(app.on_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty()));
+        assert!(app.on_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty()));
+        assert_eq!(app.view.selected_thread_ix, Some(1));
+
+        assert!(app.on_key(&Key::Named(NamedKey::Enter), ModifiersState::empty()));
+        match cmd_rx.try_recv() {
+            Ok((_, Command::SwitchThread { thread_id })) => assert_eq!(thread_id, "t2"),
+            other => panic!("expected SwitchThread for the selected row, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enter_with_draft_text_still_sends_even_when_a_thread_is_selected() {
+        let mut app = App::new();
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        app.command_tx = cmd_tx;
+
+        app.events.lock().unwrap().push(Event::ThreadList {
+            threads: vec![thread("t1", "Alpha"), thread("t2", "Beta")],
+        });
+        assert!(app.drain_events());
+        assert!(app.on_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty()));
+
+        for c in "hello".chars() {
+            assert!(app.on_key(&Key::Character(c.to_string().into()), ModifiersState::empty()));
+        }
+        assert!(app.on_key(&Key::Named(NamedKey::Enter), ModifiersState::empty()));
+
+        // The draft wins over the selection: sending must not be hijacked into
+        // a thread switch just because arrows were used earlier.
+        assert!(app.view.input.is_empty(), "sending must clear the composer");
+        match cmd_rx.try_recv() {
+            Ok((_, Command::SendMessage { text, .. })) => assert_eq!(text, "hello"),
+            other => panic!("expected SendMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_selection_heals_when_the_thread_list_shrinks() {
+        let mut app = App::new();
+        app.events.lock().unwrap().push(Event::ThreadList {
+            threads: vec![thread("t1", "One"), thread("t2", "Two"), thread("t3", "Three")],
+        });
+        assert!(app.drain_events());
+        assert!(app.on_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty()));
+        assert!(app.on_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty()));
+        assert!(app.on_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty()));
+        assert_eq!(app.view.selected_thread_ix, Some(2));
+
+        app.events.lock().unwrap().push(Event::ThreadList {
+            threads: vec![thread("t9", "Only")],
+        });
+        assert!(app.drain_events());
+
+        // One Down re-clamps onto the surviving row instead of pointing past
+        // the end of the list.
+        assert!(app.on_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty()));
+        assert_eq!(app.view.selected_thread_ix, Some(0));
     }
 }

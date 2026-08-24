@@ -6,6 +6,24 @@
 
 Last updated: 2026-08-24
 
+## Parallel Wave 4 (sup-022 + idx-020 + kb nav) — 2026-08-24 COMPLETE
+
+1. ✅ **sup-022**: regression() + regression_batch() evidence helpers —
+   per-test PASS/FAIL linkage records.
+2. ✅ **idx-020**: ranked_search (trigram coverage scoring) +
+   repo.build_search_index()/search() mapping doc ids to rel paths
+   (rebuild-on-demand; incremental updates deferred).
+3. ✅ **kb nav**: thread rows are focusable semantic buttons — ↑/↓ roam
+   (wrapping), Enter switches via the existing ViewCommand path, mouse
+   clicks work free. kb-001 marked PARTIAL (app-level nav exists;
+   z-shell keymap tables as data still pending).
+
+Verification: full workspace suite green — **545 tests, 0 failed**
+(532 → 545). Ledger: 124 IMPLEMENTED + 4 PARTIAL.
+
+Next work continues → idx-021 repo-map cache, sup-023 EvidenceRecorded
+journal kind, or ui-050 usage dashboard.
+
 ## Codex Reference Wave (ADR-0021 + term-004 + thread selection) — 2026-08-24 COMPLETE
 
 1. ✅ **ADR-0021** (docs/adr/0021-sandbox-and-exec.md): evidence-based

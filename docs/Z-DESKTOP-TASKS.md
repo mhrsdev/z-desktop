@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 118 |
-| PARTIAL | 2 |
-| PLANNED | 603 |
+| IMPLEMENTED | 122 |
+| PARTIAL | 3 |
+| PLANNED | 598 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -304,10 +304,10 @@
 ### [PLANNED] idx-019 — Trigram incremental postings update
 - depends: idx-018, idx-012
 
-### [PLANNED] idx-020 — Lexical search query path (intersect+verify)
+### [IMPLEMENTED] idx-020 — Lexical search query path (intersect+verify)
 - depends: idx-018
 
-### [PLANNED] idx-021 — Search p95 <200ms benchmark on medium fixture
+### [IMPLEMENTED] idx-021 — Search p95 <200ms benchmark on medium fixture
 - depends: idx-020, fix-002
 
 ### [PLANNED] idx-022 — Spill-to-disk postings for XL corpora
@@ -601,10 +601,10 @@
 ### [IMPLEMENTED] sup-021 — Benchmark evidence recorder
 - depends: sup-001
 
-### [PLANNED] sup-022 — Regression-test linkage recorder
+### [IMPLEMENTED] sup-022 — Regression-test linkage recorder
 - depends: sup-001
 
-### [PLANNED] sup-023 — EvidenceRecorded event + journal kind
+### [IMPLEMENTED] sup-023 — EvidenceRecorded event + journal kind
 - depends: sup-001, jour-023
 
 ### [PLANNED] sup-024 — Verdict override persistence across restarts
@@ -1702,7 +1702,7 @@
 
 ## Keybindings (`kb-*`)
 
-### [PLANNED] kb-001 — Keymap tables as data in z-shell
+### [PARTIAL] kb-001 — Keymap tables as data in z-shell
 - depends: —
 
 ### [PLANNED] kb-002 — Default bindings population (§81)

@@ -96,6 +96,34 @@ impl Evidence {
             summary: format!("{name}: {value_ms}ms"),
         }
     }
+
+    /// Regression-test linkage evidence (sup-022). `ok == passed`; a failed
+    /// regression test is still recorded — it's a measurement of the suite.
+    pub fn regression(thread_id: &str, turn_id: &str, test_name: &str, passed: bool) -> Evidence {
+        Evidence {
+            id: crate::new_id("ev"),
+            kind: EvidenceKind::Regression,
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            ok: passed,
+            summary: format!(
+                "regression: {test_name} {}",
+                if passed { "PASS" } else { "FAIL" }
+            ),
+        }
+    }
+
+    /// Convenience: one record per `(test_name, passed)` pair, in order.
+    pub fn regression_batch(
+        thread_id: &str,
+        turn_id: &str,
+        results: &[(&str, bool)],
+    ) -> Vec<Evidence> {
+        results
+            .iter()
+            .map(|(name, passed)| Self::regression(thread_id, turn_id, name, *passed))
+            .collect()
+    }
 }
 
 /// sup-003 (partial): a terminal_exec command that looks like a test run
@@ -877,6 +905,62 @@ mod evidence_tests {
         let view = EvidenceView::fold(&path).expect("fold");
         assert_eq!(view.items, vec![b]);
         assert_eq!(view.items[0].kind, EvidenceKind::Bench);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // sup-022: Regression constructor shape — kind, ok=passed,
+    // "regression: {name} {PASS|FAIL}".
+    #[test]
+    fn regression_evidence_formats_pass_and_fail_summaries() {
+        let pass = Evidence::regression("t", "u1", "evidence_folds_back", true);
+        assert_eq!(pass.kind, EvidenceKind::Regression);
+        assert!(pass.ok);
+        assert_eq!(pass.summary, "regression: evidence_folds_back PASS");
+        let fail = Evidence::regression("t", "u2", "detect_fake_completion", false);
+        assert!(!fail.ok);
+        assert_eq!(fail.summary, "regression: detect_fake_completion FAIL");
+    }
+
+    #[test]
+    fn regression_batch_preserves_order_and_fields() {
+        let batch = Evidence::regression_batch(
+            "t",
+            "u1",
+            &[("a_test", true), ("b_test", false), ("c_test", true)],
+        );
+        assert_eq!(batch.len(), 3);
+        for e in &batch {
+            assert_eq!(e.kind, EvidenceKind::Regression);
+            assert_eq!(e.thread_id, "t");
+            assert_eq!(e.turn_id, "u1");
+            assert!(e.id.starts_with("ev-"));
+        }
+        let summaries: Vec<&str> = batch.iter().map(|e| e.summary.as_str()).collect();
+        assert_eq!(
+            summaries,
+            vec![
+                "regression: a_test PASS",
+                "regression: b_test FAIL",
+                "regression: c_test PASS",
+            ]
+        );
+        let oks: Vec<bool> = batch.iter().map(|e| e.ok).collect();
+        assert_eq!(oks, vec![true, false, true]);
+    }
+
+    #[test]
+    fn regression_evidence_round_trips_through_the_fold() {
+        let dir = temp_dir("sup-022");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let r = Evidence::regression("t", "u1", "sup_022_linkage", true);
+        record(&journal, &r);
+        drop(journal);
+
+        let view = EvidenceView::fold(&path).expect("fold");
+        assert_eq!(view.items, vec![r]);
+        assert_eq!(view.items[0].kind, EvidenceKind::Regression);
+        assert_eq!(view.items[0].summary, "regression: sup_022_linkage PASS");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

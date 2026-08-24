@@ -64,6 +64,10 @@ pub struct WorkspaceView {
     /// core-024 companion: the thread the runtime confirmed as active,
     /// mirrored from `ThreadSwitched` events. None until a switch succeeds.
     pub active_thread_id: Option<String>,
+    /// kb-001: keyboard-selected sidebar row, as an index into `threads`.
+    /// Kept apart from semantic focus so arrows work before anything has been
+    /// clicked or tabbed into; stepped by App's arrow handling.
+    pub selected_thread_ix: Option<usize>,
     /// Called when the user activates a thread row; App routes it to
     /// `Command::SwitchThread` through the command channel.
     pub on_switch_thread: Option<Box<dyn FnMut(String)>>,
@@ -202,6 +206,7 @@ impl WorkspaceView {
             threads: Vec::new(),
             evidence_badges: Vec::new(),
             active_thread_id: None,
+            selected_thread_ix: None,
             on_send: None,
             on_resolve: None,
             on_switch_thread: None,
@@ -856,6 +861,56 @@ impl WorkspaceView {
             return false;
         }
         self.activate(id)
+    }
+
+    /// True while the keyboard sits on a composer control. kb-001 guard: while
+    /// the composer holds the keyboard, arrows and Enter belong to it.
+    pub fn composer_is_focused(&self) -> bool {
+        self.focused.is_some_and(|id| node_namespace(id) == ns::COMPOSER)
+    }
+
+    /// kb-001: step the keyboard thread selection for the sidebar. Clamps at
+    /// both ends of `threads`; a clamped step still consumes the key so it can
+    /// never fall through to the wrapping list roam. Returns false only when
+    /// the composer holds the keyboard, the list is empty, or Up arrives with
+    /// no selection yet.
+    pub fn step_thread_selection(&mut self, forward: bool) -> bool {
+        if self.composer_is_focused() || self.threads.is_empty() {
+            return false;
+        }
+        // Seed from a clicked or tabbed-to row so pointer and keyboard users
+        // share one selection.
+        if self.selected_thread_ix.is_none() {
+            self.selected_thread_ix = self
+                .focused
+                .filter(|id| node_namespace(*id) == ns::THREAD)
+                .map(|id| node_index(id) as usize)
+                .filter(|&ix| ix < self.threads.len());
+        }
+        let last = self.threads.len() - 1;
+        let next = match self.selected_thread_ix {
+            None if forward => 0,
+            None => return false,
+            Some(ix) => {
+                let ix = ix.min(last);
+                if forward { (ix + 1).min(last) } else { ix.saturating_sub(1) }
+            }
+        };
+        self.selected_thread_ix = Some(next);
+        self.focused = Some(NodeId::new(ns::THREAD, next as u32));
+        true
+    }
+
+    /// kb-001: activate the keyboard-selected thread through the ordinary row
+    /// command path — bounds-checked against `threads` and routed to
+    /// `Command::SwitchThread` by the same callback a click uses. False when
+    /// nothing is selected or the composer holds the keyboard.
+    pub fn activate_selected_thread(&mut self) -> bool {
+        if self.composer_is_focused() {
+            return false;
+        }
+        let Some(ix) = self.selected_thread_ix else { return false };
+        self.activate(NodeId::new(ns::THREAD, ix as u32))
     }
 
     /// Activate a semantic node whose command is represented in View State.
@@ -3992,5 +4047,76 @@ mod tests {
         // Up from the first row wraps to the last.
         assert!(view.move_focus_in_list(false, viewport));
         assert_eq!(view.focused(), Some(second));
+    }
+
+    #[test]
+    fn keyboard_selection_steps_clamps_and_moves_focus_with_it() {
+        let mut view = WorkspaceView::new();
+        view.threads = vec![
+            z_protocol::ThreadInfo {
+                id: "t1".into(),
+                title: "One".into(),
+                message_count: 1,
+                updated_ms: 0,
+            },
+            z_protocol::ThreadInfo {
+                id: "t2".into(),
+                title: "Two".into(),
+                message_count: 2,
+                updated_ms: 1,
+            },
+        ];
+
+        // Up before anything is selected has nothing to undo.
+        assert!(!view.step_thread_selection(false));
+        assert_eq!(view.selected_thread_ix, None);
+
+        assert!(view.step_thread_selection(true));
+        assert_eq!(view.selected_thread_ix, Some(0));
+        assert_eq!(view.focused(), Some(NodeId::new(ns::THREAD, 0)));
+
+        assert!(view.step_thread_selection(true));
+        assert_eq!(view.selected_thread_ix, Some(1));
+
+        // Clamped at the last row: consumed, but nothing moves.
+        assert!(view.step_thread_selection(true));
+        assert_eq!(view.selected_thread_ix, Some(1));
+
+        // Back down to the first row, then clamped there too.
+        assert!(view.step_thread_selection(false));
+        assert_eq!(view.selected_thread_ix, Some(0));
+        assert!(view.step_thread_selection(false));
+        assert_eq!(view.selected_thread_ix, Some(0));
+    }
+
+    #[test]
+    fn a_focused_composer_blocks_keyboard_thread_navigation() {
+        let switched = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let sink = std::rc::Rc::clone(&switched);
+        let mut view = WorkspaceView::new();
+        view.threads = vec![z_protocol::ThreadInfo {
+            id: "t1".into(),
+            title: "Only".into(),
+            message_count: 1,
+            updated_ms: 0,
+        }];
+        view.selected_thread_ix = Some(0);
+        view.on_switch_thread = Some(Box::new(move |id| sink.borrow_mut().push(id)));
+
+        // The Send button is a composer control; while it holds focus the
+        // arrows and Enter belong to the composer.
+        view.focused = Some(NodeId::new(ns::COMPOSER, 10));
+        assert!(view.composer_is_focused());
+        assert!(!view.step_thread_selection(true));
+        assert!(!view.step_thread_selection(false));
+        assert!(!view.activate_selected_thread());
+        assert_eq!(view.selected_thread_ix, Some(0), "the selection must not move");
+        assert!(switched.borrow().is_empty(), "nothing may be switched");
+
+        // Without the composer holding the keyboard the same keys act.
+        view.focused = None;
+        assert!(!view.composer_is_focused());
+        assert!(view.activate_selected_thread());
+        assert_eq!(&*switched.borrow(), &["t1".to_string()]);
     }
 }

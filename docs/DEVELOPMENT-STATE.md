@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-23
 
+## jour-010 Seq-Gap Tolerance — 2026-08-23 COMPLETE
+
+1. ✅ **jour-010**: reducer::fold calls first_seq_gap after replay and
+   warns ("gap at record N, expected seq X") but continues — views
+   tolerate gaps; fail-loud remains only in replay's malformed-line path.
+   Reused the committed (index, expected_seq) helper shape; 1-based warn.
+   Test asserts the warning via a captured log::Log and that the view
+   still folds.
+
+Verification: full workspace suite green — **442 tests, 0 failed**
+(441 → 442). Ledger: 90 IMPLEMENTED.
+
+Next work continues → sup-012 fake-completion detector, sup-017 appeal
+flow, or prov-006 decision logging.
+
 ## sup-014/015 Write Detectors — 2026-08-23 COMPLETE
 
 1. ✅ **sup-014**: detect_placeholder_code — 7 marker classes (todo:

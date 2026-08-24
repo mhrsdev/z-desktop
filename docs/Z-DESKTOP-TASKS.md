@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 87 |
+| IMPLEMENTED | 88 |
 | PARTIAL | 2 |
-| PLANNED | 634 |
+| PLANNED | 633 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -182,7 +182,7 @@
 ### [PLANNED] jour-009 — Usage stats reducer
 - depends: jour-006
 
-### [PLANNED] jour-010 — Seq gap tolerance + warning
+### [IMPLEMENTED] jour-010 — Seq gap tolerance + warning
 - depends: jour-005
 
 ### [PLANNED] jour-011 — Corrupt tail truncation repair

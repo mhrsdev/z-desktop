@@ -6,20 +6,33 @@
 //! writes are append-only events. Unknown future kinds deserialize into
 //! [`JournalKind::Other`] and are simply ignored by every view here.
 
-use crate::journal::{Journal, JournalKind, Record, RecordDraft};
+use crate::journal::{first_seq_gap, Journal, JournalKind, Record, RecordDraft};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Replays the journal segment at `path` and folds its records in order.
+///
+/// jour-010: a sequence gap (lost/rotated-away middle lines) is survivable
+/// for views — the fold warns via `log` and keeps folding. Fail-loud stays
+/// in [`Journal::replay`]'s malformed-line path only.
 pub fn fold<State, F: FnMut(&mut State, &Record)>(
     path: &Path,
     mut init: State,
     mut f: F,
 ) -> Result<State, String> {
-    for record in Journal::replay(path)? {
-        f(&mut init, &record);
+    let records = Journal::replay(path)?;
+    if let Some((index, expected)) = first_seq_gap(&records) {
+        log::warn!(
+            "journal {}: gap at record {} (expected seq {expected}, got {})",
+            path.display(),
+            index + 1,
+            records[index].seq
+        );
+    }
+    for record in &records {
+        f(&mut init, record);
     }
     Ok(init)
 }
@@ -386,6 +399,72 @@ mod reducer_tests {
         assert_eq!(threads.threads["t1"].message_count, 1);
         let tasks = TasksView::fold(&dir.join("main.jsonl")).expect("tasks fold");
         assert_eq!(tasks.tasks["x"].status, TaskStatus::Pending);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-010 ---------------------------------------------------------------
+
+    static WARN_LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    static WARN_LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+
+    /// Captures `warn!` messages so tests can assert jour-010's warn-through.
+    struct WarnCapture;
+    impl log::Log for WarnCapture {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+        fn log(&self, record: &log::Record) {
+            if record.level() == log::Level::Warn {
+                WARN_LOG
+                    .lock()
+                    .expect("warn log lock")
+                    .push(record.args().to_string());
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    #[test]
+    fn fold_on_gapped_journal_warns_and_still_produces_view() {
+        WARN_LOGGER_INIT.call_once(|| {
+            let _ = log::set_boxed_logger(Box::new(WarnCapture));
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+        WARN_LOG.lock().expect("warn log lock").clear();
+
+        let dir = temp_dir("gap-fold");
+        {
+            let mut j = Journal::open(&dir, TASKS_SEGMENT).expect("open");
+            for id in ["a", "b", "c", "d"] {
+                append(
+                    &mut j,
+                    JournalKind::TaskStateChanged,
+                    None,
+                    json!({"id": id, "status": "done"}),
+                );
+            }
+        }
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+        let lines: Vec<String> = std::fs::read_to_string(&path)
+            .expect("read journal")
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(lines.len(), 4);
+        // Drop the middle line (seq 3): seqs on disk become [1, 2, 4].
+        let gapped = format!("{}\n", [0, 1, 3].map(|i| lines[i].as_str()).join("\n"));
+        std::fs::write(&path, gapped).expect("rewrite gapped journal");
+
+        let view = TasksView::fold(&path).expect("gaps are survivable for views");
+        assert_eq!(view.tasks.len(), 3, "seq-3 record (task c) is gone");
+        assert!(view.tasks.contains_key("d"), "later records still fold");
+        let warns = WARN_LOG.lock().expect("warn log lock");
+        assert!(
+            warns
+                .iter()
+                .any(|m| m.contains("gap at record 3") && m.contains("expected seq 3")),
+            "must warn about the gap at record 3, got: {warns:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

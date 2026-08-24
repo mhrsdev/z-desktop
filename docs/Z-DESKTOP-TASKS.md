@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 81 |
+| IMPLEMENTED | 82 |
 | PARTIAL | 2 |
-| PLANNED | 640 |
+| PLANNED | 639 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -93,7 +93,7 @@
 ### [PARTIAL] core-025 — Startup auto-open most recent thread
 - depends: core-021
 
-### [PLANNED] core-026 — Corrupt-thread skip surfaced in thread list
+### [IMPLEMENTED] core-026 — Corrupt-thread skip surfaced in thread list
 - depends: core-021
 
 ### [PLANNED] core-027 — build_request perf benchmark (1k-msg history)

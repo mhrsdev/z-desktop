@@ -148,6 +148,10 @@ pub struct Runtime {
     // core-025 partial: id of the most recently modified thread file seen by
     // the startup restore loop (by fs mtime). Startup wiring reads this later.
     most_recent_restored: Option<Id>,
+    // core-026: thread files that failed to parse at startup, as
+    // "{filename}: {error}". Startup-only; surfaced as read-only "[corrupt]"
+    // ghosts in ThreadList (ADR-0016 CaptureFailed philosophy).
+    corrupt_threads: Vec<String>,
 }
 
 /// Open the runtime lifecycle journal at `<data_dir>/journal/runtime.jsonl`
@@ -191,10 +195,13 @@ pub fn data_dir() -> PathBuf {
 /// Load every parseable `<dir>/threads/*.json` into memory. Also reports the
 /// id of the most recently modified thread file by fs mtime — core-025
 /// partial, so startup wiring can auto-open it. A file whose mtime cannot be
-/// read simply does not compete for "most recent"; corrupt JSON is skipped.
-fn restore_threads(dir: &std::path::Path) -> (HashMap<Id, Thread>, Option<Id>) {
+/// read simply does not compete for "most recent"; corrupt JSON is skipped
+/// but reported (core-026) as `"{filename}: {error}"` so the UI can surface
+/// the gap instead of silently losing data.
+fn restore_threads(dir: &std::path::Path) -> (HashMap<Id, Thread>, Option<Id>, Vec<String>) {
     let mut threads = HashMap::new();
     let mut most_recent: Option<Id> = None;
+    let mut corrupt: Vec<String> = Vec::new();
     let mut newest = std::time::SystemTime::UNIX_EPOCH;
     if let Ok(entries) = std::fs::read_dir(dir.join("threads")) {
         for entry in entries.flatten() {
@@ -217,11 +224,15 @@ fn restore_threads(dir: &std::path::Path) -> (HashMap<Id, Thread>, Option<Id>) {
                     }
                     threads.insert(thread.id.clone(), thread);
                 }
-                Err(e) => log::warn!("skipping unreadable session {:?}: {e}", entry.path()),
+                Err(e) => {
+                    log::warn!("skipping unreadable session {:?}: {e}", entry.path());
+                    let fname = entry.file_name().to_string_lossy().into_owned();
+                    corrupt.push(format!("{fname}: {e}"));
+                }
             }
         }
     }
-    (threads, most_recent)
+    (threads, most_recent, corrupt)
 }
 
 impl Runtime {
@@ -233,8 +244,12 @@ impl Runtime {
         let settings = Arc::new(crate::settings::Snapshot::new(crate::settings::load(&data_dir)));
         // Restore persisted sessions; a corrupt file is skipped, not fatal.
         // Second return value: id of the most recently modified thread file
-        // (core-025 partial, consumed by `most_recent_thread`).
-        let (threads, most_recent_restored) = restore_threads(&data_dir);
+        // (core-025 partial, consumed by `most_recent_thread`). Third: files
+        // that failed to parse (core-026), warned once here at startup.
+        let (threads, most_recent_restored, corrupt_threads) = restore_threads(&data_dir);
+        if !corrupt_threads.is_empty() {
+            log::warn!("corrupt thread file(s) kept visible as [corrupt] ghosts: {corrupt_threads:?}");
+        }
         log::info!("restored {} thread(s)", threads.len());
         // jour-024: resume the lifecycle journal across restarts (best-effort).
         let journal = open_runtime_journal(&data_dir);
@@ -256,6 +271,7 @@ impl Runtime {
             cmd_rx,
             journal,
             most_recent_restored,
+            corrupt_threads,
         }
     }
 
@@ -265,8 +281,16 @@ impl Runtime {
         self.most_recent_restored.clone()
     }
 
+    /// core-026: thread files that failed to parse at startup, as
+    /// `"{filename}: {error}"`. Startup-only snapshot; each entry is also
+    /// surfaced as a read-only `[corrupt]` ghost in ThreadList until its
+    /// file is deleted.
+    pub fn corrupt_threads(&self) -> &[String] {
+        &self.corrupt_threads
+    }
+
     /// Run the command loop until the channel closes (app shutdown).
-    pub fn serve(self) {
+    pub fn serve(mut self) {
         while let Ok((command_id, command)) = self.cmd_rx.recv() {
             let _ = self.event_tx.send(Event::Accepted { command_id });
             // jour-024: durable breadcrumb for every inbound command, before
@@ -522,6 +546,19 @@ impl Runtime {
             })
             .collect();
         drop(threads);
+        // core-026: unreadable startup files stay visible as read-only
+        // "[corrupt]" ghost rows (title `[corrupt] {filename}`, 0 messages)
+        // so the gap is honest, not silent (ADR-0016 CaptureFailed). Ghosts
+        // sort last (updated_ms 0); deleting one just removes the file.
+        for c in &self.corrupt_threads {
+            let Some((fname, _)) = c.split_once(": ") else { continue };
+            infos.push(ThreadInfo {
+                id: fname.strip_suffix(".json").unwrap_or(fname).to_string(),
+                title: format!("[corrupt] {fname}"),
+                message_count: 0,
+                updated_ms: 0,
+            });
+        }
         infos.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
         let _ = self.event_tx.send(Event::ThreadList { threads: infos });
     }
@@ -541,15 +578,36 @@ impl Runtime {
     }
 
     /// core-022: remove a thread from memory and delete its file on disk.
-    fn delete_thread(&self, thread_id: Id) {
-        if self.threads.lock().unwrap().remove(&thread_id).is_none() {
+    /// core-026: a [corrupt] ghost is not in memory; deleting it removes the
+    /// unreadable file itself, which also drops the ghost from future lists.
+    fn delete_thread(&mut self, thread_id: Id) {
+        let known = self.threads.lock().unwrap().remove(&thread_id).is_some();
+        if !known && !self.drop_corrupt_ghost(&thread_id) {
             return;
         }
-        let path = self.data_dir.join("threads").join(format!("{thread_id}.json"));
+        let path = self
+            .data_dir
+            .join("threads")
+            .join(format!("{thread_id}.json"));
         if let Err(e) = std::fs::remove_file(&path) {
             log::warn!("delete_thread: could not remove {path:?}: {e}");
         }
         self.send_thread_list();
+    }
+
+    /// core-026: drop `thread_id`'s entry from the corrupt list (matched by
+    /// filename). False when it was never a corrupt ghost.
+    fn drop_corrupt_ghost(&mut self, thread_id: &str) -> bool {
+        let fname = format!("{thread_id}.json");
+        match self.corrupt_threads.iter().position(|c| {
+            c.split_once(": ").map_or(false, |(f, _)| f == fname)
+        }) {
+            Some(i) => {
+                self.corrupt_threads.remove(i);
+                true
+            }
+            None => false,
+        }
     }
 
     /// core-022: deep-copy all messages of `thread_id` under `new_id`.
@@ -1929,6 +1987,7 @@ mod steering_tests {
                 cmd_rx,
                 journal,
                 most_recent_restored: None,
+                corrupt_threads: Vec::new(),
             },
             cmd_tx,
             event_rx,
@@ -3333,6 +3392,9 @@ mod thread_management_tests {
         std::sync::mpsc::Receiver<Event>,
     ) {
         let journal = open_runtime_journal(&dir);
+        // core-026: pick up unreadable thread files on disk so ghosts and
+        // `corrupt_threads()` reflect what a real startup restore would see.
+        let (_, _, corrupt) = restore_threads(&dir);
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         (
@@ -3354,6 +3416,7 @@ mod thread_management_tests {
                 cmd_rx,
                 journal,
                 most_recent_restored: None,
+                corrupt_threads: corrupt,
             },
             cmd_tx,
             event_rx,
@@ -3566,16 +3629,78 @@ mod thread_management_tests {
         std::fs::write(dir.join("threads").join("newer.json"), serde_json::to_string(&newer).unwrap())
             .expect("write newer");
 
-        let (threads, most_recent) = restore_threads(&dir);
+        let (threads, most_recent, corrupt) = restore_threads(&dir);
         assert_eq!(threads.len(), 2, "both valid files restored");
-        assert_eq!(most_recent.as_deref(), Some("newer"));
+        assert!(corrupt.is_empty(), "no corrupt files yet");
 
         // A later corrupt file must not steal "most recent" nor break restore.
         std::thread::sleep(std::time::Duration::from_millis(80));
         std::fs::write(dir.join("threads").join("junk.json"), "{ not json").expect("write junk");
-        let (threads, most_recent) = restore_threads(&dir);
+        let (threads, most_recent, corrupt) = restore_threads(&dir);
         assert_eq!(threads.len(), 2, "corrupt file skipped");
         assert_eq!(most_recent.as_deref(), Some("newer"));
+        assert_eq!(corrupt.len(), 1, "corrupt file reported");
+        assert!(corrupt[0].starts_with("junk.json: "));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_thread_files_surface_as_ghosts_and_accessor_reports_them() {
+        let dir = temp_data_dir("corrupt");
+        let good = Thread {
+            id: "ok".into(),
+            title: "good".into(),
+            messages: vec![msg("hi")],
+            updated_ms: 9,
+        };
+        std::fs::write(dir.join("threads").join("ok.json"), serde_json::to_string(&good).unwrap())
+            .expect("write valid thread");
+        std::fs::write(dir.join("threads").join("junk.json"), "{ not json").expect("write junk");
+
+        let (rt, cmd_tx, event_rx) = runtime_with(dir.clone(), vec![good]);
+        assert_eq!(rt.corrupt_threads().len(), 1, "one corrupt file reported");
+        let events = run(
+            rt,
+            cmd_tx,
+            event_rx,
+            vec![
+                (1, Command::ListThreads),
+                (2, Command::DeleteThread { thread_id: "junk".into() }),
+            ],
+        );
+
+        // First list shows both the real thread and the read-only ghost.
+        let first = events
+            .iter()
+            .find_map(|e| match e {
+                Event::ThreadList { threads } => Some(threads),
+                _ => None,
+            })
+            .expect("initial ThreadList");
+        let ghost = first.iter().find(|t| t.id == "junk").expect("ghost listed");
+        assert_eq!(ghost.title, "[corrupt] junk.json");
+        assert_eq!(ghost.message_count, 0);
+        assert_eq!(
+            first.iter().find(|t| t.id == "ok").map(|t| t.message_count),
+            Some(1),
+            "valid thread listed normally"
+        );
+
+        // Deleting the ghost removes the file and the gap from later lists.
+        let final_listed = last_thread_list(&events);
+        assert!(!final_listed.iter().any(|t| t.id == "junk"), "ghost gone after delete");
+        assert!(
+            !dir.join("threads").join("junk.json").exists(),
+            "corrupt file removed from disk"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clean_data_dir_reports_no_corrupt_threads() {
+        let dir = temp_data_dir("clean");
+        let (rt, _cmd_tx, _event_rx) = runtime_with(dir.clone(), Vec::new());
+        assert!(rt.corrupt_threads().is_empty(), "clean dir has no corrupt files");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

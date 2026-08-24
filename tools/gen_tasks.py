@@ -38,7 +38,7 @@ DOMAINS = [
         ("023", "Thread delete tombstone in journal", ["022", "jour-001"], "PLANNED"),
         ("024", "Active-turn delete rejection", ["022"], "PLANNED"),
         ("025", "Startup auto-open most recent thread", ["021"], "PARTIAL"),
-        ("026", "Corrupt-thread skip surfaced in thread list", ["021"], "PLANNED"),
+        ("026", "Corrupt-thread skip surfaced in thread list", ["021"], "IMPLEMENTED"),
         ("027", "build_request perf benchmark (1k-msg history)", [], "PLANNED"),
         ("028", "Command→TurnStarted latency benchmark", [], "PLANNED"),
         ("029", "EventQueue drain benchmark (1k events)", [], "PLANNED"),

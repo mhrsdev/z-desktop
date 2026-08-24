@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-23
 
+## core-026 Corrupt-Thread Ghosts — 2026-08-23 COMPLETE
+
+1. ✅ **core-026**: restore_threads reports unreadable .json files
+   ("{filename}: {error}"); Runtime.corrupt_threads accessor; ThreadList
+   appends read-only ghost rows ("[corrupt] {filename}", 0 messages,
+   sorted last) so gaps stay visible per ADR-0016 CaptureFailed
+   philosophy. DeleteThread removes the file and drops the ghost.
+
+Verification: full workspace suite green — **424 tests, 0 failed**
+(422 → 424). Ledger: 84 IMPLEMENTED.
+
+Next work continues → ui-040 evidence badges, prov-005 capability
+registry, or core-023 delete tombstones in journal.
+
 ## mem-010/011 Corrections — 2026-08-23 COMPLETE
 
 1. ✅ **mem-010**: correct(journal, original_id, …) — validates the live

@@ -301,6 +301,29 @@ pub fn known_keys() -> Vec<&'static str> {
     schema_defs().iter().map(|d| d.key).collect()
 }
 
+/// set-011: tokenized search index over [`schema_defs`] — one `(key, tokens)`
+/// per def, tokens being the key split on `_` plus the kind name (`"u64"`,
+/// matching [`export_schema_json`] spelling). For future token-based
+/// settings search UIs; order mirrors [`schema_defs`].
+pub fn schema_search_index() -> Vec<(String, Vec<String>)> {
+    schema_defs()
+        .iter()
+        .map(|d| {
+            let mut tokens: Vec<String> = d.key.split('_').map(str::to_string).collect();
+            tokens.push(
+                match d.kind {
+                    DefKind::U64 => "u64",
+                    DefKind::F32 => "f32",
+                    DefKind::Bool => "bool",
+                    DefKind::String => "string",
+                }
+                .to_string(),
+            );
+            (d.key.to_string(), tokens)
+        })
+        .collect()
+}
+
 /// set-008: case-insensitive substring search over [`schema_defs`] keys, for
 /// a future settings search UI. Empty query ⇒ every def (schema order).
 pub fn search_defs(query: &str) -> Vec<&'static SettingDef> {
@@ -891,5 +914,23 @@ mod settings_tests {
         assert_eq!(doc["values"]["max_tool_rounds"], json!(d.max_tool_rounds));
         assert_eq!(doc["values"]["approval_timeout_secs"], json!(d.approval_timeout_secs));
         assert_eq!(doc["values"]["doom_threshold"], json!(d.doom_threshold));
+    }
+
+    #[test]
+    fn search_index_covers_every_def_with_tokens() {
+        let index = schema_search_index();
+        assert_eq!(index.len(), schema_defs().len(), "one entry per def");
+        assert_eq!(
+            index.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            known_keys().iter().map(|k| *k).collect::<Vec<_>>(),
+            "order mirrors schema_defs"
+        );
+        for (key, tokens) in &index {
+            assert!(tokens.len() >= 2, "{key} tokenizes to >= 2 terms");
+            assert!(tokens.iter().all(|t| !t.is_empty()), "{key} has no empty tokens");
+        }
+        // Known key: key tokens split on '_' plus the kind name.
+        let (_, max_rounds) = index.iter().find(|(k, _)| k == "max_tool_rounds").expect("known key present");
+        assert_eq!(max_rounds, &["max", "tool", "rounds", "u64"]);
     }
 }

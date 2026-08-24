@@ -109,6 +109,36 @@ impl SymbolTable {
     }
 }
 
+/// Aggregate stats over a [`SymbolTable`] (idx-011).
+#[derive(Debug, PartialEq)]
+pub struct SymbolTableStats {
+    /// Number of distinct indexed files.
+    pub files: usize,
+    /// Total number of indexed symbols.
+    pub symbols: usize,
+    /// Per-kind counts as `(snake_case_kind, count)`, sorted by count
+    /// descending; ties broken by kind name ascending for determinism.
+    pub by_kind: Vec<(String, usize)>,
+}
+
+/// Compute aggregate statistics over the whole table (idx-011).
+pub fn table_stats(table: &SymbolTable) -> SymbolTableStats {
+    let mut files = std::collections::HashSet::new();
+    let mut kinds: std::collections::BTreeMap<&str, usize> = Default::default();
+    for (hash, sym, _) in &table.entries {
+        files.insert(hash.as_str());
+        *kinds.entry(kind_snake(&sym.kind)).or_default() += 1;
+    }
+    let mut by_kind: Vec<(String, usize)> =
+        kinds.into_iter().map(|(k, n)| (k.to_string(), n)).collect();
+    by_kind.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    SymbolTableStats {
+        files: files.len(),
+        symbols: table.entries.len(),
+        by_kind,
+    }
+}
+
 fn walk(node: tree_sitter::Node, src: &str, out: &mut Vec<Symbol>) {
     use tree_sitter::Node;
     fn kind_of(node: Node) -> Option<SymbolKind> {
@@ -274,5 +304,44 @@ fn helper() {}
             first_id.as_str(),
             format!("deadbeef:{}:{}:0", first.name, kind_snake(&first.kind))
         );
+    }
+
+    #[test]
+    fn table_stats_empty_table_is_all_zeros() {
+        let stats = table_stats(&SymbolTable::default());
+        assert_eq!(stats.files, 0);
+        assert_eq!(stats.symbols, 0);
+        assert!(stats.by_kind.is_empty());
+    }
+
+    #[test]
+    fn table_stats_seeded_table_counts_exact() {
+        // h1: fn a, struct B, enum C — h2: trait D, fn e.
+        let mut table = SymbolTable::default();
+        table.add_file("h1", "fn a() {}\nstruct B;\nenum C {}");
+        table.add_file("h2", "trait D {}\nfn e() {}");
+        let stats = table_stats(&table);
+        assert_eq!(stats.files, 2);
+        assert_eq!(stats.symbols, 5);
+        assert_eq!(
+            stats.by_kind,
+            vec![
+                ("function".to_string(), 2),
+                ("enum".to_string(), 1),
+                ("struct".to_string(), 1),
+                ("trait".to_string(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn table_stats_by_kind_sorted_desc_then_name() {
+        let mut table = SymbolTable::default();
+        table.add_file("h", "fn f() {}\nfn g() {}\nfn h2() {}\nstruct S;");
+        let stats = table_stats(&table);
+        assert_eq!(stats.by_kind[0], ("function".to_string(), 3));
+        assert_eq!(stats.by_kind[1], ("struct".to_string(), 1));
+        // Equal counts would order by kind name; single-kind-per-count here
+        // keeps it simple. Ties covered by BTreeMap + name tiebreak in impl.
     }
 }

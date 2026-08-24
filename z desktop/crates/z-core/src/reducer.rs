@@ -441,6 +441,30 @@ pub fn never_compact_latest_user_invariant(path: &Path) -> Result<bool, String> 
     Ok(first_view == second_view && first_text == second_text)
 }
 
+/// ctx-014: per-thread `(message_text, ts_ms)` items in journal order —
+/// the session-layer data a context restore replays into a fresh context.
+/// Threads come back sorted by id; non-message records are ignored.
+pub fn load_session_items(path: &Path) -> Result<Vec<(String, Vec<(String, u128)>)>, String> {
+    let mut items: BTreeMap<String, Vec<(String, u128)>> = BTreeMap::new();
+    crate::reducer::fold(path, (), |(), record| {
+        if record.kind == JournalKind::MessagePersisted {
+            if let Some(thread_id) = &record.thread_id {
+                let text = record
+                    .payload
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                items
+                    .entry(thread_id.clone())
+                    .or_default()
+                    .push((text, record.ts_ms));
+            }
+        }
+    })?;
+    Ok(items.into_iter().collect())
+}
+
 /// orch-001: appends `task_state_changed` journal events; state is read back
 /// with [`TasksView::fold`]. Stateless by design — each call re-observes the
 /// tail sequence so separate calls keep one continuous seq stream (single-
@@ -1027,6 +1051,66 @@ pub(crate) mod reducer_tests {
             Journal::open(&dir, "main").expect("open");
         }
         assert!(never_compact_latest_user_invariant(&dir.join("main.jsonl")).expect("check"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ctx-014 ---------------------------------------------------------------
+
+    /// Like [`seed_record_at`] but with controlled thread id and message
+    /// text, so per-thread item lists can be asserted exactly.
+    fn seed_thread_message(dir: &Path, seq: u64, thread: &str, text: &str, ts_ms: u128) {
+        use std::io::Write as _;
+        let record = Record {
+            seq,
+            ts_ms,
+            kind: JournalKind::MessagePersisted,
+            thread_id: Some(thread.into()),
+            payload: json!({ "text": text }),
+        };
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("main.jsonl"))
+            .expect("open segment");
+        writeln!(f, "{}", serde_json::to_string(&record).expect("serialize")).expect("write");
+    }
+
+    #[test]
+    fn load_session_items_returns_exact_per_thread_lists_in_journal_order() {
+        let dir = temp_dir("ctx014-seeded");
+        seed_thread_message(&dir, 1, "tA", "a one", MSG_OLD_MS);
+        seed_thread_message(&dir, 2, "tB", "b one", MSG_OLD_MS + 1);
+        // Non-message kinds never become session items.
+        seed_record_at(&dir, 3, MSG_OLD_MS + 2, JournalKind::TurnStarted);
+        seed_thread_message(&dir, 4, "tA", "a two", MSG_NEW_MS);
+        assert_eq!(
+            load_session_items(&dir.join("main.jsonl")).expect("fold"),
+            vec![
+                (
+                    "tA".to_string(),
+                    vec![
+                        ("a one".to_string(), MSG_OLD_MS),
+                        ("a two".to_string(), MSG_NEW_MS),
+                    ]
+                ),
+                ("tB".to_string(), vec![("b one".to_string(), MSG_OLD_MS + 1)]),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_session_items_on_empty_journal_is_empty() {
+        let dir = temp_dir("ctx014-empty");
+        {
+            // Create the file with no records (drop flushes/closes it).
+            Journal::open(&dir, "main").expect("open");
+        }
+        assert!(
+            load_session_items(&dir.join("main.jsonl"))
+                .expect("fold")
+                .is_empty()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

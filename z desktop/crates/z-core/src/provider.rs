@@ -67,6 +67,12 @@ impl StreamOutcome {
 
 pub trait Provider: Send + Sync {
     fn describe(&self) -> String;
+    /// Configured model id — the capability-registry lookup key (prov-004).
+    /// Default keeps test mocks compiling as "unknown model" (registry
+    /// fallback: no tools); both real adapters override this.
+    fn model(&self) -> &str {
+        ""
+    }
     /// Run one streaming chat request. `on_item` receives deltas as they
     /// arrive; the full outcome is also returned for the conversation history.
     fn stream(
@@ -109,6 +115,10 @@ pub struct OpenAiProvider {
 impl Provider for OpenAiProvider {
     fn describe(&self) -> String {
         format!("openai-compatible · {} · {}", self.config.base_url, self.config.model)
+    }
+
+    fn model(&self) -> &str {
+        &self.config.model
     }
 
     fn stream(
@@ -232,6 +242,10 @@ pub struct AnthropicProvider {
 impl Provider for AnthropicProvider {
     fn describe(&self) -> String {
         format!("anthropic-compatible · {} · {}", self.config.base_url, self.config.model)
+    }
+
+    fn model(&self) -> &str {
+        &self.config.model
     }
 
     fn stream(

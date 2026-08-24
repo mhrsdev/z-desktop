@@ -12,6 +12,7 @@ pub mod memory;
 pub mod provider;
 pub mod redact;
 pub mod reducer;
+pub mod router;
 pub mod sandbox;
 pub mod tokens;
 pub mod repo;

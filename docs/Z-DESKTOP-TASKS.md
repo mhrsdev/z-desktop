@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 83 |
+| IMPLEMENTED | 84 |
 | PARTIAL | 2 |
-| PLANNED | 638 |
+| PLANNED | 637 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -810,7 +810,7 @@
 ### [PLANNED] prov-003 — Connection reuse tuning benchmarks
 - depends: —
 
-### [PLANNED] prov-004 — Model capability registry schema
+### [IMPLEMENTED] prov-004 — Model capability registry
 - depends: —
 
 ### [PLANNED] prov-005 — Router policy DSL parser

@@ -6,7 +6,7 @@
 
 use crate::journal::{Journal, JournalKind, Record, RecordDraft};
 use crate::reducer::{TaskStatus, TaskStore, TasksView, TASKS_SEGMENT};
-use crate::{provider, repo::RepoIndex, tools};
+use crate::{provider, repo::RepoIndex, router, tools};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
@@ -710,6 +710,16 @@ fn classify_provider_error(e: &str) -> RetryClass {
     }
 }
 
+/// prov-004/005 (ADR-0011 D2): capabilities of the currently configured
+/// model, read from the active provider slot. Nothing configured (or a mock
+/// without a model id) resolves to the conservative fallback caps.
+fn model_caps(shared: &Shared) -> router::Capabilities {
+    match shared.provider.lock().unwrap().as_ref() {
+        Some(p) => router::lookup(p.model()),
+        None => router::Capabilities::default(),
+    }
+}
+
 /// One full agent turn: stream → (tool calls → approve → execute)×N → done.
 fn run_turn(
     shared: Arc<Shared>,
@@ -773,6 +783,20 @@ fn run_turn(
         finish(false, Some("no project open — open a folder first".into()));
         return;
     };
+
+    // prov-005 (ADR-0011 D2): models whose registry entry lacks tool support
+    // run tool-less instead of failing mid-stream. build_request applies the
+    // gate every round; say it once here per turn.
+    if !model_caps(&shared).supports_tools {
+        let name = shared
+            .provider
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|p| p.model().to_string())
+            .unwrap_or_default();
+        log::warn!("model {name} lacks tool support; running without tools");
+    }
 
     // core-011/core-012 (ADR-0011): clone the settings Arc ONCE at turn start;
     // a concurrent SetSetting applies to the next turn, never mid-turn.
@@ -1454,8 +1478,17 @@ Active model: {label}",
         root.display()
     );
 
+    // prov-004/005 (ADR-0011 D2): capability gate — a model registered
+    // without tool support never sees tool definitions; attaching them would
+    // only teach it to hallucinate tool-call syntax mid-stream.
+    let tool_defs = if model_caps(shared).supports_tools {
+        tools::definitions()
+    } else {
+        Vec::new()
+    };
+
     // Budget: fixed parts first, then whatever room is left for history.
-    let tools_tokens: usize = tools::definitions()
+    let tools_tokens: usize = tool_defs
         .iter()
         .map(|t| {
             crate::tokens::estimate_tool_def(
@@ -1516,7 +1549,7 @@ Active model: {label}",
 
     provider::ChatRequest {
         messages,
-        tools: tools::definitions(),
+        tools: tool_defs,
         max_tokens: 8192,
     }
 }
@@ -1776,6 +1809,97 @@ mod budget_tests {
         let out = enforce_budget(msgs, 10_000);
         assert_eq!(out.len(), snapshot.len());
         assert!(out.iter().zip(snapshot.iter()).all(|(a, b)| a.text == b.text));
+    }
+}
+
+#[cfg(test)]
+mod capability_gate_tests {
+    use super::*;
+
+    fn shared_with(model: &str) -> Shared {
+        let mut shared = Shared {
+            provider: Mutex::new(None),
+            provider_label: Mutex::new(String::new()),
+            project_root: Mutex::new(None),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+        };
+        shared.provider =
+            Mutex::new(Some(Arc::new(provider::OpenAiProvider {
+                config: ProviderConfig {
+                    name: "t".into(),
+                    kind: z_protocol::ProviderKind::OpenAi,
+                    base_url: "http://localhost".into(),
+                    model: model.into(),
+                    api_key: String::new(),
+                },
+            }) as Arc<dyn provider::Provider>));
+        shared
+    }
+
+    #[test]
+    fn model_caps_reads_the_configured_model_from_the_slot() {
+        let caps = model_caps(&shared_with("GPT-4o"));
+        assert_eq!(caps.context_window, 128_000);
+        assert!(caps.supports_tools);
+
+        let caps = model_caps(&shared_with("claude-sonnet-4"));
+        assert_eq!(caps.context_window, 200_000);
+        assert!(caps.supports_tools);
+    }
+
+    #[test]
+    fn unregistered_or_missing_models_fall_back_conservatively() {
+        // Unknown model id.
+        assert!(!model_caps(&shared_with("offline-7b")).supports_tools);
+        // No provider configured at all.
+        let empty = Shared {
+            provider: Mutex::new(None),
+            provider_label: Mutex::new(String::new()),
+            project_root: Mutex::new(None),
+            index: Mutex::new(None),
+            gate: ApprovalGate::default(),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            steering: Mutex::new(HashMap::new()),
+            settings: Mutex::new(Arc::new(crate::settings::Snapshot::default())),
+            write_grants: Mutex::new(HashMap::new()),
+        };
+        let caps = model_caps(&empty);
+        assert!(!caps.supports_tools);
+        assert_eq!(caps, router::Capabilities::default());
+    }
+
+    /// The skip branch end-to-end: build_request must not attach tool
+    /// definitions for models whose registry entry lacks tool support.
+    struct NullProvider;
+    impl provider::Provider for NullProvider {
+        fn describe(&self) -> String {
+            "null".into()
+        }
+        fn stream(
+            &self,
+            _req: &provider::ChatRequest,
+            _on_item: &mut dyn FnMut(provider::StreamItem),
+        ) -> Result<provider::StreamOutcome, String> {
+            Ok(provider::StreamOutcome::default())
+        }
+    }
+
+    #[test]
+    fn build_request_skips_tools_for_unregistered_models() {
+        let thread =
+            Thread { id: "t".into(), title: "x".into(), messages: Vec::new(), updated_ms: 0 };
+        let root = std::path::Path::new("/");
+
+        let req = build_request(&NullProvider, &thread, &shared_with("offline-7b"), root);
+        assert!(req.tools.is_empty(), "tool-less model must not see tool defs");
+
+        let req = build_request(&NullProvider, &thread, &shared_with("gpt-4o"), root);
+        assert!(!req.tools.is_empty(), "tool-capable model keeps its tools");
     }
 }
 

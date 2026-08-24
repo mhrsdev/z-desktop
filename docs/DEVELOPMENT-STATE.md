@@ -6,6 +6,22 @@
 
 Last updated: 2026-08-23
 
+## prov-004/005 Capability Registry — 2026-08-23 COMPLETE
+
+1. ✅ **prov-004**: `z-core/src/router.rs` — Capabilities {context_window,
+   supports_tools} + Registry with seeded families (gpt-/claude-/o3/
+   o4-mini/llama) and conservative fallback; longest case-insensitive
+   prefix lookup. Provider trait gains additive model() accessor.
+2. ✅ **prov-005 (partial hook)**: build_request gates tool attachment on
+   capabilities — tool-less models get an empty tools list and a
+   warn-once-per-turn notice; token budget shrinks consistently.
+
+Verification: full workspace suite green — **436 tests, 0 failed**
+(429 → 436). Ledger: 86 IMPLEMENTED.
+
+Next work continues → prov-006 decision logging, core-023 delete
+tombstones, or sup-012..015 detectors.
+
 ## ui-040 Evidence Badges — 2026-08-23 COMPLETE
 
 1. ✅ **ui-040**: additive Command::GetEvidence {turn_id} → Event::

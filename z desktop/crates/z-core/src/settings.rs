@@ -280,6 +280,19 @@ pub fn known_keys() -> Vec<&'static str> {
     schema_defs().iter().map(|d| d.key).collect()
 }
 
+/// set-008: case-insensitive substring search over [`schema_defs`] keys, for
+/// a future settings search UI. Empty query ⇒ every def (schema order).
+pub fn search_defs(query: &str) -> Vec<&'static SettingDef> {
+    let q = query.to_lowercase();
+    if q.is_empty() {
+        return schema_defs().iter().collect();
+    }
+    schema_defs()
+        .iter()
+        .filter(|d| d.key.to_lowercase().contains(&q))
+        .collect()
+}
+
 /// set-006: each setting's documented default rendered as its string form
 /// (`"24"`, `"300"`, …), same order as [`schema_defs`]. For UIs and help text.
 pub fn defaults_map() -> Vec<(&'static str, String)> {
@@ -663,5 +676,48 @@ mod settings_tests {
         let mut s = Settings::default();
         assert_eq!(reset_to_default("future_key", &mut s), Ok(false));
         assert_eq!(s, Settings::default(), "nothing changed on unknown key");
+    }
+
+    // ---- set-008: settings search ----------------------------------------
+
+    #[test]
+    fn search_defs_matches_fragments_case_insensitively() {
+        let hits = search_defs("tool_round");
+        assert_eq!(hits.len(), 1, "fragment matches exactly one key");
+        assert_eq!(hits[0].key, "max_tool_rounds");
+        // Case insensitivity in both query and key casing.
+        assert_eq!(
+            search_defs("TOOL_ROUND")
+                .iter()
+                .map(|d| d.key)
+                .collect::<Vec<_>>(),
+            vec!["max_tool_rounds"],
+            "uppercase query still matches"
+        );
+        assert_eq!(
+            search_defs("Doom")
+                .iter()
+                .map(|d| d.key)
+                .collect::<Vec<_>>(),
+            vec!["doom_threshold"]
+        );
+    }
+
+    #[test]
+    fn search_defs_no_match_is_empty() {
+        assert!(search_defs("zzz_no_such_setting").is_empty());
+        // Substring must be contiguous — scattered letters don't match.
+        assert!(search_defs("maxrounds").is_empty());
+    }
+
+    #[test]
+    fn search_defs_empty_query_returns_all_defs() {
+        let all = search_defs("");
+        assert_eq!(all.len(), schema_defs().len(), "empty query ⇒ every def");
+        for (got, want) in all.iter().zip(schema_defs()) {
+            assert_eq!(got.key, want.key, "schema order preserved");
+        }
+        // Whitespace-only queries match nothing (keys have no spaces).
+        assert!(search_defs("   ").is_empty());
     }
 }

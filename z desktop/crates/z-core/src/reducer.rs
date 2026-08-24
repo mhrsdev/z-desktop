@@ -294,6 +294,40 @@ pub fn task_counts(view: &TasksView) -> (usize, usize, usize, usize) {
     counts
 }
 
+/// Newest `user`-role `MessagePersisted` record's `text`, via one full replay.
+/// Both payload shapes found in real journals are accepted (`role` from early
+/// seeds, `last_role` from the runtime's jour-024 recorder).
+fn last_user_message_text(path: &Path) -> Result<Option<String>, String> {
+    Ok(Journal::replay(path)?
+        .iter()
+        .rev()
+        .find(|r| {
+            r.kind == JournalKind::MessagePersisted
+                && ["role", "last_role"]
+                    .iter()
+                    .any(|k| r.payload.get(k).and_then(Value::as_str) == Some("user"))
+        })
+        .and_then(|r| r.payload.get("text"))
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
+/// ctx-013: runtime check of the never-compact-latest-user-message invariant.
+///
+/// Folds the segment into [`ThreadsView`] TWICE (two fully separate replays of
+/// the same bytes, same posture as [`fold_twice_equal`]) and additionally
+/// verifies the LAST user message's text survives both folds byte-identical:
+/// each round independently re-extracts the newest user-role
+/// `MessagePersisted` text while folding, and both extractions must match
+/// exactly. `Ok(true)` on an empty journal (vacuously holds).
+pub fn never_compact_latest_user_invariant(path: &Path) -> Result<bool, String> {
+    let first_view = ThreadsView::fold(path)?;
+    let first_text = last_user_message_text(path)?;
+    let second_view = ThreadsView::fold(path)?;
+    let second_text = last_user_message_text(path)?;
+    Ok(first_view == second_view && first_text == second_text)
+}
+
 /// orch-001: appends `task_state_changed` journal events; state is read back
 /// with [`TasksView::fold`]. Stateless by design — each call re-observes the
 /// tail sequence so separate calls keep one continuous seq stream (single-
@@ -775,6 +809,60 @@ pub(crate) mod reducer_tests {
         let view = TasksView::fold(&path).expect("fold");
         assert_eq!(task_counts(&view), (0, 0, 0, 0));
         assert!(fold_twice_equal(&path).expect("fold twice"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ctx-013 ---------------------------------------------------------------
+
+    #[test]
+    fn never_compact_invariant_holds_on_seeded_journal() {
+        let dir = temp_dir("ctx013-seeded");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"role": "user", "text": "first request"}),
+            );
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"role": "agent", "text": "answer one"}),
+            );
+            // Runtime-shaped payload (`last_role`) as the FINAL user message;
+            // a trailing agent reply must not displace it.
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"last_role": "user", "text": "final user ask — must survive"}),
+            );
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"role": "agent", "text": "trailing agent reply"}),
+            );
+        }
+        let path = dir.join("main.jsonl");
+        assert!(
+            never_compact_latest_user_invariant(&path).expect("invariant check"),
+            "latest user text must survive both folds byte-identical"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn never_compact_invariant_true_on_empty_journal() {
+        let dir = temp_dir("ctx013-empty");
+        {
+            // Create the file with no records (drop flushes/closes it).
+            Journal::open(&dir, "main").expect("open");
+        }
+        assert!(never_compact_latest_user_invariant(&dir.join("main.jsonl")).expect("check"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

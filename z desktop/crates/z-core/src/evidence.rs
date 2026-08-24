@@ -518,6 +518,13 @@ pub(crate) fn parse_exit_code(text: &str) -> Option<i32> {
     tail[..end].trim().parse().ok()
 }
 
+/// sup-024: whether the supervision verdict gate still applies to `turn_id`.
+/// Turns on the override list (persisted by sup-023, loaded by runtime's
+/// `load_overridden_turns`) skip gating; every other turn is effective.
+pub fn verdict_effective(overridden: &[String], turn_id: &str) -> bool {
+    !overridden.iter().any(|id| id == turn_id)
+}
+
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
@@ -1140,5 +1147,22 @@ mod evidence_tests {
         assert_eq!(trend(&[]), None);
         assert_eq!(trend(&[point(100)]), None);
         assert_eq!(trend(&[point(0), point(50)]), None);
+    }
+
+    // sup-024: overridden turns skip the verdict gate.
+    #[test]
+    fn overridden_turns_have_no_verdict_effect() {
+        let overridden = vec!["turn-a".to_string(), "turn-b".to_string()];
+        assert!(!verdict_effective(&overridden, "turn-a"), "overridden");
+        assert!(!verdict_effective(&overridden, "turn-b"), "overridden");
+        assert!(verdict_effective(&overridden, "turn-c"), "not listed");
+        // Exact match only — prefixes/substrings never count.
+        assert!(verdict_effective(&overridden, "turn-"));
+    }
+
+    #[test]
+    fn empty_override_list_is_always_effective() {
+        assert!(verdict_effective(&[], "turn-a"));
+        assert!(verdict_effective(&[], ""));
     }
 }

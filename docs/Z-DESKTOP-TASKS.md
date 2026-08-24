@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 142 |
+| IMPLEMENTED | 144 |
 | PARTIAL | 5 |
-| PLANNED | 576 |
+| PLANNED | 574 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -784,7 +784,7 @@
 ### [PLANNED] ctx-010 — Compaction journaling with token counts
 - depends: ctx-004, jour-001
 
-### [PLANNED] ctx-011 — Never-compact latest user message invariant test
+### [IMPLEMENTED] ctx-011 — Never-compact latest user message invariant test
 - depends: ctx-004
 
 ### [PLANNED] ctx-012 — Budget allocation unit tests
@@ -1600,7 +1600,7 @@
 ### [IMPLEMENTED] set-007 — Migration framework (versioned files)
 - depends: set-001
 
-### [PLANNED] set-008 — Search index over schema
+### [IMPLEMENTED] set-008 — Search index over schema
 - depends: set-002
 
 ### [PLANNED] set-009 — Settings pages UI (schema-rendered)

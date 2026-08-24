@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-24
 
+## Wave 15 (ctx-013 + set-008 + sup-024) — 2026-08-24 COMPLETE
+
+1. ✅ **ctx-013**: never_compact_latest_user_invariant runtime check —
+   the latest-user-message invariant as an executable assertion.
+2. ✅ **set-008**: search_defs() case-insensitive fragment search over
+   the schema (future settings UI data).
+3. ✅ **sup-024**: verdict_effective() pure helper over the override
+   list.
+
+Verification: full workspace suite green — **662 tests, 0 failed**
+(655 → 662). Ledger: 146 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 14 (ctx-015 + mem-020 + tok-012) — 2026-08-24 COMPLETE
 
 1. ✅ **ctx-015**: save/load_session_layer — Session-layer JSONL

@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 30 (jour-023 + ctx-020 + set-014) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-023**: seq_health — records/gaps/last_seq line.
+2. ✅ **ctx-020**: stale_report — items/stale/pct line.
+3. ✅ **set-014**: validate_all — schema-wide validation sweep.
+
+Verification: full workspace suite green — **765 tests, 0 failed**
+(759 → 765). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 29 (jour-024 + mem-024 + term-019) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-024**: journal_size_report — records/bytes/pct-of-cap line.

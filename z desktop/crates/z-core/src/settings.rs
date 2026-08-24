@@ -472,6 +472,27 @@ pub fn remap_check(key: &str, new_value: f64) -> Result<f64, String> {
     validate(key, new_value).map(|()| new_value)
 }
 
+/// set-014: validate every schema key against its live value in `current`,
+/// collecting one human message per failing key in schema order; an empty
+/// vec means all settings are within their documented bounds. Reuses
+/// [`validate`] so bounds can never drift from the command path.
+pub fn validate_all(current: &Settings) -> Vec<String> {
+    schema_defs()
+        .iter()
+        .filter_map(|def| {
+            // ponytail: match-on-key like diff_from_default; serde-serialize
+            // round-trip would be slower and no less repetitive.
+            let value = match def.key {
+                "max_tool_rounds" => current.max_tool_rounds as f64,
+                "approval_timeout_secs" => current.approval_timeout_secs as f64,
+                "doom_threshold" => current.doom_threshold as f64,
+                _ => return None,
+            };
+            validate(def.key, value).err()
+        })
+        .collect()
+}
+
 /// set-005: restore one key's documented default into `current` via [`apply`],
 /// so resets can never drift from the command path's validation. Returns
 /// Ok(false) for unknown keys (nothing to reset); Err only on internal
@@ -881,6 +902,35 @@ mod settings_tests {
         let err = remap_check("nope", 5.0).unwrap_err();
         assert!(err.contains("unknown setting"), "got: {err}");
         assert!(err.contains("nope"), "error names the bad key: {err}");
+    }
+
+    // ---- set-014: validate all ---------------------------------------------
+
+    #[test]
+    fn validate_all_defaults_pass_with_no_messages() {
+        assert!(validate_all(&Settings::default()).is_empty(), "defaults are valid");
+    }
+
+    #[test]
+    fn validate_all_reports_one_message_per_broken_field() {
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 3601;
+        let msgs = validate_all(&s);
+        assert_eq!(msgs.len(), 1, "exactly one message for one bad field");
+        assert!(
+            msgs[0].contains("approval_timeout_secs"),
+            "message names the key: {:?}",
+            msgs[0]
+        );
+        // All three broken at once => three messages in schema order.
+        let all_bad = Settings { max_tool_rounds: 0, approval_timeout_secs: 4, doom_threshold: 11 };
+        let msgs = validate_all(&all_bad);
+        assert_eq!(msgs.len(), 3, "one message per broken field: {msgs:?}");
+        assert_eq!(
+            msgs.iter().map(|m| m.split(' ').next().unwrap()).collect::<Vec<_>>(),
+            known_keys(),
+            "messages come in schema order"
+        );
     }
 
     // ---- set-008 (ext): schema JSON export -------------------------------

@@ -436,6 +436,19 @@ pub fn budget_report(items: &[ContextItem], budget_tokens: usize) -> String {
     )
 }
 
+/// ctx-020: one-line staleness summary for the inspector.
+/// "{n} items, {stale} stale ({pct}%)". `now_ms` reserved for future
+/// time-based staleness; current staleness is the ctx-007 flag only. Pure.
+pub fn stale_report(items: &[ContextItem], _now_ms: u128) -> String {
+    let stale = items.iter().filter(|i| i.stale).count();
+    let pct = if items.is_empty() {
+        0
+    } else {
+        stale * 100 / items.len()
+    };
+    format!("{} items, {} stale ({}%)", items.len(), stale, pct)
+}
+
 /// ctx-019: per-layer item counts in enum order (prefix, session, turn,
 /// ephemeral), zero-count layers skipped. Pure inspector helper.
 pub fn items_by_layer(items: &[ContextItem]) -> Vec<(Layer, usize)> {
@@ -1112,5 +1125,23 @@ mod tests {
             item(Layer::Ephemeral, "f", 1),
         ];
         assert_eq!(items_by_layer(&items), vec![(Layer::Ephemeral, 2)]);
+    }
+
+    #[test]
+    fn stale_report_seeded_counts_flagged_items_exactly() {
+        let items = vec![
+            item(Layer::Session, "a", 1),
+            item(Layer::Ephemeral, "b", 1),
+            item(Layer::Ephemeral, "c", 1),
+        ];
+        let mut flagged = items;
+        flagged[1].stale = true;
+        flagged[2].stale = true;
+        assert_eq!(stale_report(&flagged, 0), "3 items, 2 stale (66%)");
+    }
+
+    #[test]
+    fn stale_report_empty_is_zeros() {
+        assert_eq!(stale_report(&[], 0), "0 items, 0 stale (0%)");
     }
 }

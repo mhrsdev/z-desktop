@@ -183,6 +183,18 @@ pub fn journal_size_report(path: &Path) -> Result<String, String> {
     Ok(format!("{records} records, {bytes} bytes ({pct}% of 10MB cap)"))
 }
 
+/// jour-023: one-line journal health report — record count, summed sequence
+/// gaps, and last seq, all via [`lag_stats`] over the replayed segment.
+pub fn seq_health(path: &Path) -> Result<String, String> {
+    let stats = lag_stats(&Journal::replay(path)?);
+    Ok(format!(
+        "{} records, {} gaps, last_seq {}",
+        stats.records,
+        stats.gaps,
+        stats.last_seq.map_or_else(|| "?".to_string(), |s| s.to_string())
+    ))
+}
+
 /// jour-017: generates a synthetic, deterministic journal segment at `path`.
 ///
 /// Each of `turns` turns contributes one `turn_started` record followed by
@@ -1690,6 +1702,47 @@ pub(crate) mod reducer_tests {
     fn journal_size_report_missing_file_is_err() {
         let dir = temp_dir("jour-024-missing");
         assert!(journal_size_report(&dir.join("nope.jsonl")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn seq_health_clean_journal_reports_zero_gaps() {
+        let dir = temp_dir("jour-023");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        assert_eq!(
+            seq_health(&dir.join("main.jsonl")).expect("report"),
+            "3 records, 0 gaps, last_seq 3"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn seq_health_gapped_fixture_counts_missing_seqs() {
+        let dir = temp_dir("jour-023-gapped");
+        let path = dir.join("main.jsonl");
+        // Hand-written records with a seq jump 2 -> 5 (seqs 3, 4 missing).
+        let lines = [1u64, 2, 5]
+            .map(|seq| {
+                serde_json::to_string(&Record {
+                    seq,
+                    ts_ms: 1_770_000_000_000,
+                    kind: JournalKind::TurnStarted,
+                    thread_id: None,
+                    payload: json!({}),
+                })
+                .expect("serialize")
+            })
+            .join("\n");
+        std::fs::write(&path, lines).expect("write fixture");
+        assert_eq!(
+            seq_health(&path).expect("report"),
+            "3 records, 2 gaps, last_seq 5"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

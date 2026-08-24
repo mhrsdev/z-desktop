@@ -108,6 +108,23 @@ pub fn worst_sample(samples: &[AccuracySample]) -> Option<(&str, f32)> {
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
 }
 
+/// One-line human summary of estimator accuracy: overall MAPE plus the worst
+/// sample (first 30 chars) and its error.
+pub fn estimate_accuracy_report(samples: &[(String, u32)]) -> String {
+    let owned: Vec<AccuracySample> = samples
+        .iter()
+        .map(|(text, tokens)| AccuracySample { text: text.clone(), actual_tokens: *tokens })
+        .collect();
+    let Some(mape) = estimator_error(&owned) else {
+        return "no samples".to_string();
+    };
+    // Same zero-filter as estimator_error, so a Some here implies a worst exists.
+    let (worst_text, worst_err) =
+        worst_sample(&owned).expect("usable samples imply a worst sample");
+    let head: String = worst_text.chars().take(30).collect();
+    format!("estimator MAPE {mape:.1}% (worst: {head}… {worst_err:.1}%)")
+}
+
 /// Budget verdict for a would-be request.
 #[derive(Debug, PartialEq)]
 pub enum Budget {
@@ -314,5 +331,23 @@ mod tests {
         let (text, err) = worst_sample(&samples).unwrap();
         assert_eq!(text, "hello world");
         assert!((err - 75.0).abs() < 1e-4, "got {err}");
+    }
+
+    #[test]
+    fn accuracy_report_with_samples_contains_mape_and_worst() {
+        // Same known errors as above: MAPE 62.5%, worst sample error 75%.
+        let samples = vec![
+            ("hello world".to_string(), 12u32),
+            ("hello world".to_string(), 6),
+        ];
+        let report = estimate_accuracy_report(&samples);
+        assert!(report.contains("62.5"), "got {report}");
+        assert!(report.contains("75.0"), "got {report}");
+        assert!(report.contains("worst: hello world"), "got {report}");
+    }
+
+    #[test]
+    fn accuracy_report_empty_says_no_samples() {
+        assert_eq!(estimate_accuracy_report(&[]), "no samples");
     }
 }

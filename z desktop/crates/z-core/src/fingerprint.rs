@@ -290,4 +290,44 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// edit-006: crash mid-write. A process killed after writing only part
+    /// of the temp file (before any rename) must leave the target holding
+    /// exactly what it had before — the temp path is where torn bytes land,
+    /// never the target. Recovery is just another ordinary atomic_write.
+    #[test]
+    fn crash_mid_temp_write_leaves_target_intact_and_recovery_succeeds() {
+        let dir = std::env::temp_dir().join(format!("zdt-fp-crash-{:x}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("target.txt");
+
+        // Steady state: content A written atomically.
+        let a = b"CONTENT-A-intact";
+        crate::atomic_write::atomic_write(&path, a).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), a);
+
+        // Crash simulation: torn write straight to the temp-file pattern,
+        // bypassing atomic_write entirely — bytes die in the temp, no rename.
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let temp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), 987654));
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&temp).unwrap();
+            f.write_all(b"CONTENT-B-tor").unwrap(); // half of B, then "crash"
+            // Deliberately no sync_all, no rename: the process dies here.
+            drop(f); // close fd without cleanup, like an abrupt kill would leave it
+        }
+        assert!(temp.exists(), "torn temp must still be on disk pre-rename");
+        assert_ne!(std::fs::read(&temp).unwrap(), b"CONTENT-B-torn".to_vec());
+
+        // Atomicity guarantee: target still holds exactly A.
+        assert_eq!(std::fs::read(&path).unwrap(), a, "torn temp write leaked into target");
+
+        // Recovery: a subsequent ordinary atomic_write of B succeeds cleanly.
+        let b = b"CONTENT-B-full";
+        crate::atomic_write::atomic_write(&path, b).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

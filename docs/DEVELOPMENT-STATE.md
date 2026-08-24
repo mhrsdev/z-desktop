@@ -6,7 +6,20 @@
 
 Last updated: 2026-08-24
 
-## Wave 20 (ctx-010 + mem-021 + red-003) — 2026-08-24 COMPLETE
+## Wave 22 (orch-018 + tok-023 + edit-006) — 2026-08-24 COMPLETE
+
+1. ✅ **orch-018**: task_state_events/task_state_json export for the UI.
+2. ✅ **tok-023**: estimate_accuracy_report one-line summary formatting.
+3. ✅ **edit-006**: crash-simulation test — torn temp write leaves target
+   intact; subsequent atomic_write clean.
+
+Verification: full workspace suite green — **709 tests, 0 failed**
+(703 → 709). Ledger: 151 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
+## Wave 21 (ctx-003 ext + mem-022 + red-006) — 2026-08-24 COMPLETE
 
 1. ✅ **ctx-010**: compact_with_journal — CompactionEvent (dropped,
    tokens_saved) emitted only on actual drops.

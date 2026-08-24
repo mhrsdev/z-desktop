@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 148 |
+| IMPLEMENTED | 149 |
 | PARTIAL | 6 |
-| PLANNED | 569 |
+| PLANNED | 568 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -384,7 +384,7 @@
 ### [IMPLEMENTED] edit-005 — fs_write routes through atomic helper
 - depends: edit-004
 
-### [PLANNED] edit-006 — Crash-simulation test for atomic writes
+### [IMPLEMENTED] edit-006 — Crash-simulation test for atomic writes
 - depends: edit-004
 
 ### [PLANNED] edit-007 — Concurrent-reader sees old-or-new test

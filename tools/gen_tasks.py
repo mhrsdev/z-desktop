@@ -139,7 +139,7 @@ DOMAINS = [
         ("003", "Stale-write refusal (ZD-E-0060)", ["002"], "IMPLEMENTED"),
         ("004", "Atomic write helper (temp+rename+fsync)", [], "IMPLEMENTED"),
         ("005", "fs_write routes through atomic helper", ["004"], "IMPLEMENTED"),
-        ("006", "Crash-simulation test for atomic writes", ["004"], "PLANNED"),
+        ("006", "Crash-simulation test for atomic writes", ["004"], "IMPLEMENTED"),
         ("007", "Concurrent-reader sees old-or-new test", ["004"], "PLANNED"),
         ("008", "edit_patch tool definition + schema", ["003"], "IMPLEMENTED"),
         ("009", "Patch block exact-match application", ["008"], "IMPLEMENTED"),

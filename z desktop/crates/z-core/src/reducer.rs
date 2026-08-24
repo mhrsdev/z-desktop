@@ -380,6 +380,33 @@ pub fn task_counts(view: &TasksView) -> (usize, usize, usize, usize) {
     counts
 }
 
+/// orch-018: every task's current status as `(id, status)` sorted by id, for
+/// UI/state export. Status strings use the journal's snake_case spelling.
+pub fn task_state_events(view: &TasksView) -> Vec<(String, String)> {
+    let mut events: Vec<(String, String)> = view
+        .tasks
+        .values()
+        .map(|t| {
+            let status = serde_json::to_value(&t.status)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            (t.id.clone(), status)
+        })
+        .collect();
+    events.sort_by(|a, b| a.0.cmp(&b.0));
+    events
+}
+
+/// orch-018: pretty-printed JSON array of `{id, status}` for the UI.
+pub fn task_state_json(view: &TasksView) -> String {
+    let items: Vec<Value> = task_state_events(view)
+        .into_iter()
+        .map(|(id, status)| serde_json::json!({ "id": id, "status": status }))
+        .collect();
+    serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".into())
+}
+
 /// Newest `user`-role `MessagePersisted` record's `text`, via one full replay.
 /// Both payload shapes found in real journals are accepted (`role` from early
 /// seeds, `last_role` from the runtime's jour-024 recorder).
@@ -570,6 +597,57 @@ pub(crate) mod reducer_tests {
         assert_eq!(view.tasks["a"].status, TaskStatus::Running);
         assert_eq!(view.tasks["b"].status, TaskStatus::Failed);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_state_events_lists_every_task_sorted_by_id() {
+        let mut view = TasksView::default();
+        for (id, status) in [
+            ("b", TaskStatus::Done),
+            ("a", TaskStatus::Running),
+            ("c", TaskStatus::Failed),
+        ] {
+            view.tasks.insert(
+                id.into(),
+                TaskRecord {
+                    id: id.into(),
+                    status,
+                    deps: vec![],
+                },
+            );
+        }
+        assert_eq!(
+            task_state_events(&view),
+            vec![
+                ("a".to_string(), "running".to_string()),
+                ("b".to_string(), "done".to_string()),
+                ("c".to_string(), "failed".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn task_state_export_of_empty_view_is_empty_and_bare_array() {
+        let view = TasksView::default();
+        assert!(task_state_events(&view).is_empty());
+        assert_eq!(task_state_json(&view), "[]");
+    }
+
+    #[test]
+    fn task_state_json_is_pretty_and_parses_back() {
+        let mut view = TasksView::default();
+        view.tasks.insert(
+            "t-1".into(),
+            TaskRecord {
+                id: "t-1".into(),
+                status: TaskStatus::Pending,
+                deps: vec![],
+            },
+        );
+        let text = task_state_json(&view);
+        assert!(text.contains('\n'), "pretty-printed");
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&text).expect("parses");
+        assert_eq!(parsed, vec![json!({ "id": "t-1", "status": "pending" })]);
     }
 
     #[test]

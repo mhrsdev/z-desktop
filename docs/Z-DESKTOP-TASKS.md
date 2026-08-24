@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 103 |
+| IMPLEMENTED | 104 |
 | PARTIAL | 2 |
-| PLANNED | 618 |
+| PLANNED | 617 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -583,7 +583,7 @@
 ### [IMPLEMENTED] sup-015 — mock-in-prod detector
 - depends: sup-004
 
-### [PLANNED] sup-016 — requirement-skew detector
+### [IMPLEMENTED] sup-016 — requirement-skew detector
 - depends: sup-004
 
 ### [IMPLEMENTED] sup-017 — User appeal/override flow (journaled)

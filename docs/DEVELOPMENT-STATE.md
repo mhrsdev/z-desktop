@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## sup-016 Requirement-Skew Detector — 2026-08-23 COMPLETE
+
+1. ✅ **sup-016**: detect_requirement_skew — extracts quoted strings and
+   ALL-CAPS tokens (>=4 chars) from the request; fires warn-only when any
+   demanded token is absent from the delivered text. run_turn compares
+   final user request vs agent response.
+
+Verification: full workspace suite green — **478 tests, 0 failed**
+(474 → 478). Ledger: 106 IMPLEMENTED.
+
+Next work continues → prov-007 fallback chain, sup-020 scripted dishonest-
+agent integration test, or jour-009 usage-stats reducer.
+
 ## jour-012 Deterministic Replay Proof — 2026-08-23 COMPLETE
 
 1. ✅ **jour-012**: double-replay equality tests for ThreadsView,

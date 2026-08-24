@@ -267,6 +267,40 @@ pub fn detect_mock_in_prod(new_text: &str) -> bool {
     scan_markers(new_text, &MARKERS)
 }
 
+/// sup-016: requirement-skew detector. Fires when the request pinned an exact
+/// item — a quoted string (`"..."`) or an ALL-CAPS word of >=4 chars — that
+/// never appears in the delivered text. ponytail: bare substring containment,
+/// no stemming/synonyms/paraphrase handling (tripwire, not verdict).
+pub fn detect_requirement_skew(requested: &str, delivered: &str) -> bool {
+    let lower_delivered = delivered.to_lowercase();
+    let mut demanded: Vec<String> = Vec::new();
+    // Quoted strings, consumed pairwise left-to-right.
+    let mut rest = requested;
+    while let Some(open) = rest.find('"') {
+        let inner = &rest[open + 1..];
+        match inner.find('"') {
+            Some(close) => {
+                if !inner[..close].trim().is_empty() {
+                    demanded.push(inner[..close].to_lowercase());
+                }
+                rest = &inner[close + 1..];
+            }
+            None => break,
+        }
+    }
+    // ALL-CAPS runs of >=4 chars (digits/punctuation act as separators, so
+    // "MUST," and "(EXACT)" qualify but "Api"/"ALL4" never do).
+    demanded.extend(
+        requested
+            .split(|c: char| !c.is_ascii_uppercase())
+            .filter(|token| token.len() >= 4)
+            .map(|token| token.to_lowercase()),
+    );
+    demanded
+        .iter()
+        .any(|token| !lower_delivered.contains(token))
+}
+
 /// Case-insensitive any-marker match at identifier boundaries: neither side
 /// may glue to `[A-Za-z0-9_]`, except prefix-style markers (trailing `_`,
 /// e.g. `fake_`) which only need a clean left edge (`fake_data` yes,
@@ -641,6 +675,44 @@ mod evidence_tests {
         );
         assert!(!detect_mock_in_prod("fn real_response() {}"));
         assert!(!detect_mock_in_prod(""));
+    }
+
+    #[test]
+    fn requirement_skew_fires_on_missing_quoted_token() {
+        assert!(detect_requirement_skew(
+            "must include \"dark mode\" support",
+            "we added light mode only"
+        ));
+    }
+
+    #[test]
+    fn requirement_skew_quiet_when_all_quoted_tokens_present() {
+        assert!(!detect_requirement_skew(
+            "must include \"dark mode\" and \"sync\" exactly",
+            "Dark Mode was added, sync included."
+        ));
+    }
+
+    #[test]
+    fn requirement_skew_quiet_without_any_exact_tokens() {
+        assert!(!detect_requirement_skew(
+            "please make it nicer please",
+            "done, it is nicer now"
+        ));
+        assert!(!detect_requirement_skew("", ""));
+    }
+
+    #[test]
+    fn requirement_skew_fires_on_missing_caps_word() {
+        assert!(detect_requirement_skew(
+            "output must be JSON only",
+            "here is some yaml instead"
+        ));
+        // Present caps word stays quiet; short acronyms (<4 chars) never count.
+        assert!(!detect_requirement_skew(
+            "emit JSON output via API",
+            "the JSON output follows"
+        ));
     }
 
     #[test]

@@ -208,7 +208,7 @@ DOMAINS = [
         ("013", "premature-stop detector (checklist coverage)", ["006"], "IMPLEMENTED"),
         ("014", "placeholder-code detector (diff scan)", ["004"], "IMPLEMENTED"),
         ("015", "mock-in-prod detector", ["004"], "IMPLEMENTED"),
-        ("016", "requirement-skew detector", ["004"], "PLANNED"),
+        ("016", "requirement-skew detector", ["004"], "IMPLEMENTED"),
         ("017", "User appeal/override flow (journaled)", ["007"], "IMPLEMENTED"),
         ("018", "Evidence badges in conversation view", ["ui-040"], "IMPLEMENTED"),
         ("019", "Evidence drill-down viewer", ["018"], "PLANNED"),

@@ -1171,6 +1171,22 @@ fn run_turn(
                     Err(err) => log::warn!("supervision: evidence fold failed: {err}"),
                 }
             }
+            // sup-016: requirement-skew detector over the user's final request
+            // vs the agent's final response. Warn-only, like every other
+            // observability detector — never gates.
+            if !outcome.text.trim().is_empty() {
+                if let Some(requested) = thread
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == z_protocol::Role::User)
+                    .map(|m| m.text.as_str())
+                {
+                    if crate::evidence::detect_requirement_skew(requested, &outcome.text) {
+                        log::warn!("supervision: requirement-skew detected in turn {turn_id}");
+                    }
+                }
+            }
             if let Some(reason) = blocked_reason {
                 // §8.4: supervision may fail a turn but never edits its output
                 // — persist the claimed text verbatim, then fail via the

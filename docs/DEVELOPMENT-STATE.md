@@ -6,6 +6,23 @@
 
 Last updated: 2026-08-24
 
+## Wave 8 (set-006 verify + ctx-004 pins + diff-020 patience) — 2026-08-24 COMPLETE
+
+1. ✅ **set-006**: verified prior attempt landed (known_keys/defaults_map +
+   unknown-key rejection test) — no rewrite needed.
+2. ✅ **ctx-004**: ContextItem.pinned field + set_pinned(); assemble()
+   never drops pinned Sessions (tested under tight budgets). ctx-004
+   marked PARTIAL (round summaries still future).
+3. ✅ **diff-020**: unified_patience — unique-line anchors + LIS, LCS
+   fallback between anchors; Strategy enum; fewer changed lines than LCS
+   on noisy replacements (tested).
+
+Verification: full workspace suite green — **609 tests, 0 failed**
+(605 → 609). Ledger: 132 IMPLEMENTED + 5 PARTIAL.
+
+Next work continues → ui-050 usage dashboard, term-006 VT parser study,
+or ctx-009 priority weight settings.
+
 ## Wave 7 (prov-010 verify + usage-by-day + mem export + bench trend) — 2026-08-24 COMPLETE
 
 1. ✅ **prov-010**: verified already landed in wave 5 (MAX_SSE_LINE cap

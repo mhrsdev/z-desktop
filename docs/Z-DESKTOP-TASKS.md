@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 129 |
-| PARTIAL | 4 |
-| PLANNED | 590 |
+| IMPLEMENTED | 130 |
+| PARTIAL | 5 |
+| PLANNED | 588 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -426,7 +426,7 @@
 ### [IMPLEMENTED] edit-019 — Diff generation (histogram algorithm)
 - depends: —
 
-### [PLANNED] edit-020 — Patience fallback for noisy files
+### [IMPLEMENTED] edit-020 — Patience fallback for noisy files
 - depends: edit-019
 
 ### [PLANNED] edit-021 — Binary file diff placeholder
@@ -763,7 +763,7 @@
 ### [IMPLEMENTED] ctx-003 — Compaction trigger integration
 - depends: ctx-001
 
-### [PLANNED] ctx-004 — Compaction procedure (pinned facts + round summaries)
+### [PARTIAL] ctx-004 — Compaction procedure (pinned facts + round summaries)
 - depends: ctx-003
 
 ### [PLANNED] ctx-005 — Idempotent compaction per span

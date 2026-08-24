@@ -229,8 +229,36 @@ pub fn schema_defs() -> &'static [SettingDef] {
     &DEFS
 }
 
-/// Validate a numeric value against the schema bounds for `key`. Unknown keys
-/// and out-of-range values are rejected with a human message; nothing mutates.
+/// set-006: every key this version understands, derived from [`schema_defs`].
+/// Single source of truth for command-path spelling checks.
+pub fn known_keys() -> Vec<&'static str> {
+    schema_defs().iter().map(|d| d.key).collect()
+}
+
+/// set-006: each setting's documented default rendered as its string form
+/// (`"24"`, `"300"`, …), same order as [`schema_defs`]. For UIs and help text.
+pub fn defaults_map() -> Vec<(&'static str, String)> {
+    schema_defs()
+        .iter()
+        .map(|d| {
+            let rendered = match d.default {
+                SettingDefault::U64(v) => v.to_string(),
+                SettingDefault::F32(v) => v.to_string(),
+                SettingDefault::Bool(v) => v.to_string(),
+                SettingDefault::String(v) => v.to_string(),
+            };
+            (d.key, rendered)
+        })
+        .collect()
+}
+
+/// Validate a numeric value against the schema bounds for `key`. The unknown-
+/// key path never silently ignores: an unrecognized key is rejected with an
+/// "unknown setting \\"key\\"" message so hand-edited typos surface instead of
+/// being dropped (set-006: callers can check spelling against [`known_keys`]).
+/// Out-of-range values are likewise rejected with a human message; nothing
+/// mutates. This mirrors `apply`'s unknown-key handling: reject + report,
+/// keeping the previous value (keep+warn at the command layer).
 pub fn validate(key: &str, value: f64) -> Result<(), String> {
     let Some(def) = schema_defs().iter().find(|d| d.key == key) else {
         return Err(format!("unknown setting \"{key}\""));
@@ -446,6 +474,48 @@ mod settings_tests {
                     def.key
                 );
             }
+        }
+    }
+
+    // ---- set-006: unknown-key keep+warn + defaults map -------------------
+
+    #[test]
+    fn apply_unknown_key_is_err_and_keeps_settings_unchanged() {
+        let base = Settings { max_tool_rounds: 42, approval_timeout_secs: 60, doom_threshold: 5 };
+        let res = apply(&base, "future_key", &json!(7));
+        assert!(res.is_err(), "unknown SetSetting key => Err");
+        let err = res.unwrap_err();
+        assert!(err.contains("unknown setting"), "warn text names the problem: {err}");
+        assert!(err.contains("future_key"), "error names the bad key: {err}");
+        // keep: nothing about `base` changed by the rejected attempt.
+        assert_eq!(base.max_tool_rounds, 42);
+        assert_eq!(base.approval_timeout_secs, 60);
+        assert_eq!(base.doom_threshold, 5);
+    }
+
+    #[test]
+    fn known_keys_covers_every_schema_def() {
+        let keys = known_keys();
+        assert_eq!(keys.len(), schema_defs().len(), "one known key per def");
+        for def in schema_defs() {
+            assert!(keys.contains(&def.key), "{} missing from known_keys", def.key);
+        }
+        assert!(!keys.contains(&"nope"), "unknown keys stay unknown");
+    }
+
+    #[test]
+    fn defaults_map_matches_settings_default() {
+        let d = Settings::default();
+        let map = defaults_map();
+        assert_eq!(map.len(), schema_defs().len());
+        for (key, rendered) in map {
+            let expected = match key {
+                "max_tool_rounds" => d.max_tool_rounds.to_string(),
+                "approval_timeout_secs" => d.approval_timeout_secs.to_string(),
+                "doom_threshold" => d.doom_threshold.to_string(),
+                other => panic!("unexpected key {other}"),
+            };
+            assert_eq!(rendered, expected, "{key} default parity with Settings::default()");
         }
     }
 }

@@ -33,14 +33,16 @@ pub struct ContextItem {
     /// Ephemeral items are the FIRST thing assemble drops. Defaults false;
     /// nothing serializes ContextItem today, so no #[serde(default)] needed.
     pub stale: bool,
+    /// ctx-004: pinned Session items are never drop candidates in assemble.
+    pub pinned: bool,
 }
 
 /// Pure allocation walk (ADR-0013 D2/D3, ctx-002): keep items in the given
 /// order; if their total exceeds `budget`, drop stale Ephemeral first, then
 /// remaining Ephemeral, then oldest Turn items, then oldest Session items —
 /// never Prefix, never the last Session item (the live user message; its
-/// result must survive). Returns kept items; total fits whenever prefix +
-/// pin alone do.
+/// result must survive), never a ctx-004 pinned item. Returns kept items;
+/// total fits whenever prefix + pin alone do.
 pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Vec<ContextItem> {
     let mut total: usize = items.iter().map(|i| i.est_tokens).sum();
     if total <= budget {
@@ -49,7 +51,7 @@ pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Vec<ContextItem> {
     // ponytail: "last USER session message" ≈ last Session item — ContextItem
     // carries no role field yet; refine at build_request integration when the
     // mapping knows roles.
-    let pinned = items.iter().rposition(|i| i.layer == Layer::Session);
+    let last_session = items.iter().rposition(|i| i.layer == Layer::Session);
     let mut dropped = vec![false; items.len()];
     for (layer, only_stale) in [
         (Layer::Ephemeral, true),
@@ -61,7 +63,11 @@ pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Vec<ContextItem> {
             if total <= budget {
                 break;
             }
-            if item.layer == layer && item.stale == only_stale && Some(idx) != pinned {
+            if item.layer == layer
+                && item.stale == only_stale
+                && Some(idx) != last_session
+                && !item.pinned
+            {
                 dropped[idx] = true;
                 total = total.saturating_sub(item.est_tokens);
             }
@@ -98,6 +104,20 @@ pub fn demote_if_stale(items: Vec<ContextItem>, stale_paths: &[String]) -> Vec<C
         .collect()
 }
 
+/// ctx-004: set `pinned` on every item matching `predicate`. Pure toggle —
+/// pinned Session items survive any [`assemble`] budget.
+pub fn set_pinned(
+    items: &mut [ContextItem],
+    predicate: impl Fn(&ContextItem) -> bool,
+    pinned: bool,
+) {
+    for item in items.iter_mut() {
+        if predicate(item) {
+            item.pinned = pinned;
+        }
+    }
+}
+
 /// mem-009 (ADR-0014): appends ranked memories as Turn-layer items
 /// ("[memory] {content}") while the cumulative added estimate stays within
 /// `budget_tokens`; ranked order means the first overflow ends injection.
@@ -120,6 +140,7 @@ pub fn inject_memories(
             text,
             est_tokens,
             stale: false,
+            pinned: false,
         });
     }
 }
@@ -220,7 +241,13 @@ mod tests {
     use super::*;
 
     fn item(layer: Layer, text: &str, est_tokens: usize) -> ContextItem {
-        ContextItem { layer, text: text.into(), est_tokens, stale: false }
+        ContextItem {
+            layer,
+            text: text.into(),
+            est_tokens,
+            stale: false,
+            pinned: false,
+        }
     }
 
     #[test]
@@ -387,12 +414,14 @@ mod tests {
                 text: "fresh dump".into(),
                 est_tokens: 10,
                 stale: false,
+                pinned: false,
             },
             ContextItem {
                 layer: Layer::Ephemeral,
                 text: "stale dump".into(),
                 est_tokens: 10,
                 stale: true,
+                pinned: false,
             },
         ];
         // Total 45; budget fits all but one ephemeral — the STALE one goes.
@@ -421,12 +450,14 @@ mod tests {
                 text: "dump".into(),
                 est_tokens: 4,
                 stale: true,
+                pinned: false,
             },
             ContextItem {
                 layer: Layer::Ephemeral,
                 text: "fresh dump".into(),
                 est_tokens: 6,
                 stale: false,
+                pinned: false,
             },
         ];
         let s = stats(&items);
@@ -488,5 +519,53 @@ mod tests {
     #[test]
     fn preview_on_empty_input_is_empty() {
         assert_eq!(preview(&[], 80), "");
+    }
+
+    #[test]
+    fn pinned_session_survives_budget_that_drops_unpinned_ones() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 5),
+            item(Layer::Session, "keep me", 100),
+            item(Layer::Session, "oldest", 100),
+            item(Layer::Session, "latest", 100),
+        ];
+        set_pinned(&mut items, |i| i.text == "keep me", true);
+        // Budget fits prefix + only one session; the unpinned oldest goes.
+        let kept = assemble(items, 110);
+        let texts: Vec<_> = kept.iter().map(|i| i.text.as_str()).collect();
+        assert_eq!(texts, vec!["sys", "keep me", "latest"]);
+        assert!(!texts.contains(&"oldest"));
+    }
+
+    #[test]
+    fn unpinning_restores_droppability() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 5),
+            item(Layer::Session, "pinned then freed", 100),
+            item(Layer::Session, "latest", 100),
+        ];
+        set_pinned(
+            &mut items,
+            |i| i.layer == Layer::Session && i.text != "latest",
+            true,
+        );
+        assert!(items[1].pinned);
+        set_pinned(
+            &mut items,
+            |i| i.layer == Layer::Session && i.text != "latest",
+            false,
+        );
+        assert!(!items[1].pinned);
+        let kept = assemble(items, 10);
+        assert_eq!(
+            kept.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(),
+            vec!["sys", "latest"]
+        );
+    }
+
+    #[test]
+    fn default_items_are_unpinned() {
+        let it = item(Layer::Session, "plain", 5);
+        assert!(!it.pinned);
     }
 }

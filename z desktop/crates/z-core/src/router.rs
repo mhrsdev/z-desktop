@@ -130,6 +130,37 @@ pub fn fallback_chain(
     exact
 }
 
+/// prov-008: minimum capabilities a model must offer to be usable for a
+/// turn. Downgrades below it are never suggested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HardRequirement {
+    pub min_context: usize,
+    pub needs_tools: bool,
+}
+
+/// prov-008: does `caps` satisfy `requirement`?
+pub fn meets(requirement: &HardRequirement, caps: &Capabilities) -> bool {
+    caps.context_window >= requirement.min_context
+        && (!requirement.needs_tools || caps.supports_tools)
+}
+
+/// prov-008: `fallback_chain` restricted to models meeting `requirement`.
+/// Same ordering; sub-par models (including a non-meeting requested match)
+/// are excluded entirely rather than demoted to the tail.
+pub fn fallback_chain_filtered(
+    registry: &Registry,
+    requested_model: &str,
+    available: &[String],
+    requirement: &HardRequirement,
+) -> Vec<String> {
+    let kept: Vec<String> = available
+        .iter()
+        .filter(|m| meets(requirement, &registry.lookup(m)))
+        .cloned()
+        .collect();
+    fallback_chain(registry, requested_model, &kept)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,5 +278,42 @@ mod tests {
     #[test]
     fn empty_available_yields_empty_chain() {
         assert!(fallback_chain(&Registry::default(), "gpt-4o", &[]).is_empty());
+    }
+
+    #[test]
+    fn filtered_chain_excludes_sub_par_models() {
+        let r = Registry::default();
+        let avail = vec![
+            "plain-chat".to_string(), // 16k, no tools — sub-par
+            "llama-3-8b".to_string(), // 32k, tools
+            "gpt-4o".to_string(),     // 128k, tools
+        ];
+        let req = HardRequirement { min_context: 100_000, needs_tools: true };
+        assert_eq!(
+            fallback_chain_filtered(&r, "gpt-4o", &avail, &req),
+            vec!["gpt-4o"]
+        );
+        // A requested model below requirements is dropped too.
+        let req = HardRequirement { min_context: 150_000, needs_tools: true };
+        assert!(fallback_chain_filtered(&r, "gpt-4o", &avail, &req).is_empty());
+    }
+
+    #[test]
+    fn filtered_chain_matches_unfiltered_when_nothing_is_sub_par() {
+        let r = Registry::default();
+        let avail = vec!["claude-x".to_string(), "gpt-4o".to_string()];
+        let req = HardRequirement { min_context: 0, needs_tools: false };
+        assert_eq!(
+            fallback_chain_filtered(&r, "gpt-4o", &avail, &req),
+            fallback_chain(&r, "gpt-4o", &avail)
+        );
+    }
+
+    #[test]
+    fn filtered_chain_empty_when_nothing_meets() {
+        let r = Registry::default();
+        let avail = vec!["plain-chat".to_string(), "llama-3-8b".to_string()];
+        let req = HardRequirement { min_context: 500_000, needs_tools: true };
+        assert!(fallback_chain_filtered(&r, "gpt-4o", &avail, &req).is_empty());
     }
 }

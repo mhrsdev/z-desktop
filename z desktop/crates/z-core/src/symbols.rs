@@ -46,6 +46,37 @@ pub fn extract_rust_symbols(source: &str) -> Result<Vec<Symbol>, String> {
     }
 }
 
+/// Stable symbol id "{file_hash}:{name}:{kind}:{index}" (idx-010).
+pub fn symbol_id(file_hash: &str, name: &str, kind: &SymbolKind, index: usize) -> String {
+    format!("{file_hash}:{name}:{}:{index}", kind_snake(kind))
+}
+
+fn kind_snake(kind: &SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Function => "function",
+        SymbolKind::Struct => "struct",
+        SymbolKind::Enum => "enum",
+        SymbolKind::Trait => "trait",
+        SymbolKind::Impl => "impl",
+        SymbolKind::Module => "module",
+    }
+}
+
+/// Pair each extracted symbol with its stable id, using position index
+/// (idx-010). Parser failure degrades to an empty list, matching
+/// extract_rust_symbols' internal fallback for unusable input.
+pub fn extract_with_ids(file_hash: &str, source: &str) -> Vec<(Symbol, String)> {
+    extract_rust_symbols(source)
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let id = symbol_id(file_hash, &s.name, &s.kind, i);
+            (s, id)
+        })
+        .collect()
+}
+
 fn walk(node: tree_sitter::Node, src: &str, out: &mut Vec<Symbol>) {
     use tree_sitter::Node;
     fn kind_of(node: Node) -> Option<SymbolKind> {
@@ -134,5 +165,47 @@ fn helper() {}
     #[test]
     fn empty_source_yields_no_symbols() {
         assert!(extract_rust_symbols("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn symbol_id_format_is_file_hash_name_kind_index() {
+        assert_eq!(symbol_id("abc123", "main", &SymbolKind::Function, 3), "abc123:main:function:3");
+        assert_eq!(symbol_id("h", "Config", &SymbolKind::Struct, 0), "h:Config:struct:0");
+        // Every kind maps to its lowercase snake name.
+        for (kind, want) in [
+            (SymbolKind::Function, "function"),
+            (SymbolKind::Struct, "struct"),
+            (SymbolKind::Enum, "enum"),
+            (SymbolKind::Trait, "trait"),
+            (SymbolKind::Impl, "impl"),
+            (SymbolKind::Module, "module"),
+        ] {
+            assert_eq!(symbol_id("f", "x", &kind, 1), format!("f:x:{want}:1"));
+        }
+    }
+
+    #[test]
+    fn distinct_indices_produce_distinct_ids() {
+        let a = symbol_id("hash", "dup", &SymbolKind::Function, 0);
+        let b = symbol_id("hash", "dup", &SymbolKind::Function, 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn extract_with_ids_pairs_every_symbol_in_order() {
+        let paired = extract_with_ids("deadbeef", SAMPLE);
+        let syms = extract_rust_symbols(SAMPLE).unwrap();
+        assert_eq!(paired.len(), syms.len());
+        for (i, ((s, id), orig)) in paired.iter().zip(&syms).enumerate() {
+            assert_eq!(s, orig, "order preserved at {i}");
+            assert_eq!(*id, symbol_id("deadbeef", &s.name, &s.kind, i));
+            assert!(id.starts_with("deadbeef:"));
+        }
+        // Spot-check the first pair's exact format.
+        let (first, first_id) = &paired[0];
+        assert_eq!(
+            first_id.as_str(),
+            format!("deadbeef:{}:{}:0", first.name, kind_snake(&first.kind))
+        );
     }
 }

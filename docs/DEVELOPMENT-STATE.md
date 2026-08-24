@@ -4,7 +4,28 @@
 > user anything, and update it before ending work. Information that lives only
 > in a conversation is lost information.
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
+
+## Reference Audit + Parallel Wave 2 — 2026-08-24 COMPLETE
+
+Mission-recall audit performed (no rebuilds, no redesign):
+
+1. ✅ **Reference audit**: grok-build verified in place (HEAD 07b2f71,
+   Apache-2.0, 7-subsystem dissection already feeding ADR-0007/0008/0014,
+   steering queue, tool design). REFERENCE-IMPLEMENTATION-MAP.md created
+   with per-subsystem evidence rows; codex/zed/aider clone points tied to
+   their upcoming slices per §7 no-speculative-clones rule.
+2. ✅ **idx-010**: symbol_id(file_hash, name, kind, index) +
+   extract_with_ids.
+3. ✅ **diff-019**: z-core/src/diff.rs — LCS unified line diff + stats.
+4. ✅ **idx-018**: z-core/src/search_index.rs — trigram index with
+   candidates/verify/search + short-query linear fallback.
+
+Verification: full workspace suite green — **526 tests, 0 failed**
+(510 → 526). Ledger: 119 IMPLEMENTED.
+
+Next work continues → term sandbox hardening (clone codex first), ui
+thread selection, or sup-022 regression recorder.
 
 ## Parallel Fan-Out Wave (sup-021 + layout-002 + term-005/018 + tok-019) — 2026-08-24 COMPLETE
 

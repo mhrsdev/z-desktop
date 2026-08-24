@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 113 |
+| IMPLEMENTED | 117 |
 | PARTIAL | 2 |
-| PLANNED | 608 |
+| PLANNED | 604 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -274,7 +274,7 @@
 ### [PLANNED] idx-009 — Import edge extraction queries
 - depends: idx-004
 
-### [PLANNED] idx-010 — Symbol id scheme (file_hash:name:kind:index)
+### [IMPLEMENTED] idx-010 — Symbol id scheme (file_hash:name:kind:index)
 - depends: idx-007
 
 ### [PLANNED] idx-011 — Fingerprint store (content hash per file)
@@ -298,7 +298,7 @@
 ### [PLANNED] idx-017 — Errored-file registry + grammar-upgrade retry
 - depends: idx-016
 
-### [PLANNED] idx-018 — Trigram index structure
+### [IMPLEMENTED] idx-018 — Trigram index structure
 - depends: —
 
 ### [PLANNED] idx-019 — Trigram incremental postings update
@@ -423,7 +423,7 @@
 ### [PLANNED] edit-018 — No-fingerprint flag on blind writes
 - depends: edit-002
 
-### [PLANNED] edit-019 — Diff generation (histogram algorithm)
+### [IMPLEMENTED] edit-019 — Diff generation (histogram algorithm)
 - depends: —
 
 ### [PLANNED] edit-020 — Patience fallback for noisy files
@@ -1664,7 +1664,7 @@
 
 ## Dock & Layout (`layout-*`)
 
-### [PLANNED] layout-001 — Region tree operations (pure)
+### [IMPLEMENTED] layout-001 — Region tree operations (pure)
 - depends: —
 
 ### [IMPLEMENTED] layout-002 — Drag-to-dock drop indicators

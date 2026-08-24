@@ -23,6 +23,8 @@ pub mod fingerprint;
 pub mod usage_stats;
 pub mod atomic_write;
 pub mod symbols;
+pub mod diff;
+pub mod search_index;
 
 /// Monotonic, collision-free-enough identifiers for a single-user local app:
 /// millisecond timestamp plus a process-wide counter.

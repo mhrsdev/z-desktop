@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-23
 
+## jour-011 Corrupt-Tail Repair — 2026-08-23 COMPLETE
+
+1. ✅ **jour-011**: truncate_corrupt_tail(path) removes a torn final write
+   (crash mid-append per ADR-0004); Journal::replay auto-repairs once when
+   the malformed line is the LAST line, then retries; middle corruption
+   stays fail-loud. Idempotent second replay verified.
+
+Verification: full workspace suite green — **449 tests, 0 failed**
+(445 → 449). Ledger: 94 IMPLEMENTED.
+
+Next work continues → sup-012 fake-completion detector, prov-006 decision
+logging, or mem-013 recency decay.
+
 ## core-017/018/019 Retry Hardening — 2026-08-23 COMPLETE
 
 1. ✅ **core-017**: parse_retry_after ("retry after N" / "retry-after: N")

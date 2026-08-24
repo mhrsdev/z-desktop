@@ -8,9 +8,9 @@
 
 | Status | Count |
 |---|---|
-| IMPLEMENTED | 91 |
+| IMPLEMENTED | 92 |
 | PARTIAL | 2 |
-| PLANNED | 630 |
+| PLANNED | 629 |
 | EXPERIMENTAL | 0 |
 | RESEARCH | 14 |
 
@@ -185,7 +185,7 @@
 ### [IMPLEMENTED] jour-010 — Seq gap tolerance + warning
 - depends: jour-005
 
-### [PLANNED] jour-011 — Corrupt tail truncation repair
+### [IMPLEMENTED] jour-011 — Corrupt tail truncation repair
 - depends: jour-005
 
 ### [PLANNED] jour-012 — Deterministic double-replay equality test

@@ -9,7 +9,8 @@
 //! - The writer owns its file handle, opened with `OpenOptions::append(true)`
 //!   (O_APPEND): every `write` lands atomically at the current end of file.
 //! - Replay reads segments front-to-back and fails loud on malformed lines;
-//!   repair tooling comes later (jour-011), silent corruption tolerance never.
+//!   the single sanctioned exception is jour-011's torn-tail auto-repair (see
+//!   [`Journal::replay`]). Silent corruption tolerance never.
 //! - Every record carries a monotonically increasing `seq`, so rotation
 //!   (jour-003), checksums (jour-004), and gap detection (jour-010) can be
 //!   layered on later without changing the wire format.
@@ -272,27 +273,93 @@ impl Journal {
 
     /// Replays a journal segment in order: reads the file front-to-back,
     /// skips empty (typically trailing) lines, and parses every remaining
-    /// line as a [`Record`]. Malformed input fails loud with the offending
-    /// line number — repair is jour-011's job, never a silent skip here.
+    /// line as a [`Record`].
+    ///
+    /// Malformed input fails loud with the offending line number — data is
+    /// never silently skipped. The one sanctioned exception (jour-011): if
+    /// the malformed line is the LAST one in the file it is treated as a
+    /// torn final write from a crashed append; [`truncate_corrupt_tail`]
+    /// runs once and replay retries. See that function for why this is safe.
     pub fn replay(path: &Path) -> Result<Vec<Record>, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("journal: cannot read {}: {}", path.display(), e))?;
-        let mut records = Vec::new();
-        for (index, line) in content.lines().enumerate() {
-            if line.trim().is_empty() {
-                continue;
+        match replay_lines(&content, path) {
+            Ok(records) => Ok(records),
+            Err((line_no, message)) => {
+                let last_line_no = content.lines().count();
+                if line_no != last_line_no {
+                    return Err(message);
+                }
+                if truncate_corrupt_tail(path)? > 0 {
+                    let repaired = std::fs::read_to_string(path)
+                        .map_err(|e| format!("journal: cannot read {}: {}", path.display(), e))?;
+                    return replay_lines(&repaired, path).map_err(|(_, m)| m);
+                }
+                Err(message)
             }
-            let line_no = index + 1;
-            let record: Record = serde_json::from_str(line).map_err(|e| {
+        }
+    }
+}
+
+/// One strict front-to-back parse pass over journal content. `Err` carries
+/// the 1-based offending line number alongside the user-facing message so
+/// [`Journal::replay`] can tell a torn tail from mid-file corruption.
+fn replay_lines(content: &str, path: &Path) -> Result<Vec<Record>, (usize, String)> {
+    let mut records = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let line_no = index + 1;
+        let record: Record = serde_json::from_str(line).map_err(|e| {
+            (
+                line_no,
                 format!(
                     "journal {}: line {} is malformed: {e}",
                     path.display(),
                     line_no
-                )
-            })?;
-            records.push(record);
+                ),
+            )
+        })?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+/// jour-011 corrupt-tail repair: rewrites `path` truncated to its last
+/// complete newline when everything after that newline fails to parse as a
+/// [`Record`]. Returns the number of bytes removed — `0` when there is no
+/// tail at all or the tail already parses cleanly (nothing to repair).
+///
+/// Why safe (ADR-0004 posture): appends are O_APPEND, so a crash during
+/// append can only leave garbage AFTER the last good record, never inside
+/// earlier ones — dropping the tail loses nothing but the torn bytes.
+/// Corruption in the MIDDLE of the segment is deliberately untouched here;
+/// that stays replay's fail-loud domain rather than something a byte-level
+/// heuristic guesses at.
+pub fn truncate_corrupt_tail(path: &Path) -> Result<usize, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| format!("journal: cannot read {}: {}", path.display(), e))?;
+    match bytes.iter().rposition(|&b| b == b'\n') {
+        // No newline: either an empty file or one lone torn line.
+        None => {
+            if bytes.is_empty() || serde_json::from_slice::<Record>(&bytes).is_ok() {
+                return Ok(0);
+            }
+            std::fs::write(path, b"")
+                .map_err(|e| format!("journal: cannot truncate {}: {}", path.display(), e))?;
+            Ok(bytes.len())
         }
-        Ok(records)
+        Some(last_newline) => {
+            let tail = &bytes[last_newline + 1..];
+            if tail.is_empty() || serde_json::from_slice::<Record>(tail).is_ok() {
+                return Ok(0);
+            }
+            let kept = &bytes[..=last_newline];
+            std::fs::write(path, kept)
+                .map_err(|e| format!("journal: cannot truncate {}: {}", path.display(), e))?;
+            Ok(bytes.len() - kept.len())
+        }
     }
 }
 
@@ -642,6 +709,117 @@ mod journal_tests {
         std::fs::write(&path, raw).expect("rewrite");
         let records = Journal::replay(&path).expect("replay tolerates blank tail");
         assert_eq!(records.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clean_journal_tail_truncates_nothing() {
+        let dir = temp_journal_dir("tail-clean");
+        {
+            let mut journal = Journal::open(&dir, "main").expect("open journal");
+            journal
+                .append(RecordDraft::new(JournalKind::TurnStarted, None, json!({})))
+                .expect("append");
+        }
+        let path = dir.join("main.jsonl");
+        let before = std::fs::metadata(&path).expect("stat").len();
+        assert_eq!(
+            truncate_corrupt_tail(&path).expect("clean file needs no repair"),
+            0,
+            "a complete final record (even without trailing newline) is not corrupt"
+        );
+        assert_eq!(std::fs::metadata(&path).expect("stat").len(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn torn_final_line_is_auto_repaired_on_replay_and_file_shrinks() {
+        let dir = temp_journal_dir("tail-torn");
+        let path = dir.join("torn.jsonl");
+        let record = |seq: u64| {
+            serde_json::to_string(&Record {
+                seq,
+                ts_ms: 42,
+                kind: JournalKind::TurnStarted,
+                thread_id: None,
+                payload: json!({}),
+            })
+            .expect("serialize")
+        };
+        let mut body = format!("{}\n{}\n{}\n", record(1), record(2), record(3));
+        body.push_str("{\"seq\":9"); // torn write: no newline, invalid JSON
+        std::fs::write(&path, &body).expect("seed torn journal");
+        let before = std::fs::metadata(&path).expect("stat").len();
+
+        // Replay must self-repair the torn tail and succeed.
+        let records = Journal::replay(&path).expect("replay repairs torn tail");
+        assert_eq!(records.len(), 3);
+        assert_eq!(records.last().expect("non-empty").seq, 3);
+
+        // File shrank by exactly the torn bytes and replays stay green.
+        let after = std::fs::metadata(&path).expect("stat").len();
+        assert!(after < before, "file must shrink: {before} -> {after}");
+        assert_eq!(after as usize + "{\"seq\":9".len(), before as usize);
+        assert_eq!(
+            Journal::replay(&path).expect("second replay"),
+            records,
+            "repair is idempotent"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn middle_corrupt_line_still_fails_loud_and_file_untouched() {
+        let dir = temp_journal_dir("tail-middle");
+        let dir2 = temp_journal_dir("tail-middle-empty");
+        let good = Record {
+            seq: 1,
+            ts_ms: 1_770_000_000_000,
+            kind: JournalKind::CommandReceived,
+            thread_id: None,
+            payload: json!({"x": 1}),
+        };
+        let path = dir.join("middle.jsonl");
+        let body = format!(
+            "{}\n{{\"seq\": not json at all\n{}\n",
+            serde_json::to_string(&good).expect("serialize"),
+            serde_json::to_string(&Record {
+                seq: 2,
+                ..good.clone()
+            })
+            .expect("serialize")
+        );
+        std::fs::write(&path, &body).expect("seed journal with mid-file corruption");
+        let err = Journal::replay(&path).expect_err("mid-file corruption fails loud");
+        assert!(err.contains("line 2"), "got: {err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            body,
+            "auto-repair must not touch mid-file corruption"
+        );
+
+        // Empty segment: nothing to repair, replays to an empty vec.
+        let empty_path = dir2.join("empty.jsonl");
+        std::fs::write(&empty_path, b"").expect("seed empty journal");
+        assert_eq!(truncate_corrupt_tail(&empty_path).expect("no-op"), 0);
+        assert!(Journal::replay(&empty_path)
+            .expect("empty file replays ok")
+            .is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    #[test]
+    fn truncate_corrupt_tail_drops_lone_newlineless_torn_line() {
+        let dir = temp_journal_dir("tail-lone");
+        let path = dir.join("lone.jsonl");
+        std::fs::write(&path, b"{\"seq\":9,\"ts_m").expect("seed lone torn line");
+        assert_eq!(
+            truncate_corrupt_tail(&path).expect("repair lone torn line"),
+            14, // every byte of the newline-less torn line
+        );
+        assert_eq!(std::fs::read(&path).expect("read back"), b"");
+        assert!(Journal::replay(&path).expect("now empty").is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -969,6 +969,13 @@ pub fn settings_kinds_names_report() -> String {
         .expect("kinds names report always serializes")
 }
 
+/// set-065: `true` iff at least one [`DefKind`] is actually present in
+/// [`schema_defs`] — i.e. [`settings_kinds_names`] is non-empty. Single
+/// source is [`settings_kinds_names`], so this cannot drift from the schema.
+pub fn settings_kinds_names_exists() -> bool {
+    !settings_kinds_names().is_empty()
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -2702,6 +2709,31 @@ mod settings_tests {
         assert!(
             doc["kinds"].as_u64().unwrap() > 0,
             "schema always has at least one non-zero kind: {doc}"
+        );
+    }
+
+    // ---- set-065: kinds names exists -----------------------------------------
+
+    #[test]
+    fn settings_kinds_names_exists_matches_current_schema() {
+        // Current schema is all-u64: exactly one positive-count kind.
+        assert!(settings_kinds_names_exists());
+        assert_eq!(
+            settings_kinds_names_exists(),
+            !settings_kinds_names().is_empty(),
+            "single-sourced on settings_kinds_names"
+        );
+    }
+
+    #[test]
+    fn settings_kinds_names_exists_true_for_non_empty_schema() {
+        // The schema always carries at least one def, so at least one kind
+        // always has a positive count and this can never be false today.
+        assert!(!schema_defs().is_empty(), "schema is non-empty");
+        assert!(settings_kinds_names_exists());
+        assert!(
+            schema_kind_counts().iter().any(|(_, c)| *c > 0),
+            "a non-empty schema always has a positive-count kind"
         );
     }
 

@@ -1027,6 +1027,13 @@ pub fn context_layer_names_count(items: &[ContextItem]) -> usize {
     context_layer_names(items).len()
 }
 
+/// ctx-071: single-line compact JSON existence report of
+/// [`context_layer_names`] — `{"layers":true}` when any distinct layer is
+/// present, `{"layers":false}` otherwise. Pure inspector helper.
+pub fn context_layer_names_exists_jsonl(items: &[ContextItem]) -> String {
+    format!("{{\"layers\":{}}}", !context_layer_names(items).is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2998,5 +3005,19 @@ mod tests {
     #[test]
     fn context_layer_names_jsonl_empty_yields_empty_string() {
         assert_eq!(context_layer_names_jsonl(&[]), "");
+    }
+
+    #[test]
+    fn context_layer_names_exists_jsonl_seeded_yields_true() {
+        let items = vec![item(Layer::Prefix, "sys", 10)];
+        assert_eq!(
+            context_layer_names_exists_jsonl(&items),
+            "{\"layers\":true}"
+        );
+    }
+
+    #[test]
+    fn context_layer_names_exists_jsonl_empty_yields_false() {
+        assert_eq!(context_layer_names_exists_jsonl(&[]), "{\"layers\":false}");
     }
 }

@@ -340,6 +340,13 @@ pub fn journal_thread_names_exists(path: &Path) -> Result<bool, String> {
     Ok(!journal_thread_names(path)?.is_empty())
 }
 
+/// jour-069: thread-name existence as a single-line compact JSONL string —
+/// `{threads}` wrapping [`journal_thread_names_exists`].
+pub fn journal_thread_names_exists_jsonl(path: &Path) -> Result<String, String> {
+    let exists = journal_thread_names_exists(path)?;
+    serde_json::to_string(&serde_json::json!({ "threads": exists })).map_err(|e| e.to_string())
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -3794,6 +3801,33 @@ pub(crate) mod reducer_tests {
         let dir = temp_dir("jour-068-empty");
         let _ = Journal::open(&dir, "main").expect("open");
         assert!(!journal_thread_names_exists(&dir.join("main.jsonl")).expect("exists"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-069 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_thread_names_exists_jsonl_seeded_is_true_line() {
+        let dir = temp_dir("jour-069");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+        }
+        assert_eq!(
+            journal_thread_names_exists_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
+            r#"{"threads":true}"#
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_names_exists_jsonl_empty_segment_is_false_line() {
+        let dir = temp_dir("jour-069-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_thread_names_exists_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
+            r#"{"threads":false}"#
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

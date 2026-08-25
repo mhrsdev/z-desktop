@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 82 (jour-064 + ctx-066 + set-060) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-064**: journal_thread_names.
+2. ✅ **ctx-066**: context_layer_names_report.
+3. ✅ **set-060**: settings_kinds_count_jsonl.
+
+Verification: full workspace suite green — **1090 tests, 0 failed**
+(1084 → 1090). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 81 (jour-063 + ctx-065 + set-059) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-063**: journal_thread_count_report.

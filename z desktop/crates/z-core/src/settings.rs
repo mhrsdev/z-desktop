@@ -915,6 +915,17 @@ pub fn settings_kinds_count_json() -> String {
         .expect("kind count always serializes")
 }
 
+/// set-060: single-line compact JSONL report `{kinds: n}` — `n` being the
+/// length of [`schema_kind_counts`] (one entry per [`DefKind`], including
+/// zero-count kinds), reusing it as its single source so it cannot drift
+/// from the schema; shape mirrors [`settings_kinds_count_json`] but compact,
+/// like [`settings_schema_total_jsonl`].
+pub fn settings_kinds_count_jsonl() -> String {
+    let n = schema_kind_counts().len();
+    serde_json::to_string(&json!({ "kinds": n }))
+        .expect("kinds count jsonl always serializes")
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -2532,6 +2543,38 @@ mod settings_tests {
         let out = settings_kinds_count_json();
         assert!(out.contains('\n'), "pretty-printed, not compact: {out}");
         assert!(out.starts_with("{\n"), "pretty object opens on its own line: {out}");
+        let doc: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        assert!(doc["kinds"].is_u64(), "kinds is a number: {out}");
+        assert!(
+            doc["kinds"].as_u64().expect("kinds numeric") > 0,
+            "at least one kind tracked"
+        );
+    }
+
+    // ---- set-060: kinds count JSONL ------------------------------------------
+
+    #[test]
+    fn settings_kinds_count_jsonl_matches_schema_kind_counts_len_exactly() {
+        // Seeded from the current schema via its single source: one entry
+        // per DefKind, zero-count kinds included.
+        let expected = schema_kind_counts().len();
+        assert_eq!(
+            settings_kinds_count_jsonl(),
+            format!("{{\"kinds\":{expected}}}"),
+            "exact single-line {{kinds: n}}"
+        );
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_kinds_count_jsonl()).expect("valid JSON");
+        let obj = doc.as_object().expect("top-level shape is an object");
+        assert_eq!(obj.len(), 1, "only the kinds field is present");
+        assert!(obj.contains_key("kinds"), "field named \"kinds\"");
+    }
+
+    #[test]
+    fn settings_kinds_count_jsonl_is_compact_single_line_and_positive() {
+        let out = settings_kinds_count_jsonl();
+        assert_eq!(out.lines().count(), 1, "single line: {out}");
+        assert!(!out.contains(' '), "compact, not pretty: {out}");
         let doc: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
         assert!(doc["kinds"].is_u64(), "kinds is a number: {out}");
         assert!(

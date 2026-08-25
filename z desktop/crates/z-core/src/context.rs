@@ -992,6 +992,13 @@ pub fn context_layer_names_jsonl(items: &[ContextItem]) -> String {
     out
 }
 
+/// ctx-066: single-line compact JSON report of the distinct layer count
+/// from [`context_layer_names`] — `{"layers":n}`. Empty slice yields
+/// `{"layers":0}`. Pure inspector helper.
+pub fn context_layer_names_report(items: &[ContextItem]) -> String {
+    format!("{{\"layers\":{}}}", context_layer_names(items).len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2877,6 +2884,24 @@ mod tests {
         }
         assert_eq!(lines[0], "\"turn\"");
         assert_eq!(out.ends_with('\n'), true);
+    }
+
+    // ctx-066
+    #[test]
+    fn context_layer_names_report_seeded_is_exact_json() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 1),
+            item(Layer::Session, "hi", 2),
+            item(Layer::Turn, "now", 3),
+            item(Layer::Turn, "again", 4),
+            item(Layer::Ephemeral, "scratch", 5),
+        ];
+        assert_eq!(context_layer_names_report(&items), "{\"layers\":4}");
+    }
+
+    #[test]
+    fn context_layer_names_report_empty_yields_zero() {
+        assert_eq!(context_layer_names_report(&[]), "{\"layers\":0}");
     }
 
     #[test]

@@ -633,6 +633,17 @@ pub fn context_stale_count_jsonl(items: &[ContextItem]) -> String {
     )
 }
 
+/// ctx-060: single-line compact JSON stale-percentage summary —
+/// {"stale":S,"total":T,"pct":P} — the JSONL twin of [`context_stale_pct_json`]
+/// for journal/inspector export. Empty slice yields all zeros with pct 0.
+/// Pure.
+pub fn context_stale_pct_jsonl(items: &[ContextItem]) -> String {
+    let stale = items.iter().filter(|i| i.stale).count();
+    let total = items.len();
+    let pct = if total == 0 { 0 } else { stale * 100 / total };
+    format!("{{\"stale\":{stale},\"total\":{total},\"pct\":{pct}}}")
+}
+
 /// ctx-036: pretty JSON array export of stale items only — one {layer, text}
 /// object per item where [`ContextItem::stale`] is set. No stale items
 /// serializes as "[]". Pure inspector helper.
@@ -2033,6 +2044,31 @@ mod tests {
             r#"{"stale":0,"total":1}"#
         );
         assert_eq!(context_stale_count_jsonl(&[]), r#"{"stale":0,"total":0}"#);
+    }
+
+    // ctx-060
+    #[test]
+    fn context_stale_pct_jsonl_seeded_yields_exact_line() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "scratch", 3),
+            item(Layer::Turn, "now", 2),
+        ];
+        items[0].stale = true;
+        items[2].stale = true;
+        assert_eq!(
+            context_stale_pct_jsonl(&items),
+            r#"{"stale":2,"total":4,"pct":50}"#
+        );
+    }
+
+    #[test]
+    fn context_stale_pct_jsonl_empty_yields_zeros() {
+        assert_eq!(
+            context_stale_pct_jsonl(&[]),
+            r#"{"stale":0,"total":0,"pct":0}"#
+        );
     }
 
     // ctx-051

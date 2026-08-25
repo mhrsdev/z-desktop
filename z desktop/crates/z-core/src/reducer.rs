@@ -240,6 +240,15 @@ pub fn journal_thread_exists_jsonl(path: &Path, thread_id: &str) -> Result<Strin
     .map_err(|e| e.to_string())
 }
 
+/// jour-058: kind existence accessor — true if any replayed record carries
+/// `kind`. Empty/unknown kind yields `false`. Reuses [`journal_kind_counts`]
+/// (same serde-round-trip kind naming).
+pub fn journal_kind_exists(path: &Path, kind: &str) -> Result<bool, String> {
+    Ok(journal_kind_counts(path)?
+        .into_iter()
+        .any(|(name, _)| name == kind))
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -3392,6 +3401,38 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_thread_exists_jsonl(&dir.join("main.jsonl"), "t1").expect("jsonl"),
             "{\"exists\":false,\"thread\":\"t1\"}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-058 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_kind_exists_seeded_kind_true_unknown_false() {
+        let dir = temp_dir("jour-058");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+        }
+        assert_eq!(
+            journal_kind_exists(&dir.join("main.jsonl"), "turn_started").expect("exists"),
+            true
+        );
+        assert_eq!(
+            journal_kind_exists(&dir.join("main.jsonl"), "nope_kind").expect("exists"),
+            false
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_kind_exists_empty_segment_is_false() {
+        let dir = temp_dir("jour-058-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_kind_exists(&dir.join("main.jsonl"), "turn_started").expect("exists"),
+            false
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

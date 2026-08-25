@@ -551,6 +551,15 @@ pub fn settings_validate_report(current: &Settings) -> String {
     .expect("validate report always serializes")
 }
 
+/// set-054: single-line compact JSON `{diff: n}` from [`settings_diff_count`]
+/// — alias of [`settings_changed_keys_report`] by count. Single source, so
+/// this can never drift from the schema; shape mirrors
+/// [`settings_validate_report`].
+pub fn settings_diff_report(current: &Settings) -> String {
+    serde_json::to_string(&json!({ "diff": settings_diff_count(current) }))
+        .expect("diff report always serializes")
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1867,6 +1876,38 @@ mod settings_tests {
         assert_eq!(settings_validate_report(&s), r#"{"errors":1,"valid":false}"#);
         s.doom_threshold = 0;
         assert_eq!(settings_validate_report(&s), r#"{"errors":2,"valid":false}"#);
+    }
+
+    // ---- set-054: diff report -----------------------------------------------
+
+    #[test]
+    fn settings_diff_report_fresh_settings_are_zero() {
+        assert_eq!(settings_diff_report(&Settings::default()), r#"{"diff":0}"#);
+        // Single line, compact, valid JSON.
+        let out = settings_diff_report(&Settings::default());
+        assert_eq!(out.lines().count(), 1, "single line");
+        assert!(!out.contains(' '), "compact: no spaces: {out}");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&out).is_ok(),
+            "valid JSON"
+        );
+    }
+
+    #[test]
+    fn settings_diff_report_changed_settings_count_the_diff() {
+        let mut s = Settings::default();
+        s.max_tool_rounds = 7;
+        assert_eq!(settings_diff_report(&s), r#"{"diff":1}"#);
+
+        s.approval_timeout_secs = 60;
+        s.doom_threshold = 9;
+        assert_eq!(settings_diff_report(&s), r#"{"diff":3}"#);
+        // Single source agrees with settings_diff_count.
+        assert_eq!(
+            settings_diff_report(&s),
+            format!("{{\"diff\":{}}}", settings_diff_count(&s)),
+            "single sources agree"
+        );
     }
 
     #[test]

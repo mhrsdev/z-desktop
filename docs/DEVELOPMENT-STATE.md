@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 76 (jour-058 + ctx-060 + set-054) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-058**: journal_kind_exists.
+2. ✅ **ctx-060**: context_stale_pct_jsonl.
+3. ✅ **set-054**: settings_diff_report.
+
+Verification: full workspace suite green — **1055 tests, 0 failed**
+(1049 → 1055). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 75 (jour-057 + ctx-059 + set-053) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-057**: journal_thread_exists_jsonl.

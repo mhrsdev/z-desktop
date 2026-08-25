@@ -594,6 +594,24 @@ pub fn task_status_summary_json(view: &TasksView) -> String {
     serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "{}".into())
 }
 
+/// orch-024: pretty JSON health snapshot combining [`task_counts`] with the
+/// total number of folded timeline events: `{counts: {...}, events: n}`.
+pub fn tasks_health_json(view: &TasksView) -> String {
+    let (done, running, failed, pending) = task_counts(view);
+    let events: usize = view.timeline.values().map(Vec::len).sum();
+    let health = serde_json::json!({
+        "counts": {
+            "total": done + running + failed + pending,
+            "done": done,
+            "running": running,
+            "failed": failed,
+            "pending": pending,
+        },
+        "events": events,
+    });
+    serde_json::to_string_pretty(&health).unwrap_or_else(|_| "{}".into())
+}
+
 /// orch-018: every task's current status as `(id, status)` sorted by id, for
 /// UI/state export. Status strings use the journal's snake_case spelling.
 pub fn task_state_events(view: &TasksView) -> Vec<(String, String)> {
@@ -1510,6 +1528,37 @@ pub(crate) mod reducer_tests {
             assert_eq!(parsed[key], 0, "{key}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // orch-024 ---------------------------------------------------------------
+
+    #[test]
+    fn tasks_health_json_seeded_matches_counts_and_timeline_exactly() {
+        let dir = temp_dir("orch024-seeded");
+        TaskStore::create(&dir, "d").expect("create d");
+        TaskStore::create(&dir, "r").expect("create r");
+        TaskStore::create(&dir, "f").expect("create f");
+        TaskStore::create(&dir, "p").expect("create p");
+        TaskStore::transition(&dir, "d", TaskStatus::Done).expect("d done");
+        TaskStore::transition(&dir, "r", TaskStatus::Running).expect("r running");
+        TaskStore::transition(&dir, "f", TaskStatus::Failed).expect("f failed");
+
+        let view = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl"))).expect("fold");
+        // 4 creates + 3 transitions = 7 folded timeline events.
+        // serde_json's json! orders object keys alphabetically.
+        assert_eq!(
+            tasks_health_json(&view),
+            "{\n  \"counts\": {\n    \"done\": 1,\n    \"failed\": 1,\n    \"pending\": 1,\n    \"running\": 1,\n    \"total\": 4\n  },\n  \"events\": 7\n}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tasks_health_json_empty_is_all_zeros() {
+        assert_eq!(
+            tasks_health_json(&TasksView::default()),
+            "{\n  \"counts\": {\n    \"done\": 0,\n    \"failed\": 0,\n    \"pending\": 0,\n    \"running\": 0,\n    \"total\": 0\n  },\n  \"events\": 0\n}"
+        );
     }
 
     // ctx-013 ---------------------------------------------------------------

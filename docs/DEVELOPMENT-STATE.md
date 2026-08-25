@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-24
 
+## Wave 42 (orch-024 + ctx-029 + set-023) — 2026-08-24 COMPLETE
+
+1. ✅ **orch-024**: tasks_health_json (counts + event totals).
+2. ✅ **ctx-029**: context_health_json (stats + budget pct).
+3. ✅ **set-023**: settings_health_json (summary + errors).
+
+Data layer fully complete: every subsystem ships health line, JSON
+export, JSONL export, and combined health JSON.
+
+Verification: full workspace suite green — **841 tests, 0 failed**
+(835 → 841). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 41 (jour-030 + ctx-028 + set-022) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-030**: journal_export_jsonl streaming format.

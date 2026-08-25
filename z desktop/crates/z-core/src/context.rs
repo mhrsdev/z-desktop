@@ -560,6 +560,24 @@ pub fn context_stats_json(items: &[ContextItem]) -> String {
     serde_json::to_string_pretty(&stats(items)).unwrap_or_default()
 }
 
+/// ctx-029: pretty JSON health snapshot combining [`stats`] with the budget
+/// picture — {"stats": {...}, "budget": {budget, used, pct}}. `used` is the
+/// [`weighted_tokens`] total at default weights; pct matches
+/// [`budget_report`]'s clamped 0-999 percentage. Pure.
+pub fn context_health_json(items: &[ContextItem], budget_tokens: usize) -> String {
+    let used = weighted_tokens(items, &PriorityWeights::default());
+    let pct = if budget_tokens == 0 {
+        999 * usize::from(used > 0)
+    } else {
+        (used * 100 / budget_tokens).min(999)
+    };
+    serde_json::to_string_pretty(&serde_json::json!({
+        "stats": stats(items),
+        "budget": { "budget": budget_tokens, "used": used, "pct": pct },
+    }))
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1485,5 +1503,48 @@ mod tests {
             serde_json::json!([[0, 0], [0, 0], [0, 0], [0, 0]])
         );
         assert_eq!(parsed["stale_count"], 0);
+    }
+
+    // ctx-029
+    #[test]
+    fn context_health_json_seeded_matches_exact_values() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Session, "latest", 7),
+            ContextItem {
+                layer: Layer::Ephemeral,
+                text: "dump".into(),
+                est_tokens: 4,
+                stale: true,
+                pinned: false,
+                compacted: false,
+            },
+        ];
+        let parsed: serde_json::Value =
+            serde_json::from_str(&context_health_json(&items, 50)).expect("valid JSON");
+        assert_eq!(parsed["stats"]["total_items"], 3);
+        assert_eq!(parsed["stats"]["est_tokens_total"], 21);
+        assert_eq!(parsed["stats"]["stale_count"], 1);
+        assert_eq!(
+            parsed["stats"]["by_layer"],
+            serde_json::json!([[1, 10], [1, 7], [0, 0], [1, 4]])
+        );
+        assert_eq!(
+            parsed["budget"],
+            serde_json::json!({"budget": 50, "used": 21, "pct": 42})
+        );
+    }
+
+    #[test]
+    fn context_health_json_empty_is_all_zeros() {
+        let parsed: serde_json::Value =
+            serde_json::from_str(&context_health_json(&[], 100)).expect("valid JSON");
+        assert_eq!(parsed["stats"]["total_items"], 0);
+        assert_eq!(parsed["stats"]["est_tokens_total"], 0);
+        assert_eq!(parsed["stats"]["stale_count"], 0);
+        assert_eq!(
+            parsed["budget"],
+            serde_json::json!({"budget": 100, "used": 0, "pct": 0})
+        );
     }
 }

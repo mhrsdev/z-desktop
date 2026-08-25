@@ -479,6 +479,18 @@ pub fn settings_health_line(current: &Settings) -> String {
     )
 }
 
+/// set-023: pretty JSON health readout for external UIs —
+/// `{ "summary": "…", "errors": [...] }`, combining [`settings_summary`] and
+/// [`validate_all`]. Both halves reuse their single sources, so this cannot
+/// drift from the schema.
+pub fn settings_health_json(current: &Settings) -> String {
+    serde_json::to_string_pretty(&json!({
+        "summary": settings_summary(current),
+        "errors": validate_all(current),
+    }))
+    .expect("health report always serializes")
+}
+
 /// set-018: schema keys starting with `prefix` (case-insensitive), in schema
 /// order. Empty prefix ⇒ every key.
 pub fn settings_by_prefix(prefix: &str) -> Vec<&'static str> {
@@ -1290,6 +1302,36 @@ mod settings_tests {
         assert_eq!(
             settings_health_line(&s),
             "3 settings, 2 changed from default | 2 validation errors"
+        );
+    }
+
+    // ---- set-023: health JSON ------------------------------------------------
+
+    #[test]
+    fn settings_health_json_defaults_report_zero_errors() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_health_json(&Settings::default()))
+                .expect("health JSON parses");
+        assert_eq!(
+            doc["summary"],
+            json!(settings_summary(&Settings::default())),
+            "summary half comes from settings_summary"
+        );
+        assert_eq!(doc["errors"], json!([]), "defaults => 0 errors");
+    }
+
+    #[test]
+    fn settings_health_json_reports_one_error_for_broken_field() {
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 3601;
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_health_json(&s)).expect("health JSON parses");
+        assert_eq!(doc["summary"], json!("3 settings, 1 changed from default"));
+        let errs = doc["errors"].as_array().expect("errors is an array");
+        assert_eq!(errs.len(), 1, "one broken field => one error");
+        assert!(
+            errs[0].as_str().is_some_and(|m| m.contains("approval_timeout_secs")),
+            "message names the key: {errs:?}"
         );
     }
 

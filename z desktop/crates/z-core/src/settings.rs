@@ -474,6 +474,25 @@ pub fn settings_by_prefix(prefix: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// set-019: count of [`schema_defs`] entries per [`DefKind`], as
+/// `(kind name, count)` pairs sorted by count descending (ties keep the
+/// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
+pub fn schema_kind_counts() -> Vec<(String, usize)> {
+    let mut counts = [("u64", 0usize), ("f32", 0), ("bool", 0), ("string", 0)];
+    for def in schema_defs() {
+        let idx = match def.kind {
+            DefKind::U64 => 0,
+            DefKind::F32 => 1,
+            DefKind::Bool => 2,
+            DefKind::String => 3,
+        };
+        counts[idx].1 += 1;
+    }
+    // Stable sort: equal counts stay in DefKind declaration order.
+    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    counts.into_iter().map(|(k, n)| (k.to_string(), n)).collect()
+}
+
 /// Validate a numeric value against the schema bounds for `key`. The unknown-
 /// key path never silently ignores: an unrecognized key is rejected with an
 /// "unknown setting \\"key\\"" message so hand-edited typos surface instead of
@@ -1255,5 +1274,35 @@ mod settings_tests {
     #[test]
     fn settings_by_prefix_no_match_is_empty() {
         assert!(settings_by_prefix("zzz_").is_empty());
+    }
+
+    // ---- set-019: schema kind counts ---------------------------------------
+
+    #[test]
+    fn schema_kind_counts_matches_current_schema_exactly() {
+        // Current schema is all-u64: u64 leads, zero-count kinds follow in
+        // DefKind declaration order.
+        let u64_count = schema_defs().iter().filter(|d| d.kind == DefKind::U64).count();
+        assert_eq!(
+            schema_kind_counts(),
+            vec![
+                ("u64".to_string(), u64_count),
+                ("f32".to_string(), 0),
+                ("bool".to_string(), 0),
+                ("string".to_string(), 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn schema_kind_counts_is_non_empty_and_sums_to_schema_len() {
+        let counts = schema_kind_counts();
+        assert!(!counts.is_empty());
+        assert_eq!(counts.iter().map(|(_, n)| n).sum::<usize>(), schema_defs().len());
+        // Sorted descending by count.
+        let ns: Vec<usize> = counts.iter().map(|(_, n)| *n).collect();
+        let mut sorted = ns.clone();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        assert_eq!(ns, sorted);
     }
 }

@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 38 (jour-028 + ctx-025 + set-019) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-028**: thread_message_counts sorted desc.
+2. ✅ **ctx-025**: context_tokens_by_layer ordered totals.
+3. ✅ **set-019**: schema_kind_counts per DefKind.
+
+Verification: full workspace suite green — **813 tests, 0 failed**
+(806 → 813). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 37 (jour-027 + ctx-024 + set-018) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-027**: journal_kind_counts sorted desc.

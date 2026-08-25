@@ -508,6 +508,24 @@ pub fn context_by_layer(items: &[ContextItem], layer: Layer) -> Vec<&ContextItem
     items.iter().filter(|i| i.layer == layer).collect()
 }
 
+/// ctx-025: per-layer token totals in enum order (prefix, session, turn,
+/// ephemeral), zero-token layers skipped. Pure inspector helper.
+pub fn context_tokens_by_layer(items: &[ContextItem]) -> Vec<(Layer, usize)> {
+    let mut tokens = [0usize; 4];
+    for i in items {
+        tokens[i.layer as usize] += i.est_tokens;
+    }
+    [
+        (Layer::Prefix, tokens[0]),
+        (Layer::Session, tokens[1]),
+        (Layer::Turn, tokens[2]),
+        (Layer::Ephemeral, tokens[3]),
+    ]
+    .into_iter()
+    .filter(|&(_, n)| n > 0)
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1293,5 +1311,44 @@ mod tests {
     #[test]
     fn context_by_layer_empty_input_is_empty() {
         assert!(context_by_layer(&[], Layer::Session).is_empty());
+    }
+
+    // ctx-025
+    #[test]
+    fn context_tokens_by_layer_seeded_mix_sums_in_enum_order() {
+        let items = vec![
+            item(Layer::Turn, "t1", 3),
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Ephemeral, "e1", 5),
+            item(Layer::Session, "s1", 2),
+            item(Layer::Turn, "t2", 4),
+            item(Layer::Ephemeral, "e2", 5),
+        ];
+        assert_eq!(
+            context_tokens_by_layer(&items),
+            vec![
+                (Layer::Prefix, 10),
+                (Layer::Session, 2),
+                (Layer::Turn, 7),
+                (Layer::Ephemeral, 10)
+            ]
+        );
+    }
+
+    #[test]
+    fn context_tokens_by_layer_empty_input_is_empty() {
+        assert!(context_tokens_by_layer(&[]).is_empty());
+    }
+
+    #[test]
+    fn context_tokens_by_layer_single_layer_yields_one_row() {
+        let items = vec![
+            item(Layer::Ephemeral, "e", 4),
+            item(Layer::Ephemeral, "f", 6),
+        ];
+        assert_eq!(
+            context_tokens_by_layer(&items),
+            vec![(Layer::Ephemeral, 10)]
+        );
     }
 }

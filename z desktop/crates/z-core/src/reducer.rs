@@ -249,6 +249,23 @@ pub fn journal_kind_counts(path: &Path) -> Result<Vec<(String, usize)>, String> 
     Ok(pairs)
 }
 
+/// jour-028: per-thread persisted message counts for one segment, sorted by
+/// count descending (ties broken by thread id ascending). Reuses the shared
+/// [`fold`] so seq-gap handling matches every other view here.
+pub fn thread_message_counts(path: &Path) -> Result<Vec<(String, usize)>, String> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    crate::reducer::fold(path, (), |(), record| {
+        if record.kind == JournalKind::MessagePersisted {
+            if let Some(thread) = &record.thread_id {
+                *counts.entry(thread.clone()).or_insert(0) += 1;
+            }
+        }
+    })?;
+    let mut pairs: Vec<(String, usize)> = counts.into_iter().collect();
+    pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(pairs)
+}
+
 /// jour-017: generates a synthetic, deterministic journal segment at `path`.
 ///
 /// Each of `turns` turns contributes one `turn_started` record followed by
@@ -2053,6 +2070,47 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_export_json(&dir.join("main.jsonl")).expect("export"),
             "[]"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-028 ---------------------------------------------------------------
+
+    #[test]
+    fn thread_message_counts_seeded_multi_thread_sorted_desc() {
+        let dir = temp_dir("jour-028");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            // t2: 3 messages, t3: 2, t1: 1. TurnStarted records register a
+            // thread but never count as messages.
+            append(&mut j, JournalKind::TurnStarted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::TurnStarted, Some("t3"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t3"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t3"), json!({}));
+        }
+        assert_eq!(
+            thread_message_counts(&dir.join("main.jsonl")).expect("fold"),
+            vec![
+                ("t2".to_string(), 3),
+                ("t3".to_string(), 2),
+                ("t1".to_string(), 1),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thread_message_counts_empty_journal_is_empty_vec() {
+        let dir = temp_dir("jour-028-empty");
+        Journal::open(&dir, "main").expect("open"); // creates an empty segment
+        assert!(
+            thread_message_counts(&dir.join("main.jsonl"))
+                .expect("fold")
+                .is_empty()
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

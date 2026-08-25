@@ -213,6 +213,12 @@ pub fn journal_has_gaps(path: &Path) -> Result<bool, String> {
     Ok(lag_stats(&Journal::replay(path)?).gaps > 0)
 }
 
+/// jour-046: empty-segment accessor — whether [`journal_record_count`] over
+/// the replayed segment is zero.
+pub fn journal_is_empty(path: &Path) -> Result<bool, String> {
+    Ok(lag_stats(&Journal::replay(path)?).records == 0)
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -2840,6 +2846,35 @@ pub(crate) mod reducer_tests {
             .join("\n");
         std::fs::write(&path, lines).expect("write fixture");
         assert_eq!(journal_has_gaps(&path).expect("gaps"), true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-046 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_is_empty_seeded_is_false() {
+        let dir = temp_dir("jour-046");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        assert_eq!(
+            journal_is_empty(&dir.join("main.jsonl")).expect("empty"),
+            false
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_is_empty_empty_segment_is_true() {
+        let dir = temp_dir("jour-046-empty");
+        // Create the segment file with no records (drop flushes/closes it).
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_is_empty(&dir.join("main.jsonl")).expect("empty"),
+            true
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

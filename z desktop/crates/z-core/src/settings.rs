@@ -667,6 +667,12 @@ pub fn settings_is_valid(current: &Settings) -> bool {
     validate_all(current).is_empty()
 }
 
+/// set-041: true when any setting is out of bounds — the negation of
+/// [`settings_is_valid`].
+pub fn settings_has_errors(current: &Settings) -> bool {
+    !settings_is_valid(current)
+}
+
 /// set-019: count of [`schema_defs`] entries per [`DefKind`], as
 /// `(kind name, count)` pairs sorted by count descending (ties keep the
 /// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
@@ -1957,6 +1963,24 @@ mod settings_tests {
             doom_threshold: 10,
         };
         assert!(settings_is_valid(&edge));
+    }
+
+    // ---- set-041: has-errors check -------------------------------------------
+
+    #[test]
+    fn settings_has_errors_false_for_defaults() {
+        assert!(!settings_has_errors(&Settings::default()));
+    }
+
+    #[test]
+    fn settings_has_errors_true_when_broken() {
+        let broken = Settings {
+            max_tool_rounds: 0,
+            ..Settings::default()
+        };
+        assert!(settings_has_errors(&broken));
+        // Mirrors settings_is_valid exactly.
+        assert_eq!(settings_has_errors(&broken), !settings_is_valid(&broken));
     }
 
     // ---- set-020: defaults JSON ---------------------------------------------

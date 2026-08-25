@@ -785,6 +785,12 @@ pub fn context_pinned_count(items: &[ContextItem]) -> usize {
     items.iter().filter(|i| i.pinned).count()
 }
 
+/// ctx-047: true when at least one item has [`ContextItem::pinned`] set.
+/// Pure inspector helper over [`context_pinned_count`].
+pub fn context_has_pinned(items: &[ContextItem]) -> bool {
+    context_pinned_count(items) > 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2122,6 +2128,25 @@ mod tests {
         let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
         assert_eq!(context_pinned_count(&items), 0);
         assert_eq!(context_pinned_count(&[]), 0);
+    }
+
+    // ctx-047
+    #[test]
+    fn context_has_pinned_true_when_any_item_is_pinned() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "note", 5),
+            item(Layer::Turn, "latest", 3),
+        ];
+        items[1].pinned = true;
+        assert!(context_has_pinned(&items));
+    }
+
+    #[test]
+    fn context_has_pinned_false_when_none_or_empty() {
+        let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
+        assert!(!context_has_pinned(&items));
+        assert!(!context_has_pinned(&[]));
     }
 
     // ctx-044

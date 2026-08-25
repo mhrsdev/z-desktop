@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 54 (jour-037 + ctx-038 + set-032) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-037**: journal_kind_counts_jsonl.
+2. ✅ **ctx-038**: context_budget_jsonl single-line.
+3. ✅ **set-032**: settings_prefix_count.
+
+Verification: full workspace suite green — **914 tests, 0 failed**
+(907 → 914). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 53 (jour-036 + ctx-037 + set-031) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-036**: journal_thread_counts_jsonl.

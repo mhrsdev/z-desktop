@@ -337,6 +337,23 @@ pub fn journal_kind_json(path: &Path) -> Result<String, String> {
     serde_json::to_string_pretty(&entries).map_err(|e| format!("reducer: kind json: {e}"))
 }
 
+/// jour-037: per-kind counts as compact JSONL — one `{kind, count}` object
+/// per line in the same count-desc/name-asc order as [`journal_kind_counts`].
+/// Empty segment yields an empty string.
+pub fn journal_kind_counts_jsonl(path: &Path) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct Entry {
+        kind: String,
+        count: usize,
+    }
+    let lines = journal_kind_counts(path)?
+        .into_iter()
+        .map(|(kind, count)| serde_json::to_string(&Entry { kind, count }))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("reducer: kind counts jsonl: {e}"))?;
+    Ok(lines.join("\n"))
+}
+
 /// jour-028: per-thread persisted message counts for one segment, sorted by
 /// count descending (ties broken by thread id ascending). Reuses the shared
 /// [`fold`] so seq-gap handling matches every other view here.
@@ -1035,6 +1052,40 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_kind_json(&dir.join("main.jsonl")).expect("json"),
             "[]"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_kind_counts_jsonl_seeded_yields_one_valid_line_per_kind() {
+        let dir = temp_dir("jour-037");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+        }
+        let out = journal_kind_counts_jsonl(&dir.join("main.jsonl")).expect("jsonl");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2);
+        // count-desc order; each line is valid compact JSON {kind, count}.
+        let first: serde_json::Value = serde_json::from_str(lines[0]).expect("line0 json");
+        assert_eq!(first["kind"], "message_persisted");
+        assert_eq!(first["count"], 3);
+        let second: serde_json::Value = serde_json::from_str(lines[1]).expect("line1 json");
+        assert_eq!(second["kind"], "turn_started");
+        assert_eq!(second["count"], 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_kind_counts_jsonl_empty_segment_is_empty_string() {
+        let dir = temp_dir("jour-037-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_kind_counts_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
+            ""
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -693,6 +693,25 @@ pub fn context_preview_json(items: &[ContextItem], max_chars: usize) -> String {
     .unwrap_or_default()
 }
 
+/// ctx-038: single-line compact JSON budget record — {used, budget, pct}.
+/// `used` is the [`weighted_tokens`] total at default weights; pct matches
+/// [`budget_report`]'s clamped 0-999 percentage (0 when budget is empty and
+/// nothing is used). Pure inspector helper.
+pub fn context_budget_jsonl(items: &[ContextItem], budget_tokens: usize) -> String {
+    let used = weighted_tokens(items, &PriorityWeights::default());
+    let pct = if budget_tokens == 0 {
+        999 * usize::from(used > 0)
+    } else {
+        (used * 100 / budget_tokens).min(999)
+    };
+    serde_json::to_string(&serde_json::json!({
+        "used": used,
+        "budget": budget_tokens,
+        "pct": pct
+    }))
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1891,5 +1910,24 @@ mod tests {
             serde_json::from_str(&context_preview_json(&items, budget)).expect("valid JSON");
         assert_eq!(v["truncated"], true);
         assert_eq!(v["preview"], preview(&items, budget));
+    }
+
+    // ctx-038
+    #[test]
+    fn context_budget_jsonl_seeded_is_exact_line() {
+        let items = vec![item(Layer::Turn, "t", 3), item(Layer::Prefix, "sys", 7)];
+        assert_eq!(
+            context_budget_jsonl(&items, 100),
+            r#"{"budget":100,"pct":10,"used":10}"#
+        );
+    }
+
+    #[test]
+    fn context_budget_jsonl_empty_is_zeros_line() {
+        assert_eq!(
+            context_budget_jsonl(&[], 500),
+            r#"{"budget":500,"pct":0,"used":0}"#
+        );
+        assert_eq!(context_budget_jsonl(&[], 0), r#"{"budget":0,"pct":0,"used":0}"#);
     }
 }

@@ -603,6 +603,13 @@ pub fn settings_prefix_json(prefix: &str) -> String {
     serde_json::to_string_pretty(&rows).expect("prefix rows always serialize")
 }
 
+/// set-032: number of [`settings_by_prefix`] hits for `prefix` — 0 when
+/// nothing matches, schema length for the empty prefix. Single source is
+/// [`settings_by_prefix`], so this can never drift from the schema.
+pub fn settings_prefix_count(prefix: &str) -> usize {
+    settings_by_prefix(prefix).len()
+}
+
 /// set-019: count of [`schema_defs`] entries per [`DefKind`], as
 /// `(kind name, count)` pairs sorted by count descending (ties keep the
 /// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
@@ -1602,6 +1609,25 @@ mod settings_tests {
     #[test]
     fn settings_by_prefix_no_match_is_empty() {
         assert!(settings_by_prefix("zzz_").is_empty());
+    }
+
+    // ---- set-032: prefix count ----------------------------------------------
+
+    #[test]
+    fn settings_prefix_count_matches_count_hits() {
+        assert_eq!(settings_prefix_count("max_"), 1);
+        assert_eq!(settings_prefix_count("APPROVAL"), 1, "case-insensitive");
+    }
+
+    #[test]
+    fn settings_prefix_count_no_match_is_zero() {
+        assert_eq!(settings_prefix_count("zzz_"), 0);
+        assert_eq!(settings_prefix_count("   "), 0, "blank is not empty");
+    }
+
+    #[test]
+    fn settings_prefix_count_empty_prefix_returns_schema_len() {
+        assert_eq!(settings_prefix_count(""), schema_defs().len());
     }
 
     // ---- set-030: prefix JSON export --------------------------------------

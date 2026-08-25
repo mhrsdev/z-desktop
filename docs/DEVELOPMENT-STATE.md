@@ -6,7 +6,19 @@
 
 Last updated: 2026-08-24
 
-## Wave 69 (jour-051 + ctx-053 + set-047) — 2026-08-24 COMPLETE
+## Wave 71 (jour-053 + ctx-055 + set-049) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-053**: journal_thread_report_json.
+2. ✅ **ctx-055**: context_stale_pct.
+3. ✅ **set-049**: settings_changed_keys_report.
+
+Verification: full workspace suite green — **1022 tests, 0 failed**
+(1015 → 1022). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
+## Wave 70 (jour-052 + ctx-054 + set-048) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-051**: journal_message_count_jsonl.
 2. ✅ **ctx-053**: context_pinned_report_json.

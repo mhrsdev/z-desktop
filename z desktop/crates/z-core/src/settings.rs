@@ -503,6 +503,14 @@ pub fn settings_changed_keys_jsonl(current: &Settings) -> String {
     out
 }
 
+/// set-049: single-line compact JSON `{changed: n}` where n is the number of
+/// keys differing from defaults, from [`settings_diff_count`] — single source,
+/// so this can never drift from the schema.
+pub fn settings_changed_keys_report(current: &Settings) -> String {
+    serde_json::to_string(&json!({ "changed": settings_diff_count(current) }))
+        .expect("changed count always serializes")
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1657,6 +1665,27 @@ mod settings_tests {
             ],
             "order mirrors settings_changed_keys: {out:?}"
         );
+    }
+
+    // ---- set-049: changed keys report ----------------------------------------
+
+    #[test]
+    fn settings_changed_keys_report_fresh_settings_is_zero() {
+        assert_eq!(
+            settings_changed_keys_report(&Settings::default()),
+            r#"{"changed":0}"#
+        );
+    }
+
+    #[test]
+    fn settings_changed_keys_report_changed_counts_keys() {
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 600;
+        assert_eq!(settings_changed_keys_report(&s), r#"{"changed":1}"#);
+
+        s.max_tool_rounds = 10;
+        s.doom_threshold = 7;
+        assert_eq!(settings_changed_keys_report(&s), r#"{"changed":3}"#);
     }
 
     #[test]

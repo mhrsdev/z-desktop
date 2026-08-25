@@ -310,6 +310,16 @@ pub fn context_has_stale(items: &[ContextItem]) -> bool {
     stats(items).stale_count > 0
 }
 
+/// ctx-055: percentage of stale items, [`stale_report`] pct accessor.
+/// Empty slice yields 0 (avoids division by zero). Pure inspector helper.
+pub fn context_stale_pct(items: &[ContextItem]) -> usize {
+    if items.is_empty() {
+        0
+    } else {
+        stats(items).stale_count * 100 / items.len()
+    }
+}
+
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Prefix => "prefix",
@@ -2465,5 +2475,33 @@ mod tests {
         assert!(!context_has_stale(&[]));
         let items = vec![item(Layer::Ephemeral, "fresh", 1)];
         assert!(!context_has_stale(&items));
+    }
+
+    // ctx-055
+    #[test]
+    fn context_stale_pct_seeded_exact() {
+        let mut items = vec![
+            item(Layer::Session, "a", 1),
+            item(Layer::Turn, "b", 1),
+            item(Layer::Ephemeral, "c", 1),
+            item(Layer::Ephemeral, "d", 1),
+        ];
+        items[2].stale = true;
+        items[3].stale = true;
+        assert_eq!(context_stale_pct(&items), 50);
+    }
+
+    #[test]
+    fn context_stale_pct_empty_is_zero() {
+        assert_eq!(context_stale_pct(&[]), 0);
+    }
+
+    #[test]
+    fn context_stale_pct_all_stale_is_hundred() {
+        let mut items = vec![item(Layer::Session, "a", 1), item(Layer::Turn, "b", 1)];
+        for i in &mut items {
+            i.stale = true;
+        }
+        assert_eq!(context_stale_pct(&items), 100);
     }
 }

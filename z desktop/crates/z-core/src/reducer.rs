@@ -508,6 +508,22 @@ pub fn journal_thread_summary_report(path: &Path) -> Result<String, String> {
     .map_err(|e| format!("reducer: thread summary report: {e}"))
 }
 
+/// jour-053: per-thread report as pretty JSON — `{thread, messages}` where
+/// `messages` is the thread's persisted `message_count` from
+/// [`ThreadsView::fold`]. Unknown thread yields zero messages.
+pub fn journal_thread_report_json(path: &Path, thread_id: &str) -> Result<String, String> {
+    let count = ThreadsView::fold(path)?
+        .threads
+        .get(thread_id)
+        .map(|t| t.message_count)
+        .unwrap_or(0);
+    serde_json::to_string_pretty(&serde_json::json!({
+        "thread": thread_id,
+        "messages": count,
+    }))
+    .map_err(|e| e.to_string())
+}
+
 /// jour-038: compact JSONL of all records of one kind — one
 /// `{seq, kind, thread_id, ts_ms}` object per line, journal order, same
 /// metadata shape as [`journal_export_jsonl`]. Unknown/empty kind yields an
@@ -1399,6 +1415,36 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_thread_summary_report(&dir.join("main.jsonl")).expect("report"),
             "{\"bytes\":0,\"messages\":0,\"threads\":0}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-053 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_thread_report_json_seeded_matches_exact_pretty_json() {
+        let dir = temp_dir("jour-053");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+        }
+        assert_eq!(
+            journal_thread_report_json(&dir.join("main.jsonl"), "t1").expect("report"),
+            "{\n  \"messages\": 2,\n  \"thread\": \"t1\"\n}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_report_json_unknown_thread_is_zero_messages() {
+        let dir = temp_dir("jour-053-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_thread_report_json(&dir.join("main.jsonl"), "nope").expect("report"),
+            "{\n  \"messages\": 0,\n  \"thread\": \"nope\"\n}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

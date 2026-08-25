@@ -999,6 +999,12 @@ pub fn context_layer_names_report(items: &[ContextItem]) -> String {
     format!("{{\"layers\":{}}}", context_layer_names(items).len())
 }
 
+/// ctx-067: count of distinct non-empty layers from [`context_layer_names`]
+/// len. Empty slice yields 0. Pure inspector helper.
+pub fn context_layer_names_count(items: &[ContextItem]) -> usize {
+    context_layer_names(items).len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2902,6 +2908,24 @@ mod tests {
     #[test]
     fn context_layer_names_report_empty_yields_zero() {
         assert_eq!(context_layer_names_report(&[]), "{\"layers\":0}");
+    }
+
+    // ctx-067
+    #[test]
+    fn context_layer_names_count_seeded_is_exact() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 1),
+            item(Layer::Session, "hi", 2),
+            item(Layer::Turn, "now", 3),
+            item(Layer::Turn, "again", 4),
+            item(Layer::Ephemeral, "scratch", 5),
+        ];
+        assert_eq!(context_layer_names_count(&items), 4);
+    }
+
+    #[test]
+    fn context_layer_names_count_empty_yields_zero() {
+        assert_eq!(context_layer_names_count(&[]), 0);
     }
 
     #[test]

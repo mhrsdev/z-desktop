@@ -926,6 +926,17 @@ pub fn settings_kinds_count_jsonl() -> String {
         .expect("kinds count jsonl always serializes")
 }
 
+/// set-061: names of [`DefKind`]s actually present in [`schema_defs`]
+/// (zero-count kinds excluded), in [`schema_kind_counts`] order, reusing it
+/// as its single source so this cannot drift from the schema.
+pub fn settings_kinds_names() -> Vec<String> {
+    schema_kind_counts()
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(kind, _)| kind)
+        .collect()
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -2581,6 +2592,29 @@ mod settings_tests {
             doc["kinds"].as_u64().expect("kinds numeric") > 0,
             "at least one kind tracked"
         );
+    }
+
+    // ---- set-061: kinds names -------------------------------------------------
+
+    #[test]
+    fn settings_kinds_names_matches_current_schema_exactly() {
+        // Current schema is all-u64: only u64 has a positive count.
+        assert_eq!(settings_kinds_names(), vec!["u64".to_string()]);
+    }
+
+    #[test]
+    fn settings_kinds_names_non_empty_and_match_positive_counts_in_order() {
+        let names = settings_kinds_names();
+        let positive: Vec<String> = schema_kind_counts()
+            .into_iter()
+            .filter(|(_, count)| *count > 0)
+            .map(|(kind, _)| kind)
+            .collect();
+        assert_eq!(names, positive, "exactly the positive-count kinds, in order");
+        assert!(!names.is_empty(), "schema always has at least one kind");
+        for name in &names {
+            assert!(!name.is_empty(), "kind names are non-empty: {name}");
+        }
     }
 
     // ---- set-035: validate count ---------------------------------------------

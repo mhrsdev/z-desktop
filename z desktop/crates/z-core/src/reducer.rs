@@ -308,6 +308,13 @@ pub fn journal_thread_names(path: &Path) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+/// jour-065: [`journal_thread_names`] as pretty JSON — array of thread id
+/// strings, ascending. An empty segment yields `[]`.
+pub fn journal_thread_names_json(path: &Path) -> Result<String, String> {
+    serde_json::to_string_pretty(&journal_thread_names(path)?)
+        .map_err(|e| format!("reducer: thread names json: {e}"))
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -3652,6 +3659,34 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_thread_names(&dir.join("main.jsonl")).expect("names"),
             Vec::<String>::new()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_names_json_seeded_is_exact_array() {
+        let dir = temp_dir("jour-065");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, None, json!({}));
+        }
+        assert_eq!(
+            journal_thread_names_json(&dir.join("main.jsonl")).expect("json"),
+            "[\n  \"t1\",\n  \"t2\"\n]"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_names_json_empty_segment_is_empty_array() {
+        let dir = temp_dir("jour-065-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_thread_names_json(&dir.join("main.jsonl")).expect("json"),
+            "[]"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

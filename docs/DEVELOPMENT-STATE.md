@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 61 (jour-044 + ctx-045 + set-039) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-044**: journal_record_count.
+2. ✅ **ctx-045**: context_total_items.
+3. ✅ **set-039**: settings_is_default.
+
+Verification: full workspace suite green — **957 tests, 0 failed**
+(951 → 957). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 60 (jour-043 + ctx-044 + set-038) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-043**: journal_last_seq accessor.

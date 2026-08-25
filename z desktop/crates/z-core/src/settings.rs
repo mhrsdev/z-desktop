@@ -463,6 +463,13 @@ pub fn settings_diff_count(current: &Settings) -> usize {
     diff_from_default(current).len()
 }
 
+/// set-039: true when `current` matches its documented defaults on every
+/// schema key. Single source is [`settings_diff_count`], so this can never
+/// drift from the schema.
+pub fn settings_is_default(current: &Settings) -> bool {
+    settings_diff_count(current) == 0
+}
+
 /// set-038: keys where `current` differs from its documented default, in
 /// schema order. Single source is [`diff_from_default`], so this can never
 /// drift from the schema.
@@ -1440,6 +1447,23 @@ mod settings_tests {
         s.doom_threshold = 7;
         s.max_tool_rounds = 10;
         assert_eq!(settings_diff_count(&s), 3);
+    }
+
+    // ---- set-039: is-default check ------------------------------------------
+
+    #[test]
+    fn settings_is_default_true_for_fresh_settings() {
+        assert!(settings_is_default(&Settings::default()));
+    }
+
+    #[test]
+    fn settings_is_default_false_when_changed() {
+        let mut s = Settings::default();
+        s.max_tool_rounds = 7;
+        assert!(!settings_is_default(&s));
+        // Resetting back restores the default verdict.
+        s.max_tool_rounds = DEFAULT_MAX_TOOL_ROUNDS;
+        assert!(settings_is_default(&s));
     }
 
     // ---- set-038: changed keys ----------------------------------------------

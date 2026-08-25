@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 60 (jour-043 + ctx-044 + set-038) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-043**: journal_last_seq accessor.
+2. ✅ **ctx-044**: context_total_tokens accessor.
+3. ✅ **set-038**: settings_changed_keys.
+
+Verification: full workspace suite green — **951 tests, 0 failed**
+(945 → 951). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 59 (jour-042 + ctx-043 + set-037) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-042**: journal_gaps_jsonl single-line.

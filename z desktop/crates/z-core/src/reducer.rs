@@ -195,6 +195,12 @@ pub fn seq_health(path: &Path) -> Result<String, String> {
     ))
 }
 
+/// jour-043: last sequence number accessor — [`lag_stats`]'s `last_seq` over
+/// the replayed segment. `None` on an empty segment.
+pub fn journal_last_seq(path: &Path) -> Result<Option<u64>, String> {
+    Ok(lag_stats(&Journal::replay(path)?).last_seq)
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -2725,6 +2731,33 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             seq_health(&dir.join("main.jsonl")).expect("report"),
             "3 records, 0 gaps, last_seq 3"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_last_seq_seeded_returns_some() {
+        let dir = temp_dir("jour-043");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        assert_eq!(
+            journal_last_seq(&dir.join("main.jsonl")).expect("seq"),
+            Some(2)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_last_seq_empty_segment_is_none() {
+        let dir = temp_dir("jour-043-empty");
+        // Create the segment file with no records (drop flushes/closes it).
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_last_seq(&dir.join("main.jsonl")).expect("seq"),
+            None
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

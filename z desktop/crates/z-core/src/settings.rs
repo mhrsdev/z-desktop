@@ -463,6 +463,16 @@ pub fn settings_diff_count(current: &Settings) -> usize {
     diff_from_default(current).len()
 }
 
+/// set-038: keys where `current` differs from its documented default, in
+/// schema order. Single source is [`diff_from_default`], so this can never
+/// drift from the schema.
+pub fn settings_changed_keys(current: &Settings) -> Vec<String> {
+    diff_from_default(current)
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect()
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1430,6 +1440,26 @@ mod settings_tests {
         s.doom_threshold = 7;
         s.max_tool_rounds = 10;
         assert_eq!(settings_diff_count(&s), 3);
+    }
+
+    // ---- set-038: changed keys ----------------------------------------------
+
+    #[test]
+    fn settings_changed_keys_fresh_settings_is_empty() {
+        assert!(settings_changed_keys(&Settings::default()).is_empty());
+    }
+
+    #[test]
+    fn settings_changed_keys_changed_lists_keys_in_schema_order() {
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 600;
+        assert_eq!(settings_changed_keys(&s), vec!["approval_timeout_secs"]);
+        s.max_tool_rounds = 10;
+        s.doom_threshold = 7;
+        assert_eq!(
+            settings_changed_keys(&s),
+            vec!["max_tool_rounds", "approval_timeout_secs", "doom_threshold"]
+        );
     }
 
     #[test]

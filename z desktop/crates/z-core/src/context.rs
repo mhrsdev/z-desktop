@@ -292,6 +292,12 @@ pub fn context_stale_count(items: &[ContextItem]) -> usize {
     stats(items).stale_count
 }
 
+/// ctx-044: total estimated tokens, [`stats`].est_tokens_total accessor.
+/// Empty slice yields 0. Pure inspector helper.
+pub fn context_total_tokens(items: &[ContextItem]) -> usize {
+    stats(items).est_tokens_total
+}
+
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Prefix => "prefix",
@@ -2104,5 +2110,22 @@ mod tests {
         let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
         assert_eq!(context_pinned_count(&items), 0);
         assert_eq!(context_pinned_count(&[]), 0);
+    }
+
+    // ctx-044
+    #[test]
+    fn context_total_tokens_seeded_is_exact() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "history", 4),
+            item(Layer::Turn, "latest", 3),
+            item(Layer::Ephemeral, "scratch", 11),
+        ];
+        assert_eq!(context_total_tokens(&items), 25);
+    }
+
+    #[test]
+    fn context_total_tokens_empty_is_zero() {
+        assert_eq!(context_total_tokens(&[]), 0);
     }
 }

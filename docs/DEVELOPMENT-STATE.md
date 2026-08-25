@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 57 (jour-040 + ctx-041 + set-035) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-040**: journal_size_json.
+2. ✅ **ctx-041**: context_pinned_count.
+3. ✅ **set-035**: settings_validate_count.
+
+Verification: full workspace suite green — **932 tests, 0 failed**
+(926 → 932). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 56 (jour-039 + ctx-040 + set-034) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-039**: journal_thread_json pretty dump.

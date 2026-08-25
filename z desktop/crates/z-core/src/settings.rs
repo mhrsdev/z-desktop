@@ -617,6 +617,13 @@ pub fn settings_schema_total() -> usize {
     schema_defs().len()
 }
 
+/// set-035: number of [`validate_all`] messages for `current` — 0 when every
+/// setting is within its documented bounds. Single source is [`validate_all`],
+/// so this can never drift from the schema.
+pub fn settings_validate_count(current: &Settings) -> usize {
+    validate_all(current).len()
+}
+
 /// set-019: count of [`schema_defs`] entries per [`DefKind`], as
 /// `(kind name, count)` pairs sorted by count descending (ties keep the
 /// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
@@ -1787,6 +1794,22 @@ mod settings_tests {
             );
             assert!(!line.contains('\n'), "compact single-line JSON");
         }
+    }
+
+    // ---- set-035: validate count ---------------------------------------------
+
+    #[test]
+    fn settings_validate_count_is_zero_for_defaults() {
+        assert_eq!(settings_validate_count(&Settings::default()), 0);
+    }
+
+    #[test]
+    fn settings_validate_count_positive_when_broken() {
+        let broken = Settings { max_tool_rounds: 0, ..Settings::default() };
+        assert!(
+            settings_validate_count(&broken) >= 1,
+            "at least one validation message for a broken field"
+        );
     }
 
     // ---- set-020: defaults JSON ---------------------------------------------

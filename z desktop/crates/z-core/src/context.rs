@@ -739,6 +739,12 @@ pub fn context_pinned_json(items: &[ContextItem]) -> String {
     serde_json::to_string_pretty(&rows).unwrap_or_default()
 }
 
+/// ctx-041: count of items where [`ContextItem::pinned`] is set.
+/// Empty slice yields 0. Pure inspector helper.
+pub fn context_pinned_count(items: &[ContextItem]) -> usize {
+    items.iter().filter(|i| i.pinned).count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2015,5 +2021,26 @@ mod tests {
         let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
         assert_eq!(context_pinned_json(&items), "[]");
         assert_eq!(context_pinned_json(&[]), "[]");
+    }
+
+    // ctx-041
+    #[test]
+    fn context_pinned_count_seeded_is_exact() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "pinned note", 5),
+            item(Layer::Session, "history", 4),
+            item(Layer::Turn, "latest", 3),
+        ];
+        items[0].pinned = true;
+        items[1].pinned = true;
+        assert_eq!(context_pinned_count(&items), 2);
+    }
+
+    #[test]
+    fn context_pinned_count_none_and_empty_are_zero() {
+        let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
+        assert_eq!(context_pinned_count(&items), 0);
+        assert_eq!(context_pinned_count(&[]), 0);
     }
 }

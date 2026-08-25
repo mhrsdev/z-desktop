@@ -609,6 +609,19 @@ pub fn context_pinned_count_jsonl(items: &[ContextItem]) -> String {
     )
 }
 
+/// ctx-059: single-line compact JSON pinned percentage — {"pct":P} —
+/// the pct-only twin of [`context_pinned_count_jsonl`] for journal/inspector
+/// export. Empty slice yields pct 0. Pure.
+pub fn context_pinned_pct_report(items: &[ContextItem]) -> String {
+    let pinned = items.iter().filter(|i| i.pinned).count();
+    let pct = if items.is_empty() {
+        0
+    } else {
+        pinned * 100 / items.len()
+    };
+    format!("{{\"pct\":{}}}", pct)
+}
+
 /// ctx-049: single-line compact JSON stale-count summary — {"stale":S,"total":T}
 /// — the count twin of [`context_stale_count`] for journal/inspector export.
 /// Empty slice yields zeros. Pure.
@@ -1912,6 +1925,35 @@ mod tests {
   "total": 0
 }"#
         );
+    }
+
+    // ctx-059
+    #[test]
+    fn context_pinned_pct_report_seeded_yields_exact_line() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "scratch", 3),
+        ];
+        items[0].pinned = true;
+        assert_eq!(context_pinned_pct_report(&items), r#"{"pct":33}"#);
+    }
+
+    #[test]
+    fn context_pinned_pct_report_empty_yields_zero() {
+        assert_eq!(context_pinned_pct_report(&[]), r#"{"pct":0}"#);
+    }
+
+    #[test]
+    fn context_pinned_pct_report_all_pinned_yields_100() {
+        let mut items = vec![
+            item(Layer::Session, "a", 2),
+            item(Layer::Session, "b", 3),
+        ];
+        for i in &mut items {
+            i.pinned = true;
+        }
+        assert_eq!(context_pinned_pct_report(&items), r#"{"pct":100}"#);
     }
 
     // ctx-054

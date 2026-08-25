@@ -539,6 +539,18 @@ pub fn settings_health_report(current: &Settings) -> String {
     .expect("health report always serializes")
 }
 
+/// set-053: single-line compact JSON `{valid, errors}` combining
+/// [`settings_is_valid`] and [`settings_validate_count`] — single sources,
+/// so this can never drift from the schema; shape mirrors
+/// [`settings_health_report`].
+pub fn settings_validate_report(current: &Settings) -> String {
+    serde_json::to_string(&json!({
+        "valid": settings_is_valid(current),
+        "errors": settings_validate_count(current),
+    }))
+    .expect("validate report always serializes")
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1803,6 +1815,58 @@ mod settings_tests {
         // Both at once: one changed-valid field plus one out-of-range field.
         s.max_tool_rounds = 0;
         assert_eq!(settings_health_report(&s), r#"{"changed":2,"errors":1}"#);
+    }
+
+    // ---- set-053: validate report ------------------------------------------------
+
+    #[test]
+    fn settings_validate_report_fresh_settings_are_valid_with_zero_errors() {
+        // Keys come out alphabetically (serde_json sorts map keys).
+        assert_eq!(
+            settings_validate_report(&Settings::default()),
+            r#"{"errors":0,"valid":true}"#
+        );
+        // Single line, compact, valid JSON.
+        let out = settings_validate_report(&Settings::default());
+        assert_eq!(out.lines().count(), 1, "single line");
+        assert!(!out.contains(' '), "compact: no spaces: {out}");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&out).is_ok(),
+            "valid JSON"
+        );
+    }
+
+    #[test]
+    fn settings_validate_report_broken_settings_are_invalid_with_error_count() {
+        // Changed but still in range: valid.
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 600;
+        assert_eq!(settings_validate_report(&s), r#"{"errors":0,"valid":true}"#);
+
+        // Out of range: invalid with one error.
+        let broken = Settings {
+            max_tool_rounds: 0,
+            ..Settings::default()
+        };
+        assert_eq!(
+            settings_validate_report(&broken),
+            r#"{"errors":1,"valid":false}"#
+        );
+        assert_eq!(
+            settings_validate_report(&broken),
+            format!(
+                "{{\"errors\":{},\"valid\":{}}}",
+                settings_validate_count(&broken),
+                settings_is_valid(&broken)
+            ),
+            "single sources agree"
+        );
+
+        // Two broken fields at once.
+        s.max_tool_rounds = 0;
+        assert_eq!(settings_validate_report(&s), r#"{"errors":1,"valid":false}"#);
+        s.doom_threshold = 0;
+        assert_eq!(settings_validate_report(&s), r#"{"errors":2,"valid":false}"#);
     }
 
     #[test]

@@ -229,6 +229,17 @@ pub fn journal_thread_exists(path: &Path, thread_id: &str) -> Result<bool, Strin
     })
 }
 
+/// jour-057: thread existence as a single-line compact JSONL string —
+/// `{thread, exists}` wrapping [`journal_thread_exists`].
+pub fn journal_thread_exists_jsonl(path: &Path, thread_id: &str) -> Result<String, String> {
+    let exists = journal_thread_exists(path, thread_id)?;
+    serde_json::to_string(&serde_json::json!({
+        "thread": thread_id,
+        "exists": exists,
+    }))
+    .map_err(|e| e.to_string())
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -3349,6 +3360,38 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_thread_exists(&dir.join("main.jsonl"), "t1").expect("exists"),
             false
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-057 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_thread_exists_jsonl_seeded_matches_exact_line() {
+        let dir = temp_dir("jour-057");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+        }
+        assert_eq!(
+            journal_thread_exists_jsonl(&dir.join("main.jsonl"), "t1").expect("jsonl"),
+            "{\"exists\":true,\"thread\":\"t1\"}"
+        );
+        assert_eq!(
+            journal_thread_exists_jsonl(&dir.join("main.jsonl"), "nope").expect("jsonl"),
+            "{\"exists\":false,\"thread\":\"nope\"}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_exists_jsonl_empty_segment_is_false() {
+        let dir = temp_dir("jour-057-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_thread_exists_jsonl(&dir.join("main.jsonl"), "t1").expect("jsonl"),
+            "{\"exists\":false,\"thread\":\"t1\"}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

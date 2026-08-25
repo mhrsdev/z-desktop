@@ -646,6 +646,17 @@ pub fn task_timeline(view: &TasksView, id: &str) -> Vec<(String, Option<u128>)> 
     view.timeline.get(id).cloned().unwrap_or_default()
 }
 
+/// orch-026: pretty-printed JSON array of `{status, ts}` pairs for one task's
+/// timeline in journal order, built on [`task_timeline`]. Unknown ids yield
+/// `"[]"`.
+pub fn task_timeline_json(view: &TasksView, id: &str) -> String {
+    let items: Vec<Value> = task_timeline(view, id)
+        .into_iter()
+        .map(|(status, ts)| serde_json::json!({ "status": status, "ts": ts }))
+        .collect();
+    serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".into())
+}
+
 /// orch-020: pretty-printed JSON array of `{id, status, timeline_len}` for all
 /// tasks sorted by id — full-state export built on [`task_state_events`] +
 /// [`task_timeline`].
@@ -1010,6 +1021,36 @@ pub(crate) mod reducer_tests {
         assert_eq!(task_timeline(&view, "other").len(), 1);
         assert!(task_timeline(&view, "unknown").is_empty());
         assert!(task_timeline(&TasksView::default(), "any").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_timeline_json_lists_seeded_entries_and_unknown_is_empty_array() {
+        let dir = temp_dir("timeline-json");
+        TaskStore::create(&dir, "t").expect("create");
+        TaskStore::transition(&dir, "t", TaskStatus::Done).expect("done");
+
+        let path = dir.join(format!("{TASKS_SEGMENT}.jsonl"));
+        let view = TasksView::fold(&path).expect("fold");
+        let stamps: Vec<u128> = Journal::replay(&path)
+            .expect("replay")
+            .iter()
+            .map(|r| r.ts_ms)
+            .collect();
+
+        let text = task_timeline_json(&view, "t");
+        assert!(text.contains('\n'), "pretty-printed: {text}");
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&text).expect("parses");
+        assert_eq!(
+            parsed,
+            vec![
+                serde_json::json!({ "status": "pending", "ts": stamps[0] }),
+                serde_json::json!({ "status": "done", "ts": stamps[1] }),
+            ]
+        );
+
+        assert_eq!(task_timeline_json(&view, "unknown"), "[]");
+        assert_eq!(task_timeline_json(&TasksView::default(), "any"), "[]");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

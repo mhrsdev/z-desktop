@@ -514,6 +514,26 @@ pub fn memory_export_jsonl(view: &MemoryView) -> String {
     out
 }
 
+/// Per-layer slice of [`memory_export_jsonl`] (mem-030): compact JSONL of one
+/// layer's live records ([`MemoryView::memory_by_layer`]), same
+/// `{id, layer, status, confidence}` row shape, trailing newline included;
+/// empty string when the layer has no live records.
+pub fn memory_layer_jsonl(view: &MemoryView, layer: Layer) -> String {
+    let mut out = String::new();
+    for r in view.memory_by_layer(layer) {
+        let line = serde_json::to_string(&MemoryExportRow {
+            id: &r.id,
+            layer: r.layer.as_str(),
+            status: r.status,
+            confidence: r.confidence,
+        })
+        .expect("memory export rows always serialize");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 /// Imports an array of MemoryRecord-shaped JSON objects (mem-019): each entry
 /// is validated through [`MemoryRecord::new`] (provenance + confidence rules)
 /// and recorded best-effort via [`record`]. Malformed entries are skipped with
@@ -2436,6 +2456,56 @@ mod memory_tests {
     #[test]
     fn memory_export_jsonl_empty_view_is_empty_string() {
         assert_eq!(memory_export_jsonl(&MemoryView::default()), "");
+    }
+
+    #[test]
+    fn memory_layer_jsonl_seeded_view_exports_only_that_layer() {
+        let mut view = MemoryView::default();
+        view.records.push(rec("mem-a", Status::Promoted));
+        let mut sup = rec("mem-sup", Status::Promoted);
+        sup.superseded_by = Some("mem-a".into());
+        view.records.push(sup);
+        view.records
+            .push(rec_conf("mem-draft", "draft fact", 0.4, Status::Provisional));
+        let semantic = MemoryRecord::new(
+            "mem-sem",
+            Layer::Semantic,
+            "semantic fact",
+            prov("msg-2"),
+            0.75,
+            Status::Promoted,
+        )
+        .expect("valid record");
+        view.records.push(semantic.clone());
+
+        let out = memory_layer_jsonl(&view, Layer::Semantic);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 1, "exactly one semantic live record");
+        let row: serde_json::Value = serde_json::from_str(lines[0]).expect("valid JSON line");
+        assert_eq!(row["id"], "mem-sem");
+        assert_eq!(row["layer"], "semantic");
+        assert_eq!(row["status"], "promoted");
+        assert_eq!(row["confidence"], 0.75);
+        assert_eq!(
+            out.lines().count(),
+            view.memory_by_layer(Layer::Semantic).len()
+        );
+
+        // The project layer still sees its own live records only.
+        let project_out = memory_layer_jsonl(&view, Layer::Project);
+        assert_eq!(project_out.lines().count(), 1, "superseded excluded");
+        let p: serde_json::Value =
+            serde_json::from_str(project_out.trim()).expect("valid JSON line");
+        assert_eq!(p["id"], "mem-a");
+        assert_eq!(p["layer"], "project");
+    }
+
+    #[test]
+    fn memory_layer_jsonl_empty_or_absent_layer_is_empty_string() {
+        let mut view = MemoryView::default();
+        view.records.push(rec("mem-a", Status::Promoted));
+        assert_eq!(memory_layer_jsonl(&view, Layer::Episodic), "");
+        assert_eq!(memory_layer_jsonl(&MemoryView::default(), Layer::Project), "");
     }
 
     #[test]

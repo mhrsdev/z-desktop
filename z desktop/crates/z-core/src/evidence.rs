@@ -688,9 +688,11 @@ pub fn evidence_health_json(view: &EvidenceView) -> String {
 /// object per line (newline-terminated, machine-diffable stream form; the
 /// internal record id and turn id stay out, same policy as [`evidence_export_json`]).
 /// An empty view exports an empty string.
-pub fn evidence_export_jsonl(view: &EvidenceView) -> String {
+/// Shared renderer behind [`evidence_export_jsonl`] / [`evidence_kind_jsonl`]
+/// so their field shapes can never drift apart.
+fn evidence_records_jsonl<'a>(records: impl IntoIterator<Item = &'a Evidence>) -> String {
     let mut out = String::new();
-    for e in &view.items {
+    for e in records {
         let line = serde_json::to_string(&serde_json::json!({
             "kind": e.kind,
             "ok": e.ok,
@@ -702,6 +704,17 @@ pub fn evidence_export_jsonl(view: &EvidenceView) -> String {
         out.push('\n');
     }
     out
+}
+
+pub fn evidence_export_jsonl(view: &EvidenceView) -> String {
+    evidence_records_jsonl(&view.items)
+}
+
+/// sup-033: compact JSONL of one kind's records — [`evidence_export_jsonl`]
+/// restricted to `kind`, same line shape and replay order. A kind with no
+/// records exports an empty string.
+pub fn evidence_kind_jsonl(view: &EvidenceView, kind: EvidenceKind) -> String {
+    evidence_records_jsonl(evidence_by_kind(view, kind))
 }
 
 #[cfg(test)]
@@ -1749,5 +1762,41 @@ mod evidence_tests {
     #[test]
     fn evidence_export_jsonl_is_empty_for_an_empty_view() {
         assert_eq!(evidence_export_jsonl(&EvidenceView::default()), "");
+    }
+
+    // sup-033: per-kind JSONL export.
+
+    #[test]
+    fn evidence_kind_jsonl_emits_only_that_kinds_lines_in_replay_order() {
+        let mut view = EvidenceView::default();
+        let a = Evidence::build("t1", "u1", Some(0), "make");
+        let b = Evidence::tests("t1", "u1", 3, 0, "cargo test");
+        let c = Evidence::build("t2", "u2", Some(1), "make");
+        view.items.extend([a.clone(), b, c.clone()]);
+        let out = evidence_kind_jsonl(&view, EvidenceKind::Build);
+        assert!(out.ends_with('\n'));
+        let lines: Vec<serde_json::Value> = out
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("valid JSONL line"))
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|v| v["kind"] == "build"));
+        assert_eq!(lines[0]["thread_id"], a.thread_id);
+        assert_eq!(lines[0]["summary"], "make");
+        assert_eq!(lines[0]["ok"], true);
+        assert_eq!(lines[1]["thread_id"], c.thread_id);
+        // Same compact shape as the whole-view export.
+        assert!(!out.contains(": ") && !out.contains(", "));
+    }
+
+    #[test]
+    fn evidence_kind_jsonl_is_empty_for_an_absent_or_empty_kind() {
+        let mut view = EvidenceView::default();
+        view.items.push(Evidence::bench("t", "u", "loop", 12));
+        assert_eq!(evidence_kind_jsonl(&view, EvidenceKind::Regression), "");
+        assert_eq!(
+            evidence_kind_jsonl(&EvidenceView::default(), EvidenceKind::Tests),
+            ""
+        );
     }
 }

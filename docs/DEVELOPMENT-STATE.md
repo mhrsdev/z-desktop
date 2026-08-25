@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 45 (orch-026 + sup-033 + mem-030) — 2026-08-24 COMPLETE
+
+1. ✅ **orch-026**: task_timeline_json per-task history dump.
+2. ✅ **sup-033**: evidence_kind_jsonl scoped stream.
+3. ✅ **mem-030**: memory_layer_jsonl scoped stream.
+
+Verification: full workspace suite green — **859 tests, 0 failed**
+(854 → 859). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 44 (orch-025 + sup-032 + mem-029) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-025**: tasks_export_jsonl.

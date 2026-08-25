@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 39 (jour-029 + ctx-026 + set-020) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-029**: journal_top_threads top-N.
+2. ✅ **ctx-026**: context_top_layers top-N.
+3. ✅ **set-020**: settings_defaults_json pretty dump.
+
+Verification: full workspace suite green — **822 tests, 0 failed**
+(813 → 822). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 38 (jour-028 + ctx-025 + set-019) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-028**: thread_message_counts sorted desc.

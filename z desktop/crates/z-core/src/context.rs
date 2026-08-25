@@ -526,6 +526,17 @@ pub fn context_tokens_by_layer(items: &[ContextItem]) -> Vec<(Layer, usize)> {
     .collect()
 }
 
+/// ctx-026: top-N layers by item count, largest first — [`items_by_layer`]
+/// sorted by count descending, truncation to n. Stable sort keeps enum order
+/// for count ties. n=0 or empty input yields empty. Pure inspector helper.
+pub fn context_top_layers(items: &[ContextItem], n: usize) -> Vec<(Layer, usize)> {
+    let mut rows = items_by_layer(items);
+    // ponytail: stable sort on ≤4 rows; no heap needed.
+    rows.sort_by(|a, b| b.1.cmp(&a.1));
+    rows.truncate(n);
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1350,5 +1361,43 @@ mod tests {
             context_tokens_by_layer(&items),
             vec![(Layer::Ephemeral, 10)]
         );
+    }
+
+    // ctx-026
+    #[test]
+    fn context_top_layers_seeded_orders_by_count_desc() {
+        let items = vec![
+            item(Layer::Turn, "t1", 1),
+            item(Layer::Prefix, "sys", 1),
+            item(Layer::Ephemeral, "e1", 1),
+            item(Layer::Session, "s1", 1),
+            item(Layer::Turn, "t2", 1),
+            item(Layer::Ephemeral, "e2", 1),
+        ];
+        assert_eq!(
+            context_top_layers(&items, 2),
+            vec![(Layer::Turn, 2), (Layer::Ephemeral, 2)]
+        );
+        // Ties keep enum order: Turn before Ephemeral at count 2.
+        assert_eq!(context_top_layers(&items, 4).len(), 4);
+    }
+
+    #[test]
+    fn context_top_layers_n_zero_is_empty() {
+        let items = vec![item(Layer::Session, "s", 1)];
+        assert!(context_top_layers(&items, 0).is_empty());
+    }
+
+    #[test]
+    fn context_top_layers_n_exceeding_total_yields_all_rows() {
+        let items = vec![
+            item(Layer::Ephemeral, "e", 1),
+            item(Layer::Ephemeral, "f", 1),
+        ];
+        assert_eq!(
+            context_top_layers(&items, 99),
+            vec![(Layer::Ephemeral, 2)]
+        );
+        assert!(context_top_layers(&[], 5).is_empty());
     }
 }

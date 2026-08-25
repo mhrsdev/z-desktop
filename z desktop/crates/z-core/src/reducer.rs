@@ -266,6 +266,15 @@ pub fn thread_message_counts(path: &Path) -> Result<Vec<(String, usize)>, String
     Ok(pairs)
 }
 
+/// jour-029: top-N threads by persisted message count (ties broken by thread
+/// id ascending). Reuses [`thread_message_counts`]; `n == 0` yields empty.
+pub fn journal_top_threads(path: &Path, n: usize) -> Result<Vec<(String, usize)>, String> {
+    thread_message_counts(path).map(|mut pairs| {
+        pairs.truncate(n);
+        pairs
+    })
+}
+
 /// jour-017: generates a synthetic, deterministic journal segment at `path`.
 ///
 /// Each of `turns` turns contributes one `turn_started` record followed by
@@ -2111,6 +2120,56 @@ pub(crate) mod reducer_tests {
             thread_message_counts(&dir.join("main.jsonl"))
                 .expect("fold")
                 .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-029 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_top_threads_seeded_returns_top_n_in_order() {
+        let dir = temp_dir("jour-029-top");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            for _ in 0..3 {
+                append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            }
+            for _ in 0..2 {
+                append(&mut j, JournalKind::MessagePersisted, Some("t3"), json!({}));
+            }
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        assert_eq!(
+            journal_top_threads(&dir.join("main.jsonl"), 2).expect("fold"),
+            vec![("t2".to_string(), 3), ("t3".to_string(), 2)]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_top_threads_zero_is_empty() {
+        let dir = temp_dir("jour-029-zero");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        assert!(journal_top_threads(&dir.join("main.jsonl"), 0)
+            .expect("fold")
+            .is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_top_threads_n_over_total_returns_all() {
+        let dir = temp_dir("jour-029-all");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+        }
+        assert_eq!(
+            journal_top_threads(&dir.join("main.jsonl"), 99).expect("fold"),
+            vec![("t1".to_string(), 1), ("t2".to_string(), 1)]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

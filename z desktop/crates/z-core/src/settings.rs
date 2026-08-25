@@ -493,6 +493,18 @@ pub fn schema_kind_counts() -> Vec<(String, usize)> {
     counts.into_iter().map(|(k, n)| (k.to_string(), n)).collect()
 }
 
+/// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
+/// per schema key in schema order, values being the same string renderings
+/// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
+/// never drift from the schema.
+pub fn settings_defaults_json() -> String {
+    let mut obj = serde_json::Map::new();
+    for (key, value) in defaults_map() {
+        obj.insert(key.to_string(), json!(value));
+    }
+    serde_json::to_string_pretty(&obj).expect("defaults always serialize")
+}
+
 /// Validate a numeric value against the schema bounds for `key`. The unknown-
 /// key path never silently ignores: an unrecognized key is rejected with an
 /// "unknown setting \\"key\\"" message so hand-edited typos surface instead of
@@ -1304,5 +1316,50 @@ mod settings_tests {
         let mut sorted = ns.clone();
         sorted.sort_unstable_by(|a, b| b.cmp(a));
         assert_eq!(ns, sorted);
+    }
+
+    // ---- set-020: defaults JSON ---------------------------------------------
+
+    #[test]
+    fn settings_defaults_json_parses_as_an_object() {
+        let doc: serde_json::Value = serde_json::from_str(&settings_defaults_json())
+            .expect("settings_defaults_json is valid JSON");
+        assert!(
+            doc.as_object().is_some(),
+            "top-level shape must be an object"
+        );
+    }
+
+    #[test]
+    fn settings_defaults_json_contains_every_schema_key() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_defaults_json()).expect("valid JSON");
+        assert_eq!(
+            doc.as_object().map(|o| o.len()),
+            Some(known_keys().len()),
+            "one entry per schema key"
+        );
+        for key in known_keys() {
+            assert!(doc.get(key).is_some(), "missing schema key {key}");
+        }
+    }
+
+    #[test]
+    fn settings_defaults_json_matches_settings_default_values() {
+        let d = Settings::default();
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_defaults_json()).expect("valid JSON");
+        assert_eq!(
+            doc.get("max_tool_rounds").and_then(|v| v.as_str()),
+            Some(d.max_tool_rounds.to_string()).as_deref()
+        );
+        assert_eq!(
+            doc.get("approval_timeout_secs").and_then(|v| v.as_str()),
+            Some(d.approval_timeout_secs.to_string()).as_deref()
+        );
+        assert_eq!(
+            doc.get("doom_threshold").and_then(|v| v.as_str()),
+            Some(d.doom_threshold.to_string()).as_deref()
+        );
     }
 }

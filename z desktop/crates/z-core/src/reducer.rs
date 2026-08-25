@@ -219,6 +219,16 @@ pub fn journal_is_empty(path: &Path) -> Result<bool, String> {
     Ok(lag_stats(&Journal::replay(path)?).records == 0)
 }
 
+/// jour-056: thread existence accessor — true if any record in the replayed
+/// segment carries `thread_id`. Empty/unknown thread yields `false`.
+pub fn journal_thread_exists(path: &Path, thread_id: &str) -> Result<bool, String> {
+    fold(path, false, |exists, record| {
+        if !*exists && record.thread_id.as_deref() == Some(thread_id) {
+            *exists = true;
+        }
+    })
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -3307,6 +3317,38 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_is_empty(&dir.join("main.jsonl")).expect("empty"),
             true
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-056 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_thread_exists_seeded_thread_true_unknown_false() {
+        let dir = temp_dir("jour-056");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+        }
+        assert_eq!(
+            journal_thread_exists(&dir.join("main.jsonl"), "t1").expect("exists"),
+            true
+        );
+        assert_eq!(
+            journal_thread_exists(&dir.join("main.jsonl"), "nope").expect("exists"),
+            false
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_exists_empty_segment_is_false() {
+        let dir = temp_dir("jour-056-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_thread_exists(&dir.join("main.jsonl"), "t1").expect("exists"),
+            false
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

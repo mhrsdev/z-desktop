@@ -347,6 +347,25 @@ pub fn context_pinned_pct(items: &[ContextItem]) -> usize {
     }
 }
 
+/// ctx-058: pretty JSON pinned-percentage summary — {pinned, total, pct}.
+/// Empty slice yields all zeros with pct 0. Pure inspector helper.
+pub fn context_pinned_pct_json(items: &[ContextItem]) -> String {
+    let pinned = items.iter().filter(|i| i.pinned).count();
+    let pct = if items.is_empty() {
+        0
+    } else {
+        pinned * 100 / items.len()
+    };
+    // ponytail: hand-rolled pretty object keeps the documented key order;
+    // serde_json::Value maps sort keys alphabetically.
+    format!(
+        "{{\n  \"pinned\": {},\n  \"total\": {},\n  \"pct\": {}\n}}",
+        pinned,
+        items.len(),
+        pct
+    )
+}
+
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Prefix => "prefix",
@@ -2583,5 +2602,42 @@ mod tests {
             i.pinned = true;
         }
         assert_eq!(context_pinned_pct(&items), 100);
+    }
+
+    // ctx-058
+    #[test]
+    fn context_pinned_pct_json_seeded_exact() {
+        let mut items = vec![
+            item(Layer::Session, "a", 1),
+            item(Layer::Turn, "b", 1),
+            item(Layer::Session, "c", 1),
+            item(Layer::Ephemeral, "d", 1),
+        ];
+        items[0].pinned = true;
+        items[2].pinned = true;
+        assert_eq!(
+            context_pinned_pct_json(&items),
+            "{\n  \"pinned\": 2,\n  \"total\": 4,\n  \"pct\": 50\n}"
+        );
+    }
+
+    #[test]
+    fn context_pinned_pct_json_empty_is_zeros() {
+        assert_eq!(
+            context_pinned_pct_json(&[]),
+            "{\n  \"pinned\": 0,\n  \"total\": 0,\n  \"pct\": 0\n}"
+        );
+    }
+
+    #[test]
+    fn context_pinned_pct_json_all_pinned_is_hundred() {
+        let mut items = vec![item(Layer::Session, "a", 1), item(Layer::Turn, "b", 1)];
+        for i in &mut items {
+            i.pinned = true;
+        }
+        assert_eq!(
+            context_pinned_pct_json(&items),
+            "{\n  \"pinned\": 2,\n  \"total\": 2,\n  \"pct\": 100\n}"
+        );
     }
 }

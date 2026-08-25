@@ -527,6 +527,18 @@ pub fn settings_is_default_report(current: &Settings) -> String {
         .expect("is-default report always serializes")
 }
 
+/// set-052: single-line compact JSON `{changed, errors}` combining
+/// [`settings_diff_count`] and [`settings_validate_count`] — single source,
+/// so this can never drift from the schema; shape mirrors
+/// [`settings_changed_keys_report`].
+pub fn settings_health_report(current: &Settings) -> String {
+    serde_json::to_string(&json!({
+        "changed": settings_diff_count(current),
+        "errors": settings_validate_count(current),
+    }))
+    .expect("health report always serializes")
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1745,6 +1757,52 @@ mod settings_tests {
             serde_json::from_str::<serde_json::Value>(&out).is_ok(),
             "valid JSON"
         );
+    }
+
+    // ---- set-052: health report ------------------------------------------------
+
+    #[test]
+    fn settings_health_report_fresh_settings_are_zeros() {
+        assert_eq!(
+            settings_health_report(&Settings::default()),
+            r#"{"changed":0,"errors":0}"#
+        );
+        // Single line, compact, valid JSON.
+        let out = settings_health_report(&Settings::default());
+        assert_eq!(out.lines().count(), 1, "single line");
+        assert!(!out.contains(' '), "compact: no spaces: {out}");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&out).is_ok(),
+            "valid JSON"
+        );
+    }
+
+    #[test]
+    fn settings_health_report_broken_settings_count_changes_and_errors() {
+        // Changed but still valid: diff only.
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 600;
+        assert_eq!(settings_health_report(&s), r#"{"changed":1,"errors":0}"#);
+
+        // Out of range: also differs from default, so both counters move.
+        let broken = Settings {
+            max_tool_rounds: 0,
+            ..Settings::default()
+        };
+        assert_eq!(settings_health_report(&broken), r#"{"changed":1,"errors":1}"#);
+        assert_eq!(
+            settings_health_report(&broken),
+            format!(
+                "{{\"changed\":{},\"errors\":{}}}",
+                settings_diff_count(&broken),
+                settings_validate_count(&broken)
+            ),
+            "single sources agree"
+        );
+
+        // Both at once: one changed-valid field plus one out-of-range field.
+        s.max_tool_rounds = 0;
+        assert_eq!(settings_health_report(&s), r#"{"changed":2,"errors":1}"#);
     }
 
     #[test]

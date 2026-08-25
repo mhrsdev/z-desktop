@@ -317,6 +317,12 @@ pub fn context_layer_names_exists(items: &[ContextItem]) -> bool {
     !items.is_empty()
 }
 
+/// ctx-069: single-line compact JSON layer-existence report — {"layers":B}.
+/// Empty slice yields {"layers":false}. Pure inspector helper.
+pub fn context_layer_names_exists_report(items: &[ContextItem]) -> String {
+    format!("{{\"layers\":{}}}", context_layer_names_exists(items))
+}
+
 /// ctx-055: percentage of stale items, [`stale_report`] pct accessor.
 /// Empty slice yields 0 (avoids division by zero). Pure inspector helper.
 pub fn context_stale_pct(items: &[ContextItem]) -> usize {
@@ -2701,6 +2707,21 @@ mod tests {
     #[test]
     fn context_layer_names_exists_false_when_empty() {
         assert!(!context_layer_names_exists(&[]));
+    }
+
+    // ctx-069
+    #[test]
+    fn context_layer_names_exists_report_seeded_is_true() {
+        let items = vec![item(Layer::Session, "a", 1)];
+        assert_eq!(
+            context_layer_names_exists_report(&items),
+            "{\"layers\":true}"
+        );
+    }
+
+    #[test]
+    fn context_layer_names_exists_report_empty_is_false() {
+        assert_eq!(context_layer_names_exists_report(&[]), "{\"layers\":false}");
     }
 
     // ctx-055

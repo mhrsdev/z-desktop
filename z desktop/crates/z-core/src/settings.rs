@@ -946,6 +946,18 @@ pub fn settings_kinds_names_json() -> String {
         .expect("kinds names always serialize")
 }
 
+/// set-063: compact JSONL of [`settings_kinds_names`] — one JSON string
+/// per line, trailing newline included, in [`schema_kind_counts`] order.
+/// Single source is [`settings_kinds_names`], so this cannot drift from
+/// the schema; line shape mirrors [`schema_defs_jsonl`].
+pub fn settings_kinds_names_jsonl() -> String {
+    settings_kinds_names()
+        .iter()
+        .map(|name| serde_json::to_string(name).expect("kind names always serialize"))
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -2636,6 +2648,24 @@ mod settings_tests {
     fn settings_kinds_names_json_parses_to_the_names_vector() {
         let parsed: Vec<String> = serde_json::from_str(&settings_kinds_names_json())
             .expect("kinds names json is a valid JSON string array");
+        assert_eq!(parsed, settings_kinds_names());
+    }
+
+    #[test]
+    fn settings_kinds_names_jsonl_matches_current_schema_exactly() {
+        // Current schema is all-u64: only u64 has a positive count.
+        assert_eq!(settings_kinds_names_jsonl(), "\"u64\"\n");
+    }
+
+    #[test]
+    fn settings_kinds_names_jsonl_lines_parse_to_the_names_vector() {
+        let out = settings_kinds_names_jsonl();
+        assert!(out.ends_with('\n'), "trailing newline like sibling exports");
+        let parsed: Vec<String> = out
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("valid JSONL line"))
+            .collect();
+        assert_eq!(parsed.len(), settings_kinds_names().len(), "one line per name");
         assert_eq!(parsed, settings_kinds_names());
     }
 

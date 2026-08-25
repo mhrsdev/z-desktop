@@ -326,6 +326,14 @@ pub fn journal_thread_names_jsonl(path: &Path) -> Result<String, String> {
         .map(|lines| lines.join("\n"))
 }
 
+/// jour-067: [`journal_thread_names`] count as a single-line compact
+/// `{threads}` JSON — same shape as [`journal_thread_count_report`], derived
+/// from the sorted distinct name vec.
+pub fn journal_thread_names_report(path: &Path) -> Result<String, String> {
+    let threads = journal_thread_names(path)?.len();
+    serde_json::to_string(&serde_json::json!({ "threads": threads })).map_err(|e| e.to_string())
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -3728,6 +3736,36 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_thread_names_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
             ""
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-067 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_thread_names_report_seeded_matches_exact_line() {
+        let dir = temp_dir("jour-067");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, None, json!({}));
+        }
+        assert_eq!(
+            journal_thread_names_report(&dir.join("main.jsonl")).expect("report"),
+            r#"{"threads":2}"#
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_names_report_empty_segment_is_zero() {
+        let dir = temp_dir("jour-067-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_thread_names_report(&dir.join("main.jsonl")).expect("report"),
+            r#"{"threads":0}"#
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -229,6 +229,34 @@ pub fn journal_export_json(path: &Path) -> Result<String, String> {
     serde_json::to_string_pretty(&entries).map_err(|e| format!("reducer: export json: {e}"))
 }
 
+/// jour-030: metadata-only JSONL export — one compact JSON object per line
+/// (`{seq, kind, thread_id, ts_ms}`), no pretty-printing, for streaming
+/// consumers. Payloads are deliberately excluded, matching
+/// [`journal_export_json`]. Empty segment yields an empty string.
+pub fn journal_export_jsonl(path: &Path) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct Entry<'a> {
+        seq: u64,
+        kind: &'a JournalKind,
+        thread_id: &'a Option<String>,
+        ts_ms: u128,
+    }
+    let records = Journal::replay(path)?;
+    let lines: Result<Vec<String>, String> = records
+        .iter()
+        .map(|r| {
+            serde_json::to_string(&Entry {
+                seq: r.seq,
+                kind: &r.kind,
+                thread_id: &r.thread_id,
+                ts_ms: r.ts_ms,
+            })
+            .map_err(|e| format!("reducer: export jsonl: {e}"))
+        })
+        .collect();
+    Ok(lines?.join("\n"))
+}
+
 /// jour-027: per-kind record counts for one segment, sorted by count
 /// descending (ties broken by kind name ascending). Replays the same
 /// [`Journal::replay`] segment the [`lag_stats`] reports consume, so totals
@@ -2131,6 +2159,48 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_export_json(&dir.join("main.jsonl")).expect("export"),
             "[]"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_export_jsonl_seeded_one_valid_json_line_per_record() {
+        let dir = temp_dir("jour-030");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(
+                &mut j,
+                JournalKind::TurnStarted,
+                Some("t1"),
+                json!({"x": 1}),
+            );
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        let out = journal_export_jsonl(&dir.join("main.jsonl")).expect("export");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2);
+        // Compact per-line JSON: each line parses standalone; no pretty array.
+        for (i, line) in lines.iter().enumerate() {
+            let parsed: serde_json::Value =
+                serde_json::from_str(line).expect("each line is valid json");
+            assert_eq!(parsed["seq"], i as u64 + 1);
+            assert!(parsed.get("payload").is_none());
+        }
+        // Compact: no whitespace after ':' or ','.
+        assert!(lines[0]
+            .starts_with("{\"seq\":1,\"kind\":\"turn_started\",\"thread_id\":\"t1\",\"ts_ms\":"));
+        assert!(lines[0].ends_with('}'));
+        assert!(!out.ends_with('\n')); // no trailing newline
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_export_jsonl_empty_segment_is_empty_string() {
+        let dir = temp_dir("jour-030-empty");
+        Journal::open(&dir, "main").expect("open"); // creates an empty segment
+        assert_eq!(
+            journal_export_jsonl(&dir.join("main.jsonl")).expect("export"),
+            ""
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 41 (jour-030 + ctx-028 + set-022) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-030**: journal_export_jsonl streaming format.
+2. ✅ **ctx-028**: context_export_jsonl.
+3. ✅ **set-022**: schema_defs_jsonl.
+
+Verification: full workspace suite green — **835 tests, 0 failed**
+(828 → 835). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 40 (orch-023 + ctx-027 + set-021) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-023**: task_status_summary_json.

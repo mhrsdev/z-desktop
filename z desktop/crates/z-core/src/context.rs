@@ -474,6 +474,21 @@ pub fn context_export_json(items: &[ContextItem]) -> String {
     serde_json::to_string_pretty(items).unwrap_or_default()
 }
 
+/// ctx-028: compact JSONL export for the inspector/external tooling — one
+/// item per line, same per-item shape as [`context_export_json`] and
+/// round-trippable with [`load_session_layer`]'s line format. Empty slice
+/// yields an empty string. Pure.
+pub fn context_export_jsonl(items: &[ContextItem]) -> String {
+    let mut out = String::new();
+    for item in items {
+        if let Ok(line) = serde_json::to_string(item) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// ctx-022: one-line combined health report for the inspector —
 /// [`budget_report`] and [`stale_report`] joined with " | ". Pure.
 pub fn context_health_line(items: &[ContextItem], budget_tokens: usize, now_ms: u128) -> String {
@@ -1260,6 +1275,31 @@ mod tests {
     #[test]
     fn context_export_json_empty_is_empty_array() {
         assert_eq!(context_export_json(&[]), "[]");
+    }
+
+    // ctx-028
+    #[test]
+    fn context_export_jsonl_seeded_yields_valid_line_per_item() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys prompt", 7),
+            item(Layer::Session, "history", 4),
+        ];
+        items[1].pinned = true;
+        items[1].stale = true;
+        items[1].compacted = true;
+        let jsonl = context_export_jsonl(&items);
+        let lines: Vec<&str> = jsonl.lines().collect();
+        assert_eq!(lines.len(), items.len());
+        let parsed: Vec<ContextItem> = lines
+            .iter()
+            .map(|l| serde_json::from_str(l).expect("valid JSONL line"))
+            .collect();
+        assert_eq!(parsed, items);
+    }
+
+    #[test]
+    fn context_export_jsonl_empty_is_empty_string() {
+        assert_eq!(context_export_jsonl(&[]), "");
     }
 
     // ctx-022

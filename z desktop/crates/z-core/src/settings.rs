@@ -343,33 +343,49 @@ pub fn search_defs(query: &str) -> Vec<&'static SettingDef> {
         .collect()
 }
 
+/// One [`SettingDef`] as its compact JSON row (`key`, `kind`, `min`, `max`,
+/// `default`) — single source shared by [`export_schema_json`] and
+/// [`schema_defs_jsonl`] so their field shapes can never drift apart.
+fn schema_def_value(d: &SettingDef) -> serde_json::Value {
+    json!({
+        "key": d.key,
+        "kind": match d.kind {
+            DefKind::U64 => "u64",
+            DefKind::F32 => "f32",
+            DefKind::Bool => "bool",
+            DefKind::String => "string",
+        },
+        "min": d.min,
+        "max": d.max,
+        "default": match d.default {
+            SettingDefault::U64(v) => json!(v),
+            SettingDefault::F32(v) => json!(v),
+            SettingDefault::Bool(v) => json!(v),
+            SettingDefault::String(v) => json!(v),
+        },
+    })
+}
+
 /// set-008 (ext): pretty JSON export of [`schema_defs`] — one object per
-/// setting with `key`, `kind`, `min`, `max`, `default`. Single source for
-/// external UIs/validators; shape mirrors [`SettingDef`] exactly.
+/// setting with `key`, `kind`, `min`, `max`, `default`; rows come from
+/// [`schema_def_value`]. Single source for external UIs/validators.
 pub fn export_schema_json() -> String {
-    let defs: Vec<serde_json::Value> = schema_defs()
-        .iter()
-        .map(|d| {
-            json!({
-                "key": d.key,
-                "kind": match d.kind {
-                    DefKind::U64 => "u64",
-                    DefKind::F32 => "f32",
-                    DefKind::Bool => "bool",
-                    DefKind::String => "string",
-                },
-                "min": d.min,
-                "max": d.max,
-                "default": match d.default {
-                    SettingDefault::U64(v) => json!(v),
-                    SettingDefault::F32(v) => json!(v),
-                    SettingDefault::Bool(v) => json!(v),
-                    SettingDefault::String(v) => json!(v),
-                },
-            })
-        })
-        .collect();
+    let defs: Vec<serde_json::Value> = schema_defs().iter().map(schema_def_value).collect();
     serde_json::to_string_pretty(&defs).expect("schema defs always serialize")
+}
+
+/// set-022: compact JSONL of [`schema_defs`] — one self-contained JSON object
+/// per line (trailing newline included), fields identical to the
+/// [`export_schema_json`] rows via the shared [`schema_def_value`]. Line-per-
+/// record shape for streaming/append-friendly external UIs.
+pub fn schema_defs_jsonl() -> String {
+    let mut out = String::new();
+    for d in schema_defs() {
+        let line = serde_json::to_string(&schema_def_value(d)).expect("schema defs always serialize");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
 }
 
 /// set-012: markdown table of [`schema_defs`] (`| key | kind | min | max |
@@ -1399,5 +1415,47 @@ mod settings_tests {
             errs[0].as_str().is_some_and(|m| m.contains("approval_timeout_secs")),
             "message names the key: {errs:?}"
         );
+    }
+
+    // ---- set-022: schema JSONL ----------------------------------------------
+
+    #[test]
+    fn schema_defs_jsonl_has_one_valid_line_per_def() {
+        let out = schema_defs_jsonl();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), schema_defs().len(), "one line per def");
+        for line in &lines {
+            let obj: serde_json::Value = serde_json::from_str(line).expect("line parses as JSON");
+            assert!(obj.is_object(), "each line is a JSON object: {line}");
+            for field in ["key", "kind", "min", "max", "default"] {
+                assert!(obj.get(field).is_some(), "line carries \"{field}\": {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn schema_defs_jsonl_parses_back_to_same_count_in_schema_order() {
+        let parsed: Vec<serde_json::Value> = schema_defs_jsonl()
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("valid JSONL"))
+            .collect();
+        assert_eq!(parsed.len(), schema_defs().len(), "round-trip count matches");
+        assert_eq!(
+            parsed.iter().filter_map(|o| o["key"].as_str()).collect::<Vec<_>>(),
+            known_keys(),
+            "keys round-trip in schema order"
+        );
+    }
+
+    #[test]
+    fn schema_defs_jsonl_rows_match_export_schema_json_exactly() {
+        // Same rows as the pretty-array export, just compact — one shared
+        // renderer means the two exports cannot drift.
+        let doc: serde_json::Value = serde_json::from_str(&export_schema_json()).unwrap();
+        let rows: Vec<serde_json::Value> = schema_defs_jsonl()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(doc.as_array().expect("pretty export is an array"), &rows);
     }
 }

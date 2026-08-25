@@ -9,7 +9,7 @@
 use crate::journal::{first_seq_gap, lag_stats, Journal, JournalKind, Record, RecordDraft};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Replays the journal segment at `path` and folds its records in order.
@@ -265,6 +265,18 @@ pub fn journal_kind_exists_jsonl(path: &Path, kind: &str) -> Result<String, Stri
 /// `_report` name used by [`journal_size_report`] and friends.
 pub fn journal_kind_exists_report(path: &Path, kind: &str) -> Result<String, String> {
     journal_kind_exists_jsonl(path, kind)
+}
+
+/// jour-061: distinct thread count — number of unique non-null `thread_id`
+/// values folded over the replayed segment. Records without a `thread_id`
+/// don't count; an empty segment yields 0.
+pub fn journal_thread_count(path: &Path) -> Result<usize, String> {
+    Ok(fold(path, HashSet::new(), |seen, record| {
+        if let Some(t) = record.thread_id.as_deref() {
+            seen.insert(t.to_string());
+        }
+    })?
+    .len())
 }
 
 /// jour-025: combined journal health line — [`seq_health`] and
@@ -3491,6 +3503,36 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_kind_exists_report(&dir.join("main.jsonl"), "nope_kind").expect("report"),
             r#"{"exists":false,"kind":"nope_kind"}"#
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-061 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_thread_count_seeded_counts_distinct_threads() {
+        let dir = temp_dir("jour-061");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, None, json!({}));
+        }
+        assert_eq!(
+            journal_thread_count(&dir.join("main.jsonl")).expect("count"),
+            2
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_count_empty_segment_is_zero() {
+        let dir = temp_dir("jour-061-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_thread_count(&dir.join("main.jsonl")).expect("count"),
+            0
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

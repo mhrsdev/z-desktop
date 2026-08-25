@@ -964,6 +964,17 @@ pub fn context_pinned_report_jsonl(items: &[ContextItem]) -> String {
     context_pinned_count_report(items)
 }
 
+/// ctx-063: distinct layer names present in `items`, in [`Layer`] enum order
+/// (prefix, session, turn, ephemeral), non-empty layers only. Empty slice
+/// yields an empty vec. Pure inspector helper.
+pub fn context_layer_names(items: &[ContextItem]) -> Vec<String> {
+    [Layer::Prefix, Layer::Session, Layer::Turn, Layer::Ephemeral]
+        .iter()
+        .filter(|l| items.iter().any(|i| i.layer == **l))
+        .map(|l| layer_name(*l).to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2787,5 +2798,31 @@ mod tests {
             context_pinned_pct_json(&items),
             "{\n  \"pinned\": 2,\n  \"total\": 2,\n  \"pct\": 100\n}"
         );
+    }
+
+    // ctx-063
+    #[test]
+    fn context_layer_names_seeded_yields_distinct_enum_order() {
+        let items = vec![
+            item(Layer::Turn, "now", 2),
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Turn, "later", 3),
+            item(Layer::Ephemeral, "scratch", 1),
+            item(Layer::Session, "history", 4),
+        ];
+        assert_eq!(
+            context_layer_names(&items),
+            vec![
+                "prefix".to_string(),
+                "session".to_string(),
+                "turn".to_string(),
+                "ephemeral".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn context_layer_names_empty_yields_empty_vec() {
+        assert!(context_layer_names(&[]).is_empty());
     }
 }

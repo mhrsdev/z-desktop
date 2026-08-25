@@ -882,6 +882,18 @@ pub fn settings_schema_stats_jsonl() -> String {
     out
 }
 
+/// set-057: pretty JSON array of [`schema_kind_counts`] — one `{kind, count}`
+/// object per kind in the same descending-count order, reusing
+/// [`schema_kind_counts`] as its single source so it cannot drift from the
+/// schema; element shape mirrors [`settings_schema_stats_jsonl`] lines.
+pub fn settings_kind_counts_json() -> String {
+    let rows: Vec<serde_json::Value> = schema_kind_counts()
+        .into_iter()
+        .map(|(kind, count)| json!({ "kind": kind, "count": count }))
+        .collect();
+    serde_json::to_string_pretty(&rows).expect("kind counts always serialize")
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -2400,6 +2412,36 @@ mod settings_tests {
             assert_eq!(obj["kind"], json!(kind), "kind matches order");
             assert_eq!(obj["count"], json!(count), "{kind} count matches");
         }
+    }
+
+    // ---- set-057: kind counts JSON -------------------------------------------
+
+    #[test]
+    fn settings_kind_counts_json_matches_schema_kind_counts_exactly() {
+        let counts = schema_kind_counts();
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_kind_counts_json()).expect("valid JSON array");
+        let arr = doc.as_array().expect("top-level shape is an array");
+        assert_eq!(arr.len(), counts.len(), "one element per kind");
+        for ((kind, count), obj) in counts.iter().zip(arr) {
+            assert_eq!(
+                obj.get("kind"),
+                Some(&json!(kind)),
+                "kind matches order"
+            );
+            assert_eq!(obj.get("count"), Some(&json!(count)), "{kind} count");
+        }
+        // Seeded from the current schema: u64 leads with the full schema size,
+        // zero-count kinds follow in DefKind declaration order.
+        assert_eq!(arr[0]["kind"], json!("u64"));
+        assert_eq!(arr[0]["count"], json!(counts[0].1));
+    }
+
+    #[test]
+    fn settings_kind_counts_json_is_pretty_multiline() {
+        let out = settings_kind_counts_json();
+        assert!(out.contains('\n'), "pretty-printed, not compact: {out}");
+        assert_eq!(out.lines().last(), Some("]"), "array closes on its own line");
     }
 
     #[test]

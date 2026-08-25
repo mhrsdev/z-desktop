@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 58 (jour-041 + ctx-042 + set-036) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-041**: journal_gaps_json.
+2. ✅ **ctx-042**: context_stale_count.
+3. ✅ **set-036**: settings_diff_count.
+
+Verification: full workspace suite green — **938 tests, 0 failed**
+(932 → 938). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 57 (jour-040 + ctx-041 + set-035) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-040**: journal_size_json.

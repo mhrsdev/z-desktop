@@ -456,6 +456,13 @@ pub fn diff_from_default(current: &Settings) -> Vec<(String, String)> {
         .collect()
 }
 
+/// set-036: number of keys where `current` differs from its documented
+/// default. Single source is [`diff_from_default`], so this can never drift
+/// from the schema.
+pub fn settings_diff_count(current: &Settings) -> usize {
+    diff_from_default(current).len()
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1394,6 +1401,23 @@ mod settings_tests {
             diff_from_default(&s),
             vec![("doom_threshold".to_string(), "5".to_string())]
         );
+    }
+
+    // ---- set-036: diff count ------------------------------------------------
+
+    #[test]
+    fn settings_diff_count_fresh_settings_is_zero() {
+        assert_eq!(settings_diff_count(&Settings::default()), 0);
+    }
+
+    #[test]
+    fn settings_diff_count_changed_is_one_per_changed_key() {
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 600;
+        assert_eq!(settings_diff_count(&s), 1);
+        s.doom_threshold = 7;
+        s.max_tool_rounds = 10;
+        assert_eq!(settings_diff_count(&s), 3);
     }
 
     #[test]

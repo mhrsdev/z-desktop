@@ -238,6 +238,17 @@ pub fn journal_size_json(path: &Path) -> Result<String, String> {
     .map_err(|e| e.to_string())?)
 }
 
+/// jour-041: journal gaps as pretty JSON — `{records, gaps}` from
+/// [`lag_stats`], the lag subset of [`journal_health_json`].
+pub fn journal_gaps_json(path: &Path) -> Result<String, String> {
+    let stats = lag_stats(&Journal::replay(path)?);
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "records": stats.records,
+        "gaps": stats.gaps,
+    }))
+    .map_err(|e| e.to_string())?)
+}
+
 /// jour-026: metadata-only JSON export — pretty-printed JSON array of
 /// `{seq, kind, thread_id, ts_ms}` for every record in the segment.
 /// Payloads are deliberately excluded: this export is metadata-only.
@@ -2597,6 +2608,51 @@ pub(crate) mod reducer_tests {
     fn journal_size_json_missing_file_is_err() {
         let dir = temp_dir("jour-040-missing");
         assert!(journal_size_json(&dir.join("nope.jsonl")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-041 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_gaps_json_clean_journal_has_zero_gaps() {
+        let dir = temp_dir("jour-041");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        let path = dir.join("main.jsonl");
+        // json! uses a BTreeMap → keys serialize in sorted order.
+        assert_eq!(
+            journal_gaps_json(&path).expect("json"),
+            "{\n  \"gaps\": 0,\n  \"records\": 3\n}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_gaps_json_gapped_fixture_counts_missing_seqs_exactly() {
+        let dir = temp_dir("jour-041-gapped");
+        let path = dir.join("main.jsonl");
+        // Hand-written records with a seq jump 2 -> 5 (seqs 3, 4 missing).
+        let lines = [1u64, 2, 5]
+            .map(|seq| {
+                serde_json::to_string(&Record {
+                    seq,
+                    ts_ms: 1_770_000_000_000,
+                    kind: JournalKind::TurnStarted,
+                    thread_id: None,
+                    payload: json!({}),
+                })
+                .expect("serialize")
+            })
+            .join("\n");
+        std::fs::write(&path, lines).expect("write fixture");
+        assert_eq!(
+            journal_gaps_json(&path).expect("json"),
+            "{\n  \"gaps\": 2,\n  \"records\": 3\n}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

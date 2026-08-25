@@ -287,6 +287,11 @@ pub fn stats(items: &[ContextItem]) -> ContextStats {
     s
 }
 
+/// ctx-042: count of stale items, [`stats`].stale_count accessor. Pure.
+pub fn context_stale_count(items: &[ContextItem]) -> usize {
+    stats(items).stale_count
+}
+
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Prefix => "prefix",
@@ -996,6 +1001,21 @@ mod tests {
                 stale_count: 0
             }
         );
+    }
+
+    // ctx-042
+    #[test]
+    fn context_stale_count_seeded_matches_stats() {
+        let mut items = vec![item(Layer::Ephemeral, "a", 1), item(Layer::Session, "b", 2)];
+        items[0].stale = true;
+        items[1].stale = true;
+        assert_eq!(context_stale_count(&items), 2);
+        assert_eq!(context_stale_count(&items), stats(&items).stale_count);
+    }
+
+    #[test]
+    fn context_stale_count_empty_is_zero() {
+        assert_eq!(context_stale_count(&[]), 0);
     }
 
     #[test]

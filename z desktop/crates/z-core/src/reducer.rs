@@ -552,6 +552,20 @@ pub fn task_health_line(view: &TasksView) -> String {
     )
 }
 
+/// orch-023: pretty JSON status summary (`{total, done, running, failed,
+/// pending}`) from [`task_counts`], for UI/state export.
+pub fn task_status_summary_json(view: &TasksView) -> String {
+    let (done, running, failed, pending) = task_counts(view);
+    let summary = serde_json::json!({
+        "total": done + running + failed + pending,
+        "done": done,
+        "running": running,
+        "failed": failed,
+        "pending": pending,
+    });
+    serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "{}".into())
+}
+
 /// orch-018: every task's current status as `(id, status)` sorted by id, for
 /// UI/state export. Status strings use the journal's snake_case spelling.
 pub fn task_state_events(view: &TasksView) -> Vec<(String, String)> {
@@ -1429,6 +1443,44 @@ pub(crate) mod reducer_tests {
             task_health_line(&view),
             "0 tasks: 0 done, 0 running, 0 failed, 0 pending"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // orch-023 ---------------------------------------------------------------
+
+    #[test]
+    fn task_status_summary_json_seeded_matches_counts() {
+        let dir = temp_dir("orch023-seeded");
+        TaskStore::create(&dir, "d").expect("create d");
+        TaskStore::create(&dir, "r").expect("create r");
+        TaskStore::create(&dir, "f").expect("create f");
+        TaskStore::create(&dir, "p").expect("create p");
+        TaskStore::transition(&dir, "d", TaskStatus::Done).expect("d done");
+        TaskStore::transition(&dir, "r", TaskStatus::Running).expect("r running");
+        TaskStore::transition(&dir, "f", TaskStatus::Failed).expect("f failed");
+
+        let view = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl"))).expect("fold");
+        let parsed: Value = serde_json::from_str(&task_status_summary_json(&view)).expect("json");
+        assert_eq!(parsed["total"], 4);
+        assert_eq!(parsed["done"], 1);
+        assert_eq!(parsed["running"], 1);
+        assert_eq!(parsed["failed"], 1);
+        assert_eq!(parsed["pending"], 1);
+        assert!(task_status_summary_json(&view).contains('\n'), "pretty");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_status_summary_json_empty_is_all_zeros() {
+        let dir = temp_dir("orch023-empty");
+        {
+            Journal::open(&dir, TASKS_SEGMENT).expect("open");
+        }
+        let view = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl"))).expect("fold");
+        let parsed: Value = serde_json::from_str(&task_status_summary_json(&view)).expect("json");
+        for key in ["total", "done", "running", "failed", "pending"] {
+            assert_eq!(parsed[key], 0, "{key}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

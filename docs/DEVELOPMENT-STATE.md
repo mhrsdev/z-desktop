@@ -6,6 +6,21 @@
 
 Last updated: 2026-08-24
 
+## Wave 40 (orch-023 + ctx-027 + set-021) — 2026-08-24 COMPLETE
+
+1. ✅ **orch-023**: task_status_summary_json.
+2. ✅ **ctx-027**: context_stats_json.
+3. ✅ **set-021**: settings_validate_json.
+
+Every subsystem now has health lines + JSON exports — UI panel data
+layer complete.
+
+Verification: full workspace suite green — **828 tests, 0 failed**
+(822 → 828). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 39 (jour-029 + ctx-026 + set-020) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-029**: journal_top_threads top-N.

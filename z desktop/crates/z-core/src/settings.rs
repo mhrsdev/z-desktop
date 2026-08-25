@@ -564,6 +564,18 @@ pub fn validate_all(current: &Settings) -> Vec<String> {
         .collect()
 }
 
+/// set-021: pretty JSON validation report for external UIs —
+/// `{ "valid": bool, "errors": [...] }`, derived entirely from
+/// [`validate_all`] so it can never drift from the schema bounds.
+pub fn settings_validate_json(current: &Settings) -> String {
+    let errors = validate_all(current);
+    serde_json::to_string_pretty(&json!({
+        "valid": errors.is_empty(),
+        "errors": errors,
+    }))
+    .expect("validation report always serializes")
+}
+
 /// set-005: restore one key's documented default into `current` via [`apply`],
 /// so resets can never drift from the command path's validation. Returns
 /// Ok(false) for unknown keys (nothing to reset); Err only on internal
@@ -1360,6 +1372,32 @@ mod settings_tests {
         assert_eq!(
             doc.get("doom_threshold").and_then(|v| v.as_str()),
             Some(d.doom_threshold.to_string()).as_deref()
+        );
+    }
+
+    // ---- set-021: validation JSON ------------------------------------------
+
+    #[test]
+    fn settings_validate_json_defaults_report_valid_with_empty_errors() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_validate_json(&Settings::default()))
+                .expect("report parses as valid JSON");
+        assert_eq!(doc["valid"], json!(true));
+        assert_eq!(doc["errors"], json!([]));
+    }
+
+    #[test]
+    fn settings_validate_json_broken_field_reports_invalid_with_message() {
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 3601;
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_validate_json(&s)).expect("report parses as valid JSON");
+        assert_eq!(doc["valid"], json!(false));
+        let errs = doc["errors"].as_array().expect("errors is an array");
+        assert_eq!(errs.len(), 1, "one message for one broken field");
+        assert!(
+            errs[0].as_str().is_some_and(|m| m.contains("approval_timeout_secs")),
+            "message names the key: {errs:?}"
         );
     }
 }

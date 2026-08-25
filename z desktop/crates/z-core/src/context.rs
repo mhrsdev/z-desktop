@@ -262,7 +262,7 @@ pub fn load_session_layer(path: &Path) -> Result<Vec<ContextItem>, String> {
 /// ctx-008: read-only inspector snapshot over a candidate-item slice.
 /// `by_layer` is indexed by [`Layer`] in enum order (prefix, session,
 /// turn, ephemeral) and holds (item count, summed est tokens) per layer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ContextStats {
     pub total_items: usize,
     pub est_tokens_total: usize,
@@ -535,6 +535,14 @@ pub fn context_top_layers(items: &[ContextItem], n: usize) -> Vec<(Layer, usize)
     rows.sort_by(|a, b| b.1.cmp(&a.1));
     rows.truncate(n);
     rows
+}
+
+/// ctx-027: pretty JSON of [`stats`] for the inspector/external tooling —
+/// total_items, est_tokens_total, by_layer (four [count, tokens] pairs in
+/// enum order: prefix, session, turn, ephemeral), stale_count. Empty input
+/// serializes the all-zero stats. Pure.
+pub fn context_stats_json(items: &[ContextItem]) -> String {
+    serde_json::to_string_pretty(&stats(items)).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1394,10 +1402,48 @@ mod tests {
             item(Layer::Ephemeral, "e", 1),
             item(Layer::Ephemeral, "f", 1),
         ];
-        assert_eq!(
-            context_top_layers(&items, 99),
-            vec![(Layer::Ephemeral, 2)]
-        );
+        assert_eq!(context_top_layers(&items, 99), vec![(Layer::Ephemeral, 2)]);
         assert!(context_top_layers(&[], 5).is_empty());
+    }
+
+    // ctx-027
+    #[test]
+    fn context_stats_json_seeded_matches_exact_values() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Session, "old", 5),
+            item(Layer::Session, "latest", 7),
+            item(Layer::Turn, "now", 3),
+            ContextItem {
+                layer: Layer::Ephemeral,
+                text: "dump".into(),
+                est_tokens: 4,
+                stale: true,
+                pinned: false,
+                compacted: false,
+            },
+        ];
+        let parsed: serde_json::Value =
+            serde_json::from_str(&context_stats_json(&items)).expect("valid JSON");
+        assert_eq!(parsed["total_items"], 5);
+        assert_eq!(parsed["est_tokens_total"], 29);
+        assert_eq!(parsed["stale_count"], 1);
+        assert_eq!(
+            parsed["by_layer"],
+            serde_json::json!([[1, 10], [2, 12], [1, 3], [1, 4]]) // prefix, session, turn, ephemeral
+        );
+    }
+
+    #[test]
+    fn context_stats_json_empty_is_all_zeros() {
+        let parsed: serde_json::Value =
+            serde_json::from_str(&context_stats_json(&[])).expect("valid JSON");
+        assert_eq!(parsed["total_items"], 0);
+        assert_eq!(parsed["est_tokens_total"], 0);
+        assert_eq!(
+            parsed["by_layer"],
+            serde_json::json!([[0, 0], [0, 0], [0, 0], [0, 0]])
+        );
+        assert_eq!(parsed["stale_count"], 0);
     }
 }

@@ -492,6 +492,22 @@ pub fn journal_message_count_jsonl(path: &Path) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({ "messages": messages })).map_err(|e| e.to_string())
 }
 
+/// jour-052: thread summary report as a single compact JSONL-style line —
+/// `{threads, messages, bytes}` combining [`ThreadsView::fold`] (distinct
+/// thread ids, total persisted `message_count`s) with on-disk segment size.
+/// Empty segment yields all zeros.
+pub fn journal_thread_summary_report(path: &Path) -> Result<String, String> {
+    let view = ThreadsView::fold(path)?;
+    let messages: u64 = view.threads.values().map(|t| t.message_count).sum();
+    let bytes = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    serde_json::to_string(&serde_json::json!({
+        "threads": view.threads.len(),
+        "messages": messages,
+        "bytes": bytes,
+    }))
+    .map_err(|e| format!("reducer: thread summary report: {e}"))
+}
+
 /// jour-038: compact JSONL of all records of one kind — one
 /// `{seq, kind, thread_id, ts_ms}` object per line, journal order, same
 /// metadata shape as [`journal_export_jsonl`]. Unknown/empty kind yields an
@@ -1350,6 +1366,39 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_message_count_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
             "{\"messages\":0}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_summary_report_seeded_matches_summary_plus_disk_bytes() {
+        let dir = temp_dir("jour-052");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+        }
+        let path = dir.join("main.jsonl");
+        let out = journal_thread_summary_report(&path).expect("report");
+        // bytes tracks wall-clock ts_ms, so assert the exact field values
+        // (incl. bytes == real on-disk size) instead of a brittle full string.
+        assert_eq!(out.lines().count(), 1);
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(v["threads"], 2);
+        assert_eq!(v["messages"], 3);
+        assert_eq!(v["bytes"], std::fs::metadata(&path).expect("meta").len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_summary_report_empty_segment_is_zeros_line() {
+        let dir = temp_dir("jour-052-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_thread_summary_report(&dir.join("main.jsonl")).expect("report"),
+            "{\"bytes\":0,\"messages\":0,\"threads\":0}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

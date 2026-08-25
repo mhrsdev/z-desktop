@@ -860,6 +860,13 @@ pub fn context_pinned_report_json(items: &[ContextItem]) -> String {
     .unwrap_or_default()
 }
 
+/// ctx-054: JSONL record of [`context_pinned_report_json`] — single-line
+/// compact {pinned, total, pct}, identical to [`context_pinned_count_report`]
+/// output. Pure.
+pub fn context_pinned_report_jsonl(items: &[ContextItem]) -> String {
+    context_pinned_count_report(items)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1848,6 +1855,29 @@ mod tests {
   "pinned": 0,
   "total": 0
 }"#
+        );
+    }
+
+    // ctx-054
+    #[test]
+    fn context_pinned_report_jsonl_seeded_yields_exact_line() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "scratch", 3),
+        ];
+        items[0].pinned = true;
+        assert_eq!(
+            context_pinned_report_jsonl(&items),
+            r#"{"pinned":1,"total":3,"pct":33}"#
+        );
+    }
+
+    #[test]
+    fn context_pinned_report_jsonl_empty_yields_zeros() {
+        assert_eq!(
+            context_pinned_report_jsonl(&[]),
+            r#"{"pinned":0,"total":0,"pct":0}"#
         );
     }
 

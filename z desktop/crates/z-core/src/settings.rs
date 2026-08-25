@@ -488,6 +488,21 @@ pub fn settings_changed_keys_json(current: &Settings) -> String {
     serde_json::to_string_pretty(&keys).expect("key strings always serialize")
 }
 
+/// set-048: compact JSONL of changed key strings from
+/// [`settings_changed_keys`] — one string per line (trailing newline
+/// included); fresh defaults ⇒ empty string. Single source is
+/// [`settings_changed_keys`], so this can never drift from the schema; line
+/// shape mirrors [`schema_defs_jsonl`].
+pub fn settings_changed_keys_jsonl(current: &Settings) -> String {
+    let mut out = String::new();
+    for key in settings_changed_keys(current) {
+        let line = serde_json::to_string(&json!(key)).expect("key strings always serialize");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1600,6 +1615,47 @@ mod settings_tests {
                 json!("doom_threshold")
             ],
             "order mirrors settings_changed_keys"
+        );
+    }
+
+    // ---- set-048: changed keys JSONL -----------------------------------------
+
+    #[test]
+    fn settings_changed_keys_jsonl_fresh_settings_is_empty() {
+        assert_eq!(settings_changed_keys_jsonl(&Settings::default()), "");
+    }
+
+    #[test]
+    fn settings_changed_keys_jsonl_changed_lists_one_string_per_key() {
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 600;
+        let out = settings_changed_keys_jsonl(&s);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 1, "one line per changed key: {out:?}");
+        assert!(out.ends_with('\n'), "trailing newline like sibling exports");
+        assert_eq!(lines[0], r#""approval_timeout_secs""#, "line is a JSON string");
+        // Line parses as JSON and matches the single-source key list.
+        let parsed: serde_json::Value =
+            serde_json::from_str(lines[0]).expect("line parses as JSON");
+        assert_eq!(parsed, json!("approval_timeout_secs"));
+        assert_eq!(
+            parsed.as_str().unwrap(),
+            &settings_changed_keys(&s)[0],
+            "line matches settings_changed_keys"
+        );
+
+        s.max_tool_rounds = 10;
+        s.doom_threshold = 7;
+        let out = settings_changed_keys_jsonl(&s);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                r#""max_tool_rounds""#,
+                r#""approval_timeout_secs""#,
+                r#""doom_threshold""#
+            ],
+            "order mirrors settings_changed_keys: {out:?}"
         );
     }
 

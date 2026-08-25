@@ -249,6 +249,17 @@ pub fn journal_kind_exists(path: &Path, kind: &str) -> Result<bool, String> {
         .any(|(name, _)| name == kind))
 }
 
+/// jour-059: kind existence as a single-line compact JSONL string —
+/// `{kind, exists}` wrapping [`journal_kind_exists`].
+pub fn journal_kind_exists_jsonl(path: &Path, kind: &str) -> Result<String, String> {
+    let exists = journal_kind_exists(path, kind)?;
+    serde_json::to_string(&serde_json::json!({
+        "kind": kind,
+        "exists": exists,
+    }))
+    .map_err(|e| e.to_string())
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -3433,6 +3444,26 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_kind_exists(&dir.join("main.jsonl"), "turn_started").expect("exists"),
             false
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-059 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_kind_exists_jsonl_seeded_true_unknown_false() {
+        let dir = temp_dir("jour-059");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+        }
+        assert_eq!(
+            journal_kind_exists_jsonl(&dir.join("main.jsonl"), "turn_started").expect("jsonl"),
+            r#"{"exists":true,"kind":"turn_started"}"#
+        );
+        assert_eq!(
+            journal_kind_exists_jsonl(&dir.join("main.jsonl"), "nope_kind").expect("jsonl"),
+            r#"{"exists":false,"kind":"nope_kind"}"#
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

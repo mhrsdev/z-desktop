@@ -320,6 +320,12 @@ pub fn context_stale_pct(items: &[ContextItem]) -> usize {
     }
 }
 
+/// ctx-061: single-line compact JSON stale-percentage report — {"pct":P}.
+/// Empty slice yields pct 0. Pure inspector helper.
+pub fn context_stale_pct_report(items: &[ContextItem]) -> String {
+    format!("{{\"pct\":{}}}", context_stale_pct(items))
+}
+
 /// ctx-056: pretty JSON stale-percentage summary — {stale, total, pct}.
 /// Empty slice yields all zeros with pct 0. Pure inspector helper.
 pub fn context_stale_pct_json(items: &[ContextItem]) -> String {
@@ -2627,6 +2633,34 @@ mod tests {
             i.stale = true;
         }
         assert_eq!(context_stale_pct(&items), 100);
+    }
+
+    // ctx-061
+    #[test]
+    fn context_stale_pct_report_seeded_exact() {
+        let mut items = vec![
+            item(Layer::Session, "a", 1),
+            item(Layer::Turn, "b", 1),
+            item(Layer::Ephemeral, "c", 1),
+            item(Layer::Ephemeral, "d", 1),
+        ];
+        items[2].stale = true;
+        items[3].stale = true;
+        assert_eq!(context_stale_pct_report(&items), "{\"pct\":50}");
+    }
+
+    #[test]
+    fn context_stale_pct_report_empty_is_zero() {
+        assert_eq!(context_stale_pct_report(&[]), "{\"pct\":0}");
+    }
+
+    #[test]
+    fn context_stale_pct_report_all_stale_is_hundred() {
+        let mut items = vec![item(Layer::Session, "a", 1), item(Layer::Turn, "b", 1)];
+        for i in &mut items {
+            i.stale = true;
+        }
+        assert_eq!(context_stale_pct_report(&items), "{\"pct\":100}");
     }
 
     // ctx-056

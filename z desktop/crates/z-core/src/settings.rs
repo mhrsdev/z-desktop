@@ -660,6 +660,13 @@ pub fn settings_validate_count(current: &Settings) -> usize {
     validate_all(current).len()
 }
 
+/// set-040: true when every setting is within its documented bounds —
+/// [`validate_all`] reports no messages. Single source is [`validate_all`],
+/// so this can never drift from the schema.
+pub fn settings_is_valid(current: &Settings) -> bool {
+    validate_all(current).is_empty()
+}
+
 /// set-019: count of [`schema_defs`] entries per [`DefKind`], as
 /// `(kind name, count)` pairs sorted by count descending (ties keep the
 /// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
@@ -1927,6 +1934,29 @@ mod settings_tests {
             settings_validate_count(&broken) >= 1,
             "at least one validation message for a broken field"
         );
+    }
+
+    // ---- set-040: is-valid check ---------------------------------------------
+
+    #[test]
+    fn settings_is_valid_true_for_defaults() {
+        assert!(settings_is_valid(&Settings::default()));
+    }
+
+    #[test]
+    fn settings_is_valid_false_when_broken() {
+        let broken = Settings {
+            max_tool_rounds: 0,
+            ..Settings::default()
+        };
+        assert!(!settings_is_valid(&broken));
+        // Boundary values stay valid.
+        let edge = Settings {
+            max_tool_rounds: 1,
+            approval_timeout_secs: 3600,
+            doom_threshold: 10,
+        };
+        assert!(settings_is_valid(&edge));
     }
 
     // ---- set-020: defaults JSON ---------------------------------------------

@@ -304,6 +304,12 @@ pub fn context_total_items(items: &[ContextItem]) -> usize {
     stats(items).total_items
 }
 
+/// ctx-046: true when any item is stale ([`stats`].stale_count > 0).
+/// Empty slice yields false. Pure inspector helper.
+pub fn context_has_stale(items: &[ContextItem]) -> bool {
+    stats(items).stale_count > 0
+}
+
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Prefix => "prefix",
@@ -2150,5 +2156,20 @@ mod tests {
     #[test]
     fn context_total_items_empty_is_zero() {
         assert_eq!(context_total_items(&[]), 0);
+    }
+
+    // ctx-046
+    #[test]
+    fn context_has_stale_true_when_any_stale() {
+        let mut items = vec![item(Layer::Session, "a", 1), item(Layer::Turn, "b", 1)];
+        items[1].stale = true;
+        assert!(context_has_stale(&items));
+    }
+
+    #[test]
+    fn context_has_stale_false_when_none() {
+        assert!(!context_has_stale(&[]));
+        let items = vec![item(Layer::Ephemeral, "fresh", 1)];
+        assert!(!context_has_stale(&items));
     }
 }

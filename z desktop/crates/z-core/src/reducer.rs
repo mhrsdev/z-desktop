@@ -207,6 +207,12 @@ pub fn journal_record_count(path: &Path) -> Result<usize, String> {
     Ok(lag_stats(&Journal::replay(path)?).records)
 }
 
+/// jour-045: gap-presence accessor — whether [`lag_stats`]'s summed sequence
+/// gaps over the replayed segment is non-zero.
+pub fn journal_has_gaps(path: &Path) -> Result<bool, String> {
+    Ok(lag_stats(&Journal::replay(path)?).gaps > 0)
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -2795,6 +2801,45 @@ pub(crate) mod reducer_tests {
             journal_record_count(&dir.join("main.jsonl")).expect("count"),
             0
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-045 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_has_gaps_clean_journal_is_false() {
+        let dir = temp_dir("jour-045");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        assert_eq!(
+            journal_has_gaps(&dir.join("main.jsonl")).expect("gaps"),
+            false
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_has_gaps_gapped_fixture_is_true() {
+        let dir = temp_dir("jour-045-gapped");
+        let path = dir.join("main.jsonl");
+        // Hand-written records with a seq jump 2 -> 5 (seqs 3, 4 missing).
+        let lines = [1u64, 2, 5]
+            .map(|seq| {
+                serde_json::to_string(&Record {
+                    seq,
+                    ts_ms: 1_770_000_000_000,
+                    kind: JournalKind::TurnStarted,
+                    thread_id: None,
+                    payload: json!({}),
+                })
+                .expect("serialize")
+            })
+            .join("\n");
+        std::fs::write(&path, lines).expect("write fixture");
+        assert_eq!(journal_has_gaps(&path).expect("gaps"), true);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

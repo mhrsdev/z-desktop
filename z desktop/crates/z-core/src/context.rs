@@ -516,6 +516,24 @@ pub fn context_stale_json(items: &[ContextItem]) -> String {
     serde_json::to_string_pretty(&rows).unwrap_or_default()
 }
 
+/// ctx-037: pretty JSON staleness summary for the inspector —
+/// {stale_count, total, pct} computed from [`stats`]. Empty slice yields all
+/// zeros with pct 0. Pure.
+pub fn context_stale_report_json(items: &[ContextItem]) -> String {
+    let s = stats(items);
+    let pct = if s.total_items == 0 {
+        0
+    } else {
+        s.stale_count * 100 / s.total_items
+    };
+    serde_json::to_string_pretty(&serde_json::json!({
+        "stale_count": s.stale_count,
+        "total": s.total_items,
+        "pct": pct
+    }))
+    .unwrap_or_default()
+}
+
 /// ctx-022: one-line combined health report for the inspector —
 /// [`budget_report`] and [`stale_report`] joined with " | ". Pure.
 pub fn context_health_line(items: &[ContextItem], budget_tokens: usize, now_ms: u128) -> String {
@@ -1474,6 +1492,39 @@ mod tests {
         let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
         assert_eq!(context_stale_json(&items), "[]");
         assert_eq!(context_stale_json(&[]), "[]");
+    }
+
+    // ctx-037
+    #[test]
+    fn context_stale_report_json_seeded_yields_exact_object() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Ephemeral, "stale body /tmp/a.rs", 5),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "fresh scratch", 3),
+        ];
+        items[1].stale = true;
+        items[2].stale = true;
+        assert_eq!(
+            context_stale_report_json(&items),
+            r#"{
+  "pct": 50,
+  "stale_count": 2,
+  "total": 4
+}"#
+        );
+    }
+
+    #[test]
+    fn context_stale_report_json_empty_yields_zeros() {
+        assert_eq!(
+            context_stale_report_json(&[]),
+            r#"{
+  "pct": 0,
+  "stale_count": 0,
+  "total": 0
+}"#
+        );
     }
 
     // ctx-022

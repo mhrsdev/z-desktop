@@ -527,6 +527,13 @@ pub fn settings_search_jsonl(query: &str) -> String {
     out
 }
 
+/// set-031: number of [`search_defs`] hits for `query` — 0 when nothing
+/// matches, schema length for the empty query. Single source is
+/// [`search_defs`], so this can never drift from the schema.
+pub fn settings_search_count(query: &str) -> usize {
+    search_defs(query).len()
+}
+
 /// set-015: one-line summary of `current` — `"{n} settings, {d} changed
 /// from default"` where `n` counts every [`schema_defs`] key and `d` comes
 /// from [`diff_from_default`], so "changed" can never drift from the schema.
@@ -1472,6 +1479,24 @@ mod settings_tests {
     #[test]
     fn settings_search_jsonl_no_match_is_empty_string() {
         assert_eq!(settings_search_jsonl("zzz_no_such_setting"), "");
+    }
+
+    // ---- set-031: search count ----------------------------------------------
+
+    #[test]
+    fn settings_search_count_match_is_one() {
+        assert_eq!(settings_search_count("tool_round"), 1);
+    }
+
+    #[test]
+    fn settings_search_count_no_match_is_zero() {
+        assert_eq!(settings_search_count("zzz_no_such_setting"), 0);
+        assert_eq!(settings_search_count("   "), 0, "blank is not empty");
+    }
+
+    #[test]
+    fn settings_search_count_empty_query_returns_schema_len() {
+        assert_eq!(settings_search_count(""), schema_defs().len());
     }
 
     // ---- set-015: one-line summary -----------------------------------------

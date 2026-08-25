@@ -394,6 +394,25 @@ pub fn journal_thread_counts_json(path: &Path) -> Result<String, String> {
     serde_json::to_string_pretty(&entries).map_err(|e| format!("reducer: thread counts json: {e}"))
 }
 
+/// jour-036: compact JSONL — one `{ "thread": ..., "messages": ... }` object
+/// per line for every thread in [`thread_message_counts`] (count desc, id asc
+/// order). Empty segment yields an empty string.
+pub fn journal_thread_counts_jsonl(path: &Path) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct Entry {
+        thread: String,
+        messages: usize,
+    }
+    let lines: Result<Vec<String>, String> = thread_message_counts(path)?
+        .into_iter()
+        .map(|(thread, messages)| {
+            serde_json::to_string(&Entry { thread, messages })
+                .map_err(|e| format!("reducer: thread counts jsonl: {e}"))
+        })
+        .collect();
+    Ok(lines?.join("\n"))
+}
+
 /// jour-017: generates a synthetic, deterministic journal segment at `path`.
 ///
 /// Each of `turns` turns contributes one `turn_started` record followed by
@@ -2721,6 +2740,49 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_thread_counts_json(&dir.join("main.jsonl")).expect("json"),
             "[]"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-036 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_thread_counts_jsonl_seeded_yields_one_compact_line_per_thread() {
+        let dir = temp_dir("jour036-seeded");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t2"),
+                json!({"ignored": true}),
+            );
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::TurnStarted, Some("t3"), json!({}));
+        }
+        let out = journal_thread_counts_jsonl(&dir.join("main.jsonl")).expect("jsonl");
+        assert_eq!(out.lines().count(), 2); // t2: 2, t1: 1 — TurnStarted skipped
+        let lines: Vec<serde_json::Value> = out
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("line is compact json"))
+            .collect();
+        assert_eq!(lines[0]["thread"], "t2");
+        assert_eq!(lines[0]["messages"], 2);
+        assert_eq!(lines[1]["thread"], "t1");
+        assert_eq!(lines[1]["messages"], 1);
+        // Compact: no spaces after separators.
+        assert!(out.lines().all(|l| l.starts_with("{\"thread\":")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_counts_jsonl_empty_yields_empty_string() {
+        let dir = temp_dir("jour036-empty");
+        Journal::open(&dir, "main").expect("open"); // creates an empty segment
+        assert_eq!(
+            journal_thread_counts_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
+            ""
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

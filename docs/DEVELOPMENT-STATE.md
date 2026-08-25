@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 46 (jour-031 + ctx-030 + set-024) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-031**: journal_health_json (records/bytes/gaps/last_seq).
+2. ✅ **ctx-030**: context_layer_json per-layer rows.
+3. ✅ **set-024**: settings_schema_stats_json.
+
+Verification: full workspace suite green — **865 tests, 0 failed**
+(859 → 865). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 45 (orch-026 + sup-033 + mem-030) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-026**: task_timeline_json per-task history dump.

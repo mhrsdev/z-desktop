@@ -521,6 +521,20 @@ pub fn schema_kind_counts() -> Vec<(String, usize)> {
     counts.into_iter().map(|(k, n)| (k.to_string(), n)).collect()
 }
 
+/// set-024: pretty schema-stats JSON — `{ "total": n, "by_kind": { … } }`,
+/// reusing [`schema_kind_counts`] as its single source so it cannot drift
+/// from the schema.
+pub fn settings_schema_stats_json() -> String {
+    let counts = schema_kind_counts();
+    let by_kind: serde_json::Map<String, serde_json::Value> =
+        counts.iter().map(|(k, n)| (k.clone(), json!(n))).collect();
+    serde_json::to_string_pretty(&json!({
+        "total": counts.iter().map(|(_, n)| n).sum::<usize>(),
+        "by_kind": by_kind,
+    }))
+    .expect("stats always serialize")
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -1386,6 +1400,39 @@ mod settings_tests {
         let mut sorted = ns.clone();
         sorted.sort_unstable_by(|a, b| b.cmp(a));
         assert_eq!(ns, sorted);
+    }
+
+    // ---- set-024: schema stats JSON -----------------------------------------
+
+    #[test]
+    fn settings_schema_stats_json_matches_schema_kind_counts_exactly() {
+        let counts = schema_kind_counts();
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_schema_stats_json()).expect("stats JSON parses");
+        assert_eq!(
+            doc["total"],
+            json!(counts.iter().map(|(_, n)| n).sum::<usize>()),
+            "total equals the sum of kind counts"
+        );
+        assert_eq!(
+            doc["total"],
+            json!(schema_defs().len()),
+            "total equals schema size"
+        );
+        let by_kind = doc["by_kind"].as_object().expect("by_kind is an object");
+        assert_eq!(by_kind.len(), counts.len(), "one entry per kind");
+        for (kind, n) in &counts {
+            assert_eq!(by_kind[kind.as_str()], json!(n), "{kind} count matches");
+        }
+    }
+
+    #[test]
+    fn settings_schema_stats_json_parses_and_has_expected_shape() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_schema_stats_json()).expect("valid JSON");
+        assert!(doc.get("total").is_some(), "total field present");
+        assert!(doc["total"].is_u64(), "total is a number");
+        assert!(doc["by_kind"].is_object(), "by_kind is an object");
     }
 
     // ---- set-020: defaults JSON ---------------------------------------------

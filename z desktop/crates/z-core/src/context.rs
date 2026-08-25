@@ -578,6 +578,24 @@ pub fn context_health_json(items: &[ContextItem], budget_tokens: usize) -> Strin
     .unwrap_or_default()
 }
 
+/// ctx-030: pretty JSON array export for the inspector/external tooling —
+/// one {layer, items, tokens} object per non-empty layer in enum order via
+/// [`stats`].by_layer. Empty slice serializes as "[]". Pure.
+pub fn context_layer_json(items: &[ContextItem]) -> String {
+    let s = stats(items);
+    let rows: Vec<serde_json::Value> = [
+        (Layer::Prefix, s.by_layer[0]),
+        (Layer::Session, s.by_layer[1]),
+        (Layer::Turn, s.by_layer[2]),
+        (Layer::Ephemeral, s.by_layer[3]),
+    ]
+    .into_iter()
+    .filter(|&(_, (n, _))| n > 0)
+    .map(|(l, (n, tok))| serde_json::json!({ "layer": layer_name(l), "items": n, "tokens": tok }))
+    .collect();
+    serde_json::to_string_pretty(&rows).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1546,5 +1564,31 @@ mod tests {
             parsed["budget"],
             serde_json::json!({"budget": 100, "used": 0, "pct": 0})
         );
+    }
+
+    // ctx-030
+    #[test]
+    fn context_layer_json_seeded_matches_exact_values() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Session, "old", 5),
+            item(Layer::Session, "latest", 7),
+            item(Layer::Turn, "now", 3),
+        ];
+        let parsed: serde_json::Value =
+            serde_json::from_str(&context_layer_json(&items)).expect("valid JSON");
+        assert_eq!(
+            parsed,
+            serde_json::json!([
+                { "layer": "prefix", "items": 1, "tokens": 10 },
+                { "layer": "session", "items": 2, "tokens": 12 },
+                { "layer": "turn", "items": 1, "tokens": 3 },
+            ])
+        );
+    }
+
+    #[test]
+    fn context_layer_json_empty_is_empty_array() {
+        assert_eq!(context_layer_json(&[]), "[]");
     }
 }

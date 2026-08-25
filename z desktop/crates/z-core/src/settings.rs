@@ -480,6 +480,14 @@ pub fn settings_changed_keys(current: &Settings) -> Vec<String> {
         .collect()
 }
 
+/// set-047: pretty JSON array of changed key strings from
+/// [`settings_changed_keys`]; fresh defaults ⇒ `"[]"`. Single source is
+/// [`settings_changed_keys`], so this can never drift from the schema.
+pub fn settings_changed_keys_json(current: &Settings) -> String {
+    let keys = settings_changed_keys(current);
+    serde_json::to_string_pretty(&keys).expect("key strings always serialize")
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1559,6 +1567,39 @@ mod settings_tests {
         assert_eq!(
             settings_changed_keys(&s),
             vec!["max_tool_rounds", "approval_timeout_secs", "doom_threshold"]
+        );
+    }
+
+    // ---- set-047: changed keys JSON ------------------------------------------
+
+    #[test]
+    fn settings_changed_keys_json_fresh_settings_is_empty_array() {
+        assert_eq!(settings_changed_keys_json(&Settings::default()), "[]");
+    }
+
+    #[test]
+    fn settings_changed_keys_json_changed_lists_keys_in_schema_order() {
+        let mut s = Settings::default();
+        s.approval_timeout_secs = 600;
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_changed_keys_json(&s)).expect("valid JSON");
+        assert_eq!(
+            doc.as_array().unwrap(),
+            &[json!("approval_timeout_secs")],
+            "one string per changed key: {doc}"
+        );
+        s.max_tool_rounds = 10;
+        s.doom_threshold = 7;
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_changed_keys_json(&s)).expect("valid JSON");
+        assert_eq!(
+            doc.as_array().unwrap(),
+            &[
+                json!("max_tool_rounds"),
+                json!("approval_timeout_secs"),
+                json!("doom_threshold")
+            ],
+            "order mirrors settings_changed_keys"
         );
     }
 

@@ -845,6 +845,21 @@ pub fn context_pinned_count_report(items: &[ContextItem]) -> String {
     format!("{{\"pinned\":{pinned},\"total\":{total},\"pct\":{pct}}}")
 }
 
+/// ctx-053: pretty JSON pinned report — {pinned, total, pct} where pct is
+/// pinned share of total (0 when empty) — the pretty twin of
+/// [`context_pinned_count_report`] for inspector/external tooling. Pure.
+pub fn context_pinned_report_json(items: &[ContextItem]) -> String {
+    let pinned = context_pinned_count(items);
+    let total = items.len();
+    let pct = if total == 0 { 0 } else { pinned * 100 / total };
+    serde_json::to_string_pretty(&serde_json::json!({
+        "pinned": pinned,
+        "total": total,
+        "pct": pct
+    }))
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1802,6 +1817,37 @@ mod tests {
         assert_eq!(
             context_pinned_count_report(&[]),
             r#"{"pinned":0,"total":0,"pct":0}"#
+        );
+    }
+
+    // ctx-053
+    #[test]
+    fn context_pinned_report_json_seeded_yields_exact_object() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "scratch", 3),
+        ];
+        items[0].pinned = true;
+        assert_eq!(
+            context_pinned_report_json(&items),
+            r#"{
+  "pct": 33,
+  "pinned": 1,
+  "total": 3
+}"#
+        );
+    }
+
+    #[test]
+    fn context_pinned_report_json_empty_yields_zeros() {
+        assert_eq!(
+            context_pinned_report_json(&[]),
+            r#"{
+  "pct": 0,
+  "pinned": 0,
+  "total": 0
+}"#
         );
     }
 

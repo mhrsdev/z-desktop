@@ -484,6 +484,14 @@ pub fn journal_message_count(path: &Path) -> Result<usize, String> {
     Ok(view.threads.values().map(|t| t.message_count).sum::<u64>() as usize)
 }
 
+/// jour-051: total persisted message count as a single compact JSONL-style
+/// line — `{messages}` from [`journal_message_count`], the single-line form
+/// of that fold. Empty segment yields `{"messages":0}`.
+pub fn journal_message_count_jsonl(path: &Path) -> Result<String, String> {
+    let messages = journal_message_count(path)?;
+    serde_json::to_string(&serde_json::json!({ "messages": messages })).map_err(|e| e.to_string())
+}
+
 /// jour-038: compact JSONL of all records of one kind — one
 /// `{seq, kind, thread_id, ts_ms}` object per line, journal order, same
 /// metadata shape as [`journal_export_jsonl`]. Unknown/empty kind yields an
@@ -1314,6 +1322,34 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_message_count(&dir.join("main.jsonl")).expect("count"),
             0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_message_count_jsonl_seeded_yields_exact_compact_line() {
+        let dir = temp_dir("jour-051");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+        }
+        assert_eq!(
+            journal_message_count_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
+            "{\"messages\":3}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_message_count_jsonl_empty_segment_is_zeros_line() {
+        let dir = temp_dir("jour-051-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_message_count_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
+            "{\"messages\":0}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -489,6 +489,18 @@ pub fn settings_diff_jsonl(current: &Settings) -> String {
     out
 }
 
+/// set-037: single-line compact JSON summary `{changed, total}` — `changed`
+/// keys differ from their documented default ([`settings_diff_count`]),
+/// `total` schema keys ([`schema_defs`]). Single sources throughout, so this
+/// can never drift from the schema.
+pub fn settings_diff_jsonl_report(current: &Settings) -> String {
+    serde_json::to_string(&json!({
+        "changed": settings_diff_count(current),
+        "total": schema_defs().len(),
+    }))
+    .expect("report always serializes")
+}
+
 /// set-027: pretty JSON array of `{key, kind}` rows from [`search_defs`] for
 /// external UIs; no match ⇒ `"[]"`. Kind names match [`export_schema_json`].
 /// Single source is [`search_defs`], so this can never drift from the schema.
@@ -1476,6 +1488,33 @@ mod settings_tests {
             settings_diff_jsonl(&s),
             "{\"key\":\"doom_threshold\",\"value\":\"5\"}\n"
         );
+    }
+
+    // ---- set-037: diff summary report ----------------------------------------
+
+    #[test]
+    fn settings_diff_jsonl_report_fresh_settings_is_zero_changed() {
+        assert_eq!(
+            settings_diff_jsonl_report(&Settings::default()),
+            format!("{{\"changed\":0,\"total\":{}}}", schema_defs().len())
+        );
+    }
+
+    #[test]
+    fn settings_diff_jsonl_report_one_changed_field_counts_one() {
+        let mut s = Settings::default();
+        s.doom_threshold = 5;
+        assert_eq!(
+            settings_diff_jsonl_report(&s),
+            format!("{{\"changed\":1,\"total\":{}}}", schema_defs().len())
+        );
+    }
+
+    #[test]
+    fn settings_diff_jsonl_report_is_single_compact_line() {
+        let out = settings_diff_jsonl_report(&Settings::default());
+        assert!(!out.contains('\n'), "single line");
+        assert!(serde_json::from_str::<serde_json::Value>(&out).is_ok());
     }
 
     // ---- set-027: search as pretty JSON --------------------------------------

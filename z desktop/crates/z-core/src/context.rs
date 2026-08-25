@@ -554,6 +554,23 @@ pub fn context_stale_report_json(items: &[ContextItem]) -> String {
     .unwrap_or_default()
 }
 
+/// ctx-043: single-line compact JSONL staleness summary —
+/// {"total":N,"stale":S,"pct":P} — the one-line twin of
+/// [`context_stale_report_json`] (pretty) for journal/inspector export.
+/// Empty slice yields all zeros with pct 0. Pure.
+pub fn context_stale_jsonl_report(items: &[ContextItem]) -> String {
+    let s = stats(items);
+    let pct = if s.total_items == 0 {
+        0
+    } else {
+        s.stale_count * 100 / s.total_items
+    };
+    format!(
+        "{{\"total\":{},\"stale\":{},\"pct\":{}}}",
+        s.total_items, s.stale_count, pct
+    )
+}
+
 /// ctx-022: one-line combined health report for the inspector —
 /// [`budget_report`] and [`stale_report`] joined with " | ". Pure.
 pub fn context_health_line(items: &[ContextItem], budget_tokens: usize, now_ms: u128) -> String {
@@ -1628,6 +1645,31 @@ mod tests {
   "stale_count": 0,
   "total": 0
 }"#
+        );
+    }
+
+    // ctx-043
+    #[test]
+    fn context_stale_jsonl_report_seeded_yields_exact_line() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Ephemeral, "stale body /tmp/a.rs", 5),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "fresh scratch", 3),
+        ];
+        items[1].stale = true;
+        items[2].stale = true;
+        assert_eq!(
+            context_stale_jsonl_report(&items),
+            r#"{"total":4,"stale":2,"pct":50}"#
+        );
+    }
+
+    #[test]
+    fn context_stale_jsonl_report_empty_yields_zeros() {
+        assert_eq!(
+            context_stale_jsonl_report(&[]),
+            r#"{"total":0,"stale":0,"pct":0}"#
         );
     }
 

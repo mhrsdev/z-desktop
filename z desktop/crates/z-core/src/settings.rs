@@ -569,6 +569,15 @@ pub fn settings_schema_total_report() -> String {
         .expect("schema total report always serializes")
 }
 
+/// set-056: single-line compact JSON `{total: n}` from
+/// [`settings_schema_total`] — the schema size for external UIs. Single
+/// source, so this can never drift from the schema; shape mirrors
+/// [`settings_schema_total_report`].
+pub fn settings_schema_total_jsonl() -> String {
+    serde_json::to_string(&json!({ "total": settings_schema_total() }))
+        .expect("schema total jsonl always serializes")
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1943,6 +1952,40 @@ mod settings_tests {
             serde_json::from_str(&settings_schema_total_report()).expect("valid JSON");
         assert!(doc["total"].is_u64(), "total is numeric: {doc}");
         assert!(doc["total"].as_u64().unwrap() > 0, "schema is non-empty: {doc}");
+        assert_eq!(
+            doc["total"].as_u64().unwrap() as usize,
+            settings_schema_total(),
+            "matches settings_schema_total single source"
+        );
+    }
+
+    // ---- set-056: schema total jsonl ------------------------------------------
+
+    #[test]
+    fn settings_schema_total_jsonl_matches_schema_len() {
+        assert_eq!(
+            settings_schema_total_jsonl(),
+            format!("{{\"total\":{}}}", schema_defs().len()),
+            "single sources agree"
+        );
+        let out = settings_schema_total_jsonl();
+        assert_eq!(out.lines().count(), 1, "single line");
+        assert!(!out.contains(' '), "compact: no spaces: {out}");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&out).is_ok(),
+            "valid JSON"
+        );
+    }
+
+    #[test]
+    fn settings_schema_total_jsonl_total_is_positive() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_schema_total_jsonl()).expect("valid JSON");
+        assert!(doc["total"].is_u64(), "total is numeric: {doc}");
+        assert!(
+            doc["total"].as_u64().unwrap() > 0,
+            "schema is non-empty: {doc}"
+        );
         assert_eq!(
             doc["total"].as_u64().unwrap() as usize,
             settings_schema_total(),

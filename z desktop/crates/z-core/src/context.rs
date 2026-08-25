@@ -650,6 +650,17 @@ pub fn context_stale_pct_jsonl(items: &[ContextItem]) -> String {
     format!("{{\"stale\":{stale},\"total\":{total},\"pct\":{pct}}}")
 }
 
+/// ctx-062: single-line compact JSON pinned-percentage summary —
+/// {"pinned":P,"total":T,"pct":P} — the pct twin of
+/// [`context_pinned_count_jsonl`] for journal/inspector export.
+/// Empty slice yields zeros with pct 0. Pure inspector helper.
+pub fn context_pinned_pct_jsonl(items: &[ContextItem]) -> String {
+    let pinned = items.iter().filter(|i| i.pinned).count();
+    let total = items.len();
+    let pct = if total == 0 { 0 } else { pinned * 100 / total };
+    format!("{{\"pinned\":{pinned},\"total\":{total},\"pct\":{pct}}}")
+}
+
 /// ctx-036: pretty JSON array export of stale items only — one {layer, text}
 /// object per item where [`ContextItem::stale`] is set. No stale items
 /// serializes as "[]". Pure inspector helper.
@@ -2074,6 +2085,31 @@ mod tests {
         assert_eq!(
             context_stale_pct_jsonl(&[]),
             r#"{"stale":0,"total":0,"pct":0}"#
+        );
+    }
+
+    // ctx-062
+    #[test]
+    fn context_pinned_pct_jsonl_seeded_yields_exact_line() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "scratch", 3),
+            item(Layer::Turn, "now", 2),
+        ];
+        items[1].pinned = true;
+        items[3].pinned = true;
+        assert_eq!(
+            context_pinned_pct_jsonl(&items),
+            r#"{"pinned":2,"total":4,"pct":50}"#
+        );
+    }
+
+    #[test]
+    fn context_pinned_pct_jsonl_empty_yields_zeros() {
+        assert_eq!(
+            context_pinned_pct_jsonl(&[]),
+            r#"{"pinned":0,"total":0,"pct":0}"#
         );
     }
 

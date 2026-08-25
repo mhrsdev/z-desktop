@@ -594,6 +594,22 @@ pub fn settings_defaults_json() -> String {
     serde_json::to_string_pretty(&obj).expect("defaults always serialize")
 }
 
+/// set-028: compact JSONL of [`defaults_map`] — one `{key, value}` object
+/// per documented default (trailing newline included), values being the same
+/// string renderings [`settings_defaults_json`] emits. Single source is
+/// [`defaults_map`], so this can never drift from the schema; line shape
+/// mirrors [`settings_diff_jsonl`].
+pub fn settings_defaults_jsonl() -> String {
+    let mut out = String::new();
+    for (key, value) in defaults_map() {
+        let line = serde_json::to_string(&json!({ "key": key, "value": value }))
+            .expect("defaults always serialize");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 /// Validate a numeric value against the schema bounds for `key`. The unknown-
 /// key path never silently ignores: an unrecognized key is rejected with an
 /// "unknown setting \\"key\\"" message so hand-edited typos surface instead of
@@ -1652,5 +1668,46 @@ mod settings_tests {
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
         assert_eq!(doc.as_array().expect("pretty export is an array"), &rows);
+    }
+
+    // ---- set-028: defaults JSONL --------------------------------------------
+
+    #[test]
+    fn settings_defaults_jsonl_has_one_valid_line_per_default() {
+        let out = settings_defaults_jsonl();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), defaults_map().len(), "one line per default");
+        assert!(out.ends_with('\n'), "trailing newline like sibling exports");
+        for line in &lines {
+            let obj: serde_json::Value =
+                serde_json::from_str(line).expect("line parses as JSON");
+            assert!(obj.is_object(), "each line is a JSON object: {line}");
+            assert!(
+                obj.get("key").is_some_and(|v| v.is_string()),
+                "line carries \"key\": {line}"
+            );
+            assert!(
+                obj.get("value").is_some(),
+                "line carries \"value\": {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_defaults_jsonl_matches_defaults_map_rows_in_order() {
+        let parsed: Vec<serde_json::Value> = settings_defaults_jsonl()
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("valid JSONL"))
+            .collect();
+        let map = defaults_map();
+        assert_eq!(parsed.len(), map.len(), "round-trip count matches");
+        for (obj, (key, value)) in parsed.iter().zip(map.iter()) {
+            assert_eq!(obj["key"].as_str(), Some(*key), "{key} in schema order");
+            assert_eq!(
+                obj["value"],
+                json!(*value),
+                "{key} default rendering matches"
+            );
+        }
     }
 }

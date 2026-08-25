@@ -632,6 +632,22 @@ pub fn context_top_layers_json(items: &[ContextItem], n: usize) -> String {
     serde_json::to_string_pretty(&rows).unwrap_or_default()
 }
 
+/// ctx-034: JSON wrapper around [`preview`] — {"preview": "...",
+/// "truncated": bool} where truncated is true when [`preview`] dropped any
+/// item. Pure inspector helper.
+pub fn context_preview_json(items: &[ContextItem], max_chars: usize) -> String {
+    let p = preview(items, max_chars);
+    // Truncated iff fewer item lines survived than there were items
+    // (covers the "+N more" marker and its hard-truncated variants).
+    let shown = p.lines().filter(|l| l.starts_with('[')).count();
+    let truncated = shown < items.len();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "preview": p,
+        "truncated": truncated,
+    }))
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1710,5 +1726,33 @@ mod tests {
         let items = vec![item(Layer::Session, "s", 1)];
         assert_eq!(context_top_layers_json(&items, 0), "[]");
         assert_eq!(context_top_layers_json(&[], 5), "[]");
+    }
+
+    // ctx-034
+    #[test]
+    fn context_preview_json_fits_is_not_truncated() {
+        let items = vec![item(Layer::Turn, "hi", 2)];
+        let v: serde_json::Value =
+            serde_json::from_str(&context_preview_json(&items, 200)).expect("valid JSON");
+        assert_eq!(v["preview"], preview(&items, 200));
+        assert_eq!(v["truncated"], false);
+    }
+
+    #[test]
+    fn context_preview_json_over_is_truncated() {
+        let items = vec![
+            item(Layer::Turn, "aaaa", 2),
+            item(Layer::Turn, "bbbb", 3),
+            item(Layer::Turn, "cccc", 4),
+        ];
+        let budget = preview_line(&items[0]).chars().count() + 5;
+        assert!(
+            items.len() * preview_line(&items[0]).chars().count() > budget,
+            "test must actually overflow"
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&context_preview_json(&items, budget)).expect("valid JSON");
+        assert_eq!(v["truncated"], true);
+        assert_eq!(v["preview"], preview(&items, budget));
     }
 }

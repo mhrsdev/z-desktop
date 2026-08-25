@@ -975,6 +975,12 @@ pub fn context_layer_names(items: &[ContextItem]) -> Vec<String> {
         .collect()
 }
 
+/// ctx-064: pretty-printed JSON array of [`context_layer_names`]. Empty slice
+/// yields `"[]"`. Pure inspector helper.
+pub fn context_layer_names_json(items: &[ContextItem]) -> String {
+    serde_json::to_string_pretty(&context_layer_names(items)).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2824,5 +2830,23 @@ mod tests {
     #[test]
     fn context_layer_names_empty_yields_empty_vec() {
         assert!(context_layer_names(&[]).is_empty());
+    }
+
+    // ctx-064
+    #[test]
+    fn context_layer_names_json_seeded_yields_pretty_array() {
+        let items = vec![
+            item(Layer::Turn, "now", 2),
+            item(Layer::Ephemeral, "scratch", 1),
+        ];
+        assert_eq!(
+            context_layer_names_json(&items),
+            "[\n  \"turn\",\n  \"ephemeral\"\n]"
+        );
+    }
+
+    #[test]
+    fn context_layer_names_json_empty_yields_empty_array() {
+        assert_eq!(context_layer_names_json(&[]), "[]");
     }
 }

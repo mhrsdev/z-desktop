@@ -894,6 +894,16 @@ pub fn settings_kind_counts_json() -> String {
     serde_json::to_string_pretty(&rows).expect("kind counts always serialize")
 }
 
+/// set-058: single-line compact JSON report `{kinds: n}` — `n` being the
+/// number of distinct [`DefKind`]s actually present in [`schema_defs`]
+/// (zero-count kinds excluded), reusing [`schema_kind_counts`] as its single
+/// source so it cannot drift from the schema.
+pub fn settings_kind_counts_report() -> String {
+    let n = schema_kind_counts().iter().filter(|(_, c)| *c > 0).count();
+    serde_json::to_string(&json!({ "kinds": n }))
+        .expect("kind counts report always serializes")
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -2460,6 +2470,35 @@ mod settings_tests {
             );
             assert!(!line.contains('\n'), "compact single-line JSON");
         }
+    }
+
+    // ---- set-058: kind counts report -----------------------------------------
+
+    #[test]
+    fn settings_kind_counts_report_matches_distinct_kinds_exactly() {
+        // Seeded from the current schema via its single source: only kinds
+        // with at least one def count as distinct.
+        let expected = schema_kind_counts().iter().filter(|(_, c)| *c > 0).count();
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_kind_counts_report()).expect("valid JSON");
+        assert_eq!(doc, json!({ "kinds": expected }), "exact {{kinds: n}} object");
+        let obj = doc.as_object().expect("top-level shape is an object");
+        assert_eq!(obj.len(), 1, "only the kinds field is present");
+        assert!(obj.contains_key("kinds"), "field named \"kinds\"");
+    }
+
+    #[test]
+    fn settings_kind_counts_report_is_compact_single_line_and_positive() {
+        let out = settings_kind_counts_report();
+        assert!(out.starts_with("{\"kinds\":"), "compact, not pretty: {out}");
+        assert!(!out.contains('\n'), "single-line compact JSON: {out}");
+        assert_eq!(out.lines().count(), 1, "exactly one line: {out}");
+        let doc: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        assert!(doc["kinds"].is_u64(), "kinds is a number: {out}");
+        assert!(
+            doc["kinds"].as_u64().expect("kinds numeric") > 0,
+            "at least one distinct kind present"
+        );
     }
 
     // ---- set-035: validate count ---------------------------------------------

@@ -279,6 +279,13 @@ pub fn journal_thread_count(path: &Path) -> Result<usize, String> {
     .len())
 }
 
+/// jour-062: thread count as a single-line compact JSONL string —
+/// `{threads}` wrapping [`journal_thread_count`].
+pub fn journal_thread_count_jsonl(path: &Path) -> Result<String, String> {
+    let threads = journal_thread_count(path)?;
+    serde_json::to_string(&serde_json::json!({ "threads": threads })).map_err(|e| e.to_string())
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -3533,6 +3540,36 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_thread_count(&dir.join("main.jsonl")).expect("count"),
             0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-062 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_thread_count_jsonl_seeded_matches_exact_line() {
+        let dir = temp_dir("jour-062");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, None, json!({}));
+        }
+        assert_eq!(
+            journal_thread_count_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
+            r#"{"threads":2}"#
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_count_jsonl_empty_segment_is_zero() {
+        let dir = temp_dir("jour-062-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_thread_count_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
+            r#"{"threads":0}"#
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

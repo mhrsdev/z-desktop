@@ -320,6 +320,23 @@ pub fn context_stale_pct(items: &[ContextItem]) -> usize {
     }
 }
 
+/// ctx-056: pretty JSON stale-percentage summary — {stale, total, pct}.
+/// Empty slice yields all zeros with pct 0. Pure inspector helper.
+pub fn context_stale_pct_json(items: &[ContextItem]) -> String {
+    let s = stats(items);
+    let pct = if s.total_items == 0 {
+        0
+    } else {
+        s.stale_count * 100 / s.total_items
+    };
+    // ponytail: hand-rolled pretty object keeps the documented key order;
+    // serde_json::Value maps sort keys alphabetically.
+    format!(
+        "{{\n  \"stale\": {},\n  \"total\": {},\n  \"pct\": {}\n}}",
+        s.stale_count, s.total_items, pct
+    )
+}
+
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Prefix => "prefix",
@@ -2503,5 +2520,30 @@ mod tests {
             i.stale = true;
         }
         assert_eq!(context_stale_pct(&items), 100);
+    }
+
+    // ctx-056
+    #[test]
+    fn context_stale_pct_json_seeded_exact() {
+        let mut items = vec![
+            item(Layer::Session, "a", 1),
+            item(Layer::Turn, "b", 1),
+            item(Layer::Ephemeral, "c", 1),
+            item(Layer::Ephemeral, "d", 1),
+        ];
+        items[2].stale = true;
+        items[3].stale = true;
+        assert_eq!(
+            context_stale_pct_json(&items),
+            "{\n  \"stale\": 2,\n  \"total\": 4,\n  \"pct\": 50\n}"
+        );
+    }
+
+    #[test]
+    fn context_stale_pct_json_empty_is_zeros() {
+        assert_eq!(
+            context_stale_pct_json(&[]),
+            "{\n  \"stale\": 0,\n  \"total\": 0,\n  \"pct\": 0\n}"
+        );
     }
 }

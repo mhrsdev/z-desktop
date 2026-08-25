@@ -511,6 +511,14 @@ pub fn settings_changed_keys_report(current: &Settings) -> String {
         .expect("changed count always serializes")
 }
 
+/// set-050: single-line compact JSON `{valid: bool}` from [`settings_is_valid`]
+/// — single source, so this can never drift from [`validate_all`] bounds;
+/// shape mirrors [`settings_changed_keys_report`].
+pub fn settings_is_valid_report(current: &Settings) -> String {
+    serde_json::to_string(&json!({ "valid": settings_is_valid(current) }))
+        .expect("is-valid report always serializes")
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1686,6 +1694,22 @@ mod settings_tests {
         s.max_tool_rounds = 10;
         s.doom_threshold = 7;
         assert_eq!(settings_changed_keys_report(&s), r#"{"changed":3}"#);
+    }
+
+    // ---- set-050: is-valid report ---------------------------------------------
+
+    #[test]
+    fn settings_is_valid_report_defaults_are_valid_true() {
+        assert_eq!(
+            settings_is_valid_report(&Settings::default()),
+            r#"{"valid":true}"#
+        );
+    }
+
+    #[test]
+    fn settings_is_valid_report_broken_settings_are_valid_false() {
+        let broken = Settings { max_tool_rounds: 0, ..Settings::default() };
+        assert_eq!(settings_is_valid_report(&broken), r#"{"valid":false}"#);
     }
 
     #[test]

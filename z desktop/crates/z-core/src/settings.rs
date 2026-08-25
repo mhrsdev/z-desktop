@@ -456,6 +456,17 @@ pub fn diff_from_default(current: &Settings) -> Vec<(String, String)> {
         .collect()
 }
 
+/// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
+/// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
+/// [`diff_from_default`], so this can never drift from the schema.
+pub fn settings_diff_json(current: &Settings) -> String {
+    let rows: Vec<serde_json::Value> = diff_from_default(current)
+        .into_iter()
+        .map(|(key, value)| json!({ "key": key, "value": value }))
+        .collect();
+    serde_json::to_string_pretty(&rows).expect("diff rows always serialize")
+}
+
 /// set-015: one-line summary of `current` — `"{n} settings, {d} changed
 /// from default"` where `n` counts every [`schema_defs`] key and `d` comes
 /// from [`diff_from_default`], so "changed" can never drift from the schema.
@@ -1264,6 +1275,23 @@ mod settings_tests {
                 ("approval_timeout_secs".to_string(), "2".to_string()),
                 ("doom_threshold".to_string(), "7".to_string()),
             ]
+        );
+    }
+
+    // ---- set-025: diff as pretty JSON --------------------------------------
+
+    #[test]
+    fn settings_diff_json_fresh_defaults_is_empty_array() {
+        assert_eq!(settings_diff_json(&Settings::default()), "[]");
+    }
+
+    #[test]
+    fn settings_diff_json_one_changed_field_is_exact_row() {
+        let mut s = Settings::default();
+        s.doom_threshold = 5;
+        assert_eq!(
+            settings_diff_json(&s),
+            "[\n  {\n    \"key\": \"doom_threshold\",\n    \"value\": \"5\"\n  }\n]"
         );
     }
 

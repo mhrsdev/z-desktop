@@ -596,6 +596,20 @@ pub fn context_layer_json(items: &[ContextItem]) -> String {
     serde_json::to_string_pretty(&rows).unwrap_or_default()
 }
 
+/// ctx-031: compact JSONL export of one layer's items in input order —
+/// [`context_by_layer`] filtered through the same per-item line format as
+/// [`context_export_jsonl`]. Empty layer yields an empty string. Pure.
+pub fn context_layer_jsonl(items: &[ContextItem], layer: Layer) -> String {
+    let mut out = String::new();
+    for item in context_by_layer(items, layer) {
+        if let Ok(line) = serde_json::to_string(item) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1590,5 +1604,32 @@ mod tests {
     #[test]
     fn context_layer_json_empty_is_empty_array() {
         assert_eq!(context_layer_json(&[]), "[]");
+    }
+
+    // ctx-031
+    #[test]
+    fn context_layer_jsonl_seeded_returns_only_that_layers_lines_in_order() {
+        let items = vec![
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Session, "old", 5),
+            item(Layer::Turn, "now", 3),
+            item(Layer::Session, "latest", 7),
+        ];
+        let out = context_layer_jsonl(&items, Layer::Session);
+        let parsed: Vec<ContextItem> = out
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("valid JSON line"))
+            .collect();
+        assert_eq!(out.lines().count(), 2);
+        assert_eq!(parsed[0].text, "old");
+        assert_eq!(parsed[1].text, "latest");
+        assert_eq!(parsed[0].layer, Layer::Session);
+    }
+
+    #[test]
+    fn context_layer_jsonl_empty_layer_is_empty_string() {
+        assert_eq!(context_layer_jsonl(&[], Layer::Turn), "");
+        let items = vec![item(Layer::Prefix, "sys", 1)];
+        assert_eq!(context_layer_jsonl(&items, Layer::Ephemeral), "");
     }
 }

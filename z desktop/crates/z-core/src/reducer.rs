@@ -585,6 +585,16 @@ pub fn tasks_by_status(view: &TasksView, status: &str) -> Vec<String> {
     ids
 }
 
+/// orch-027: pretty-printed JSON array of ids from [`tasks_by_status`], for
+/// UI/state export. Unknown statuses yield `"[]"`.
+pub fn tasks_by_status_json(view: &TasksView, status: &str) -> String {
+    let ids: Vec<Value> = tasks_by_status(view, status)
+        .into_iter()
+        .map(Value::String)
+        .collect();
+    serde_json::to_string_pretty(&ids).unwrap_or_else(|_| "[]".into())
+}
+
 /// orch-021: one-line human summary of task health.
 pub fn task_health_line(view: &TasksView) -> String {
     let (done, running, failed, pending) = task_counts(view);
@@ -1564,6 +1574,36 @@ pub(crate) mod reducer_tests {
         assert_eq!(tasks_by_status(&view, "failed"), vec!["boom".to_string()]);
         assert!(tasks_by_status(&view, "archived").is_empty());
         assert!(tasks_by_status(&TasksView::default(), "done").is_empty());
+    }
+
+    // orch-027 ---------------------------------------------------------------
+
+    #[test]
+    fn tasks_by_status_json_lists_sorted_ids_and_unknown_status_is_bare_array() {
+        let mut view = TasksView::default();
+        for (id, status) in [
+            ("b-pending", TaskStatus::Pending),
+            ("a-pending", TaskStatus::Pending),
+            ("run", TaskStatus::Running),
+        ] {
+            view.tasks.insert(
+                id.into(),
+                TaskRecord {
+                    id: id.into(),
+                    status,
+                    deps: vec![],
+                },
+            );
+        }
+        let text = tasks_by_status_json(&view, "pending");
+        assert!(text.contains('\n'), "pretty-printed");
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&text).expect("parses");
+        assert_eq!(parsed, vec![json!("a-pending"), json!("b-pending")]);
+        assert_eq!(
+            tasks_by_status_json(&TasksView::default(), "archived"),
+            "[]"
+        );
+        assert_eq!(tasks_by_status_json(&TasksView::default(), "done"), "[]");
     }
 
     // orch-021 ---------------------------------------------------------------

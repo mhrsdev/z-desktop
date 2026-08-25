@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 47 (orch-027 + ctx-031 + set-025) — 2026-08-24 COMPLETE
+
+1. ✅ **orch-027**: tasks_by_status_json.
+2. ✅ **ctx-031**: context_layer_jsonl scoped stream.
+3. ✅ **set-025**: settings_diff_json.
+
+Verification: full workspace suite green — **870 tests, 0 failed**
+(865 → 870). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 46 (jour-031 + ctx-030 + set-024) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-031**: journal_health_json (records/bytes/gaps/last_seq).

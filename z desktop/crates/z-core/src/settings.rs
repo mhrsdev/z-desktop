@@ -503,6 +503,30 @@ pub fn settings_search_json(query: &str) -> String {
     serde_json::to_string_pretty(&rows).expect("search rows always serialize")
 }
 
+/// set-029: compact JSONL of [`search_defs`] — one `{key, kind}` object per
+/// search hit (trailing newline included); no match ⇒ empty string. Kind
+/// names match [`export_schema_json`]. Single source is [`search_defs`], so
+/// this can never drift from the schema; line shape mirrors
+/// [`settings_defaults_jsonl`].
+pub fn settings_search_jsonl(query: &str) -> String {
+    let mut out = String::new();
+    for d in search_defs(query) {
+        let line = serde_json::to_string(&json!({
+            "key": d.key,
+            "kind": match d.kind {
+                DefKind::U64 => "u64",
+                DefKind::F32 => "f32",
+                DefKind::Bool => "bool",
+                DefKind::String => "string",
+            },
+        }))
+        .expect("search rows always serialize");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 /// set-015: one-line summary of `current` — `"{n} settings, {d} changed
 /// from default"` where `n` counts every [`schema_defs`] key and `d` comes
 /// from [`diff_from_default`], so "changed" can never drift from the schema.
@@ -1387,6 +1411,44 @@ mod settings_tests {
     #[test]
     fn settings_search_json_no_match_is_empty_array() {
         assert_eq!(settings_search_json("zzz_no_such_setting"), "[]");
+    }
+
+    // ---- set-029: search as compact JSONL ------------------------------------
+
+    #[test]
+    fn settings_search_jsonl_match_yields_key_kind_lines() {
+        let out = settings_search_jsonl("tool_round");
+        assert!(out.ends_with('\n'), "trailing newline like sibling exports");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 1, "fragment matches exactly one def");
+        let obj: serde_json::Value =
+            serde_json::from_str(lines[0]).expect("line parses as JSON");
+        assert_eq!(obj["key"], json!("max_tool_rounds"));
+        assert_eq!(obj["kind"], json!("u64"), "kind matches schema export");
+
+        // Empty query ⇒ every def, one {key, kind} line each.
+        let all = settings_search_jsonl("");
+        let parsed: Vec<serde_json::Value> = all
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("valid JSONL"))
+            .collect();
+        assert_eq!(parsed.len(), schema_defs().len(), "one line per def");
+        for (obj, key) in parsed.iter().zip(known_keys()) {
+            assert_eq!(obj["key"].as_str(), Some(key), "schema order kept");
+        }
+        // Same rows as the pretty-array export — one shared source, no drift.
+        let pretty: serde_json::Value =
+            serde_json::from_str(&settings_search_json("")).expect("valid JSON");
+        assert_eq!(
+            pretty.as_array().expect("array").as_slice(),
+            &parsed[..],
+            "JSONL rows equal settings_search_json rows"
+        );
+    }
+
+    #[test]
+    fn settings_search_jsonl_no_match_is_empty_string() {
+        assert_eq!(settings_search_jsonl("zzz_no_such_setting"), "");
     }
 
     // ---- set-015: one-line summary -----------------------------------------

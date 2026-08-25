@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 51 (jour-034 + ctx-035 + set-029) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-034**: journal_thread_jsonl scoped stream.
+2. ✅ **ctx-035**: context_stale_jsonl.
+3. ✅ **set-029**: settings_search_jsonl.
+
+Verification: full workspace suite green — **894 tests, 0 failed**
+(888 → 894). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 50 (orch-028 + ctx-034 + set-028) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-028**: task_counts_json.

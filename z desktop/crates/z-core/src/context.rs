@@ -489,6 +489,21 @@ pub fn context_export_jsonl(items: &[ContextItem]) -> String {
     out
 }
 
+/// ctx-035: compact JSONL export of stale items only — one line per item
+/// where [`ContextItem::stale`] is set, same per-item shape as
+/// [`context_export_jsonl`] (round-trips with [`load_session_layer`]'s line
+/// format). No stale items yields an empty string. Pure.
+pub fn context_stale_jsonl(items: &[ContextItem]) -> String {
+    let mut out = String::new();
+    for item in items.iter().filter(|i| i.stale) {
+        if let Ok(line) = serde_json::to_string(item) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// ctx-022: one-line combined health report for the inspector —
 /// [`budget_report`] and [`stale_report`] joined with " | ". Pure.
 pub fn context_health_line(items: &[ContextItem], budget_tokens: usize, now_ms: u128) -> String {
@@ -1388,6 +1403,38 @@ mod tests {
     #[test]
     fn context_export_jsonl_empty_is_empty_string() {
         assert_eq!(context_export_jsonl(&[]), "");
+    }
+
+    // ctx-035
+    #[test]
+    fn context_stale_jsonl_seeded_yields_only_stale_lines() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Ephemeral, "stale body /tmp/a.rs", 5),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "fresh scratch", 3),
+        ];
+        items[1].stale = true;
+        items[2].stale = true;
+        let jsonl = context_stale_jsonl(&items);
+        let lines: Vec<&str> = jsonl.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let parsed: Vec<ContextItem> = lines
+            .iter()
+            .map(|l| serde_json::from_str(l).expect("valid JSONL line"))
+            .collect();
+        assert_eq!(
+            parsed,
+            vec![items[1].clone(), items[2].clone()],
+            "only stale items, input order preserved"
+        );
+    }
+
+    #[test]
+    fn context_stale_jsonl_no_stale_is_empty_string() {
+        let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
+        assert_eq!(context_stale_jsonl(&items), "");
+        assert_eq!(context_stale_jsonl(&[]), "");
     }
 
     // ctx-022

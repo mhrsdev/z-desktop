@@ -711,6 +711,19 @@ pub fn settings_validate_jsonl(current: &Settings) -> String {
     .expect("validation report always serializes")
 }
 
+/// set-045: single-line compact JSON summary `{total, changed}` — `total`
+/// schema keys ([`settings_schema_total`]), `changed` keys differing from
+/// their documented default ([`settings_diff_count`]). Single sources
+/// throughout, so this cannot drift from the schema; shape mirrors
+/// [`settings_diff_jsonl_report`].
+pub fn settings_summary_jsonl(current: &Settings) -> String {
+    serde_json::to_string(&json!({
+        "total": settings_schema_total(),
+        "changed": settings_diff_count(current),
+    }))
+    .expect("summary report always serializes")
+}
+
 /// set-019: count of [`schema_defs`] entries per [`DefKind`], as
 /// `(kind name, count)` pairs sorted by count descending (ties keep the
 /// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
@@ -2119,6 +2132,56 @@ mod settings_tests {
             },
         ] {
             let out = settings_validate_jsonl(&s);
+            assert_eq!(out.lines().count(), 1, "single line: {out}");
+            assert!(!out.contains(' '), "compact: no spaces: {out}");
+        }
+    }
+
+    // ---- set-045: summary JSONL ----------------------------------------------
+
+    #[test]
+    fn settings_summary_jsonl_fresh_settings_are_total_and_zero() {
+        assert_eq!(
+            settings_summary_jsonl(&Settings::default()),
+            format!(
+                "{{\"changed\":0,\"total\":{}}}",
+                settings_schema_total()
+            )
+        );
+        assert!(settings_schema_total() > 0, "schema is non-empty");
+    }
+
+    #[test]
+    fn settings_summary_jsonl_counts_changed_against_total() {
+        let mut s = Settings {
+            max_tool_rounds: 7,
+            ..Settings::default()
+        };
+        let total = settings_schema_total();
+        assert_eq!(
+            settings_summary_jsonl(&s),
+            format!("{{\"changed\":1,\"total\":{total}}}")
+        );
+        // A second changed key raises `changed`; `total` never moves.
+        s.approval_timeout_secs = 90;
+        assert_eq!(
+            settings_summary_jsonl(&s),
+            format!("{{\"changed\":2,\"total\":{total}}}")
+        );
+        // Consistent with the underlying single sources.
+        assert_eq!(settings_diff_count(&s), 2);
+    }
+
+    #[test]
+    fn settings_summary_jsonl_is_single_compact_line() {
+        for s in [
+            Settings::default(),
+            Settings {
+                doom_threshold: 3,
+                ..Settings::default()
+            },
+        ] {
+            let out = settings_summary_jsonl(&s);
             assert_eq!(out.lines().count(), 1, "single line: {out}");
             assert!(!out.contains(' '), "compact: no spaces: {out}");
         }

@@ -824,6 +824,17 @@ pub fn context_pinned_count_json(items: &[ContextItem]) -> String {
     .unwrap_or_default()
 }
 
+/// ctx-051: pretty JSON stale-count summary — {stale, total} — the pretty
+/// twin of [`context_stale_count_jsonl`] for inspector/external tooling.
+/// Empty slice yields zeros. Pure.
+pub fn context_stale_count_json(items: &[ContextItem]) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "stale": context_stale_count(items),
+        "total": items.len()
+    }))
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1810,6 +1821,35 @@ mod tests {
             r#"{"stale":0,"total":1}"#
         );
         assert_eq!(context_stale_count_jsonl(&[]), r#"{"stale":0,"total":0}"#);
+    }
+
+    // ctx-051
+    #[test]
+    fn context_stale_count_json_seeded_yields_exact_pretty() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "scratch", 3),
+        ];
+        items[1].stale = true;
+        items[2].stale = true;
+        assert_eq!(
+            context_stale_count_json(&items),
+            "{\n  \"stale\": 2,\n  \"total\": 3\n}"
+        );
+    }
+
+    #[test]
+    fn context_stale_count_json_none_stale_yields_zeros() {
+        let items = vec![item(Layer::Session, "hi", 2)];
+        assert_eq!(
+            context_stale_count_json(&items),
+            "{\n  \"stale\": 0,\n  \"total\": 1\n}"
+        );
+        assert_eq!(
+            context_stale_count_json(&[]),
+            "{\n  \"stale\": 0,\n  \"total\": 0\n}"
+        );
     }
 
     // ctx-022

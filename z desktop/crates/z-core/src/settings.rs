@@ -519,6 +519,14 @@ pub fn settings_is_valid_report(current: &Settings) -> String {
         .expect("is-valid report always serializes")
 }
 
+/// set-051: single-line compact JSON `{is_default: bool}` from
+/// [`settings_is_default`] — single source, so this can never drift from the
+/// schema; shape mirrors [`settings_is_valid_report`].
+pub fn settings_is_default_report(current: &Settings) -> String {
+    serde_json::to_string(&json!({ "is_default": settings_is_default(current) }))
+        .expect("is-default report always serializes")
+}
+
 /// set-025: pretty JSON array of `{key, value}` rows from [`diff_from_default`]
 /// for external UIs; fresh defaults ⇒ `"[]"`. Single source is
 /// [`diff_from_default`], so this can never drift from the schema.
@@ -1710,6 +1718,33 @@ mod settings_tests {
     fn settings_is_valid_report_broken_settings_are_valid_false() {
         let broken = Settings { max_tool_rounds: 0, ..Settings::default() };
         assert_eq!(settings_is_valid_report(&broken), r#"{"valid":false}"#);
+    }
+
+    // ---- set-051: is-default report -------------------------------------------
+
+    #[test]
+    fn settings_is_default_report_fresh_settings_are_true() {
+        assert_eq!(
+            settings_is_default_report(&Settings::default()),
+            r#"{"is_default":true}"#
+        );
+    }
+
+    #[test]
+    fn settings_is_default_report_changed_settings_are_false() {
+        let s = Settings {
+            max_tool_rounds: 7,
+            ..Settings::default()
+        };
+        assert_eq!(settings_is_default_report(&s), r#"{"is_default":false}"#);
+        // Single line, compact, valid JSON.
+        let out = settings_is_default_report(&s);
+        assert_eq!(out.lines().count(), 1, "single line");
+        assert!(!out.contains(' '), "compact: no spaces: {out}");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&out).is_ok(),
+            "valid JSON"
+        );
     }
 
     #[test]

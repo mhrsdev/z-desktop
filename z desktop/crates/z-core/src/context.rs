@@ -337,6 +337,16 @@ pub fn context_stale_pct_json(items: &[ContextItem]) -> String {
     )
 }
 
+/// ctx-057: percentage of pinned items. Empty slice yields 0 (avoids
+/// division by zero). Pure inspector helper.
+pub fn context_pinned_pct(items: &[ContextItem]) -> usize {
+    if items.is_empty() {
+        0
+    } else {
+        items.iter().filter(|i| i.pinned).count() * 100 / items.len()
+    }
+}
+
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Prefix => "prefix",
@@ -2545,5 +2555,33 @@ mod tests {
             context_stale_pct_json(&[]),
             "{\n  \"stale\": 0,\n  \"total\": 0,\n  \"pct\": 0\n}"
         );
+    }
+
+    // ctx-057
+    #[test]
+    fn context_pinned_pct_seeded_exact() {
+        let mut items = vec![
+            item(Layer::Session, "a", 1),
+            item(Layer::Turn, "b", 1),
+            item(Layer::Session, "c", 1),
+            item(Layer::Ephemeral, "d", 1),
+        ];
+        items[0].pinned = true;
+        items[2].pinned = true;
+        assert_eq!(context_pinned_pct(&items), 50);
+    }
+
+    #[test]
+    fn context_pinned_pct_empty_is_zero() {
+        assert_eq!(context_pinned_pct(&[]), 0);
+    }
+
+    #[test]
+    fn context_pinned_pct_all_pinned_is_hundred() {
+        let mut items = vec![item(Layer::Session, "a", 1), item(Layer::Turn, "b", 1)];
+        for i in &mut items {
+            i.pinned = true;
+        }
+        assert_eq!(context_pinned_pct(&items), 100);
     }
 }

@@ -727,6 +727,18 @@ pub fn context_budget_jsonl(items: &[ContextItem], budget_tokens: usize) -> Stri
     .unwrap_or_default()
 }
 
+/// ctx-040: pretty JSON array export of pinned items only — one {layer, text}
+/// object per item where [`ContextItem::pinned`] is set. No pinned items
+/// serializes as "[]". Pure inspector helper.
+pub fn context_pinned_json(items: &[ContextItem]) -> String {
+    let rows: Vec<serde_json::Value> = items
+        .iter()
+        .filter(|i| i.pinned)
+        .map(|i| serde_json::json!({ "layer": layer_name(i.layer), "text": i.text }))
+        .collect();
+    serde_json::to_string_pretty(&rows).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1976,5 +1988,32 @@ mod tests {
             r#"{"budget":500,"pct":0,"used":0}"#
         );
         assert_eq!(context_budget_jsonl(&[], 0), r#"{"budget":0,"pct":0,"used":0}"#);
+    }
+
+    // ctx-040
+    #[test]
+    fn context_pinned_json_seeded_yields_only_pinned_rows() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "pinned note", 5),
+            item(Layer::Session, "history", 4),
+            item(Layer::Turn, "latest", 3),
+        ];
+        items[0].pinned = true;
+        items[1].pinned = true;
+        let parsed: Vec<serde_json::Value> =
+            serde_json::from_str(&context_pinned_json(&items)).expect("valid JSON");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0]["layer"], "prefix");
+        assert_eq!(parsed[0]["text"], "sys");
+        assert_eq!(parsed[1]["layer"], "session");
+        assert_eq!(parsed[1]["text"], "pinned note");
+    }
+
+    #[test]
+    fn context_pinned_json_no_pinned_is_empty_array() {
+        let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
+        assert_eq!(context_pinned_json(&items), "[]");
+        assert_eq!(context_pinned_json(&[]), "[]");
     }
 }

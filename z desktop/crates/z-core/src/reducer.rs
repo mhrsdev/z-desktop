@@ -301,6 +301,23 @@ pub fn journal_thread_jsonl(path: &Path, thread_id: &str) -> Result<String, Stri
     Ok(lines.join("\n"))
 }
 
+/// jour-039: one thread's persisted messages as a pretty-printed JSON array
+/// of `{text, ts_ms}` in journal order. Records without a `text` payload are
+/// skipped, matching [`journal_thread_jsonl`]. Unknown/empty thread yields
+/// `[]`.
+pub fn journal_thread_json(path: &Path, thread_id: &str) -> Result<String, String> {
+    let mut entries: Vec<Value> = Vec::new();
+    for r in Journal::replay(path)? {
+        if r.kind != JournalKind::MessagePersisted || r.thread_id.as_deref() != Some(thread_id) {
+            continue;
+        }
+        if let Some(text) = r.payload.get("text").and_then(Value::as_str) {
+            entries.push(serde_json::json!({ "text": text, "ts_ms": r.ts_ms }));
+        }
+    }
+    serde_json::to_string_pretty(&entries).map_err(|e| format!("reducer: thread json: {e}"))
+}
+
 /// jour-027: per-kind record counts for one segment, sorted by count
 /// descending (ties broken by kind name ascending). Replays the same
 /// [`Journal::replay`] segment the [`lag_stats`] reports consume, so totals
@@ -2929,6 +2946,70 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_thread_jsonl(&dir.join("main.jsonl"), "missing").expect("jsonl"),
             ""
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-039 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_thread_json_seeded_yields_exact_entries() {
+        let dir = temp_dir("jour-039");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"text": "first"}),
+            );
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t2"),
+                json!({"text": "other thread"}),
+            );
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        let path = dir.join("main.jsonl");
+        let out = journal_thread_json(&path, "t1").expect("json");
+        let got: serde_json::Value = serde_json::from_str(&out).expect("pretty json array");
+        let expected: Vec<serde_json::Value> = Journal::replay(&path)
+            .expect("replay")
+            .into_iter()
+            .filter(|r| {
+                r.kind == JournalKind::MessagePersisted && r.thread_id.as_deref() == Some("t1")
+            })
+            .filter_map(|r| {
+                r.payload
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(|t| json!({"text": t, "ts_ms": r.ts_ms}))
+            })
+            .collect();
+        assert_eq!(got, serde_json::Value::Array(expected));
+        assert!(!out.contains("other thread"));
+        // Pretty: entries indented on their own lines.
+        assert!(out.starts_with("[\n  {\n    \"text\":"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_json_unknown_thread_is_empty_array() {
+        let dir = temp_dir("jour-039-empty");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"text": "hello"}),
+            );
+        }
+        assert_eq!(
+            journal_thread_json(&dir.join("main.jsonl"), "missing").expect("json"),
+            "[]"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -650,6 +650,21 @@ pub fn settings_schema_stats_json() -> String {
     .expect("stats always serialize")
 }
 
+/// set-034: compact JSONL of [`schema_kind_counts`] — one `{kind, count}`
+/// object per kind (trailing newline included), reusing
+/// [`schema_kind_counts`] as its single source so it cannot drift from the
+/// schema; line shape mirrors [`settings_defaults_jsonl`].
+pub fn settings_schema_stats_jsonl() -> String {
+    let mut out = String::new();
+    for (kind, count) in schema_kind_counts() {
+        let line = serde_json::to_string(&json!({ "kind": kind, "count": count }))
+            .expect("kind counts always serialize");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -1735,6 +1750,43 @@ mod settings_tests {
         assert!(doc.get("total").is_some(), "total field present");
         assert!(doc["total"].is_u64(), "total is a number");
         assert!(doc["by_kind"].is_object(), "by_kind is an object");
+    }
+
+    // ---- set-034: schema stats JSONL ----------------------------------------
+
+    #[test]
+    fn settings_schema_stats_jsonl_matches_schema_kind_counts() {
+        let counts = schema_kind_counts();
+        let out = settings_schema_stats_jsonl();
+        assert!(out.ends_with('\n'), "trailing newline like sibling exports");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), counts.len(), "one line per kind");
+        let parsed: Vec<serde_json::Value> = lines
+            .iter()
+            .map(|l| serde_json::from_str(l).expect("line parses as JSON"))
+            .collect();
+        for ((kind, count), obj) in counts.iter().zip(&parsed) {
+            assert_eq!(obj["kind"], json!(kind), "kind matches order");
+            assert_eq!(obj["count"], json!(count), "{kind} count matches");
+        }
+    }
+
+    #[test]
+    fn settings_schema_stats_jsonl_lines_are_compact_objects() {
+        for line in settings_schema_stats_jsonl().lines() {
+            let obj: serde_json::Value =
+                serde_json::from_str(line).expect("valid JSONL line");
+            assert!(obj.is_object(), "each line is a JSON object: {line}");
+            assert!(
+                obj.get("kind").is_some_and(|v| v.is_string()),
+                "line carries \"kind\": {line}"
+            );
+            assert!(
+                obj.get("count").is_some_and(|v| v.is_u64()),
+                "line carries numeric \"count\": {line}"
+            );
+            assert!(!line.contains('\n'), "compact single-line JSON");
+        }
     }
 
     // ---- set-020: defaults JSON ---------------------------------------------

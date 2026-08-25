@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 65 (jour-047 + ctx-049 + set-043) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-047**: journal_health_jsonl.
+2. ✅ **ctx-049**: context_stale_count_jsonl.
+3. ✅ **set-043**: settings_is_default_jsonl.
+
+Verification: full workspace suite green — **982 tests, 0 failed**
+(975 → 982). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 64 (orch-029 + ctx-048 + set-042) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-029**: task_status_counts_jsonl.

@@ -686,6 +686,19 @@ pub fn settings_health_jsonl(current: &Settings) -> String {
     .expect("health report always serializes")
 }
 
+/// set-043: single-line compact JSON `{is_default, changed}` — `is_default`
+/// from [`settings_is_default`], `changed` keys differing from their
+/// documented default ([`settings_diff_count`]). Single sources throughout,
+/// so this cannot drift from the schema; shape mirrors
+/// [`settings_health_jsonl`].
+pub fn settings_is_default_jsonl(current: &Settings) -> String {
+    serde_json::to_string(&json!({
+        "is_default": settings_is_default(current),
+        "changed": settings_diff_count(current),
+    }))
+    .expect("is-default report always serializes")
+}
+
 /// set-019: count of [`schema_defs`] entries per [`DefKind`], as
 /// `(kind name, count)` pairs sorted by count descending (ties keep the
 /// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
@@ -2020,6 +2033,41 @@ mod settings_tests {
         // A second broken field adds an error and a change.
         s.approval_timeout_secs = 0;
         assert_eq!(settings_health_jsonl(&s), r#"{"changed":2,"errors":2}"#);
+    }
+
+    // ---- set-043: is-default JSONL -------------------------------------------
+
+    #[test]
+    fn settings_is_default_jsonl_fresh_settings_are_true_and_zero() {
+        assert_eq!(
+            settings_is_default_jsonl(&Settings::default()),
+            r#"{"changed":0,"is_default":true}"#
+        );
+    }
+
+    #[test]
+    fn settings_is_default_jsonl_changed_settings_are_false_with_count() {
+        let s = Settings {
+            max_tool_rounds: 7,
+            ..Settings::default()
+        };
+        assert_eq!(settings_is_default_jsonl(&s), r#"{"changed":1,"is_default":false}"#);
+        // Consistent with the underlying single sources.
+        assert_eq!(
+            settings_is_default_jsonl(&s),
+            format!(
+                "{{\"changed\":{},\"is_default\":{}}}",
+                settings_diff_count(&s),
+                settings_is_default(&s)
+            )
+        );
+    }
+
+    #[test]
+    fn settings_is_default_jsonl_is_single_compact_line() {
+        let out = settings_is_default_jsonl(&Settings::default());
+        assert_eq!(out.lines().count(), 1, "single line");
+        assert!(!out.contains(' '), "compact: no spaces: {out}");
     }
 
     // ---- set-020: defaults JSON ---------------------------------------------

@@ -285,6 +285,23 @@ pub fn journal_gaps_jsonl(path: &Path) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
+/// jour-047: journal health as a single compact JSONL-style line —
+/// `{records, bytes, pct_of_cap, gaps}` combining [`lag_stats`] and on-disk
+/// size (same 10 MB cap basis as [`journal_health_json`]).
+pub fn journal_health_jsonl(path: &Path) -> Result<String, String> {
+    const CAP_BYTES: u64 = 10 * 1024 * 1024;
+    let stats = lag_stats(&Journal::replay(path)?);
+    let bytes = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    let pct_of_cap = bytes.saturating_mul(100) / CAP_BYTES;
+    serde_json::to_string(&serde_json::json!({
+        "records": stats.records,
+        "bytes": bytes,
+        "pct_of_cap": pct_of_cap,
+        "gaps": stats.gaps,
+    }))
+    .map_err(|e| e.to_string())
+}
+
 /// jour-026: metadata-only JSON export — pretty-printed JSON array of
 /// `{seq, kind, thread_id, ts_ms}` for every record in the segment.
 /// Payloads are deliberately excluded: this export is metadata-only.
@@ -2779,6 +2796,37 @@ pub(crate) mod reducer_tests {
             journal_gaps_jsonl(&path).expect("jsonl"),
             "{\"gaps\":2,\"records\":3}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-047 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_health_jsonl_seeded_is_exact_line() {
+        let dir = temp_dir("jour-047");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        let path = dir.join("main.jsonl");
+        let bytes = std::fs::metadata(&path).expect("metadata").len();
+        // json! uses a BTreeMap → keys serialize in sorted order.
+        assert_eq!(
+            journal_health_jsonl(&path).expect("jsonl"),
+            format!(
+                "{{\"bytes\":{bytes},\"gaps\":0,\"pct_of_cap\":{},\"records\":3}}",
+                bytes * 100 / (10 * 1024 * 1024)
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_health_jsonl_missing_file_is_err() {
+        let dir = temp_dir("jour-047-missing");
+        assert!(journal_health_jsonl(&dir.join("nope.jsonl")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

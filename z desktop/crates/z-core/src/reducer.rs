@@ -337,6 +337,21 @@ pub fn journal_top_threads(path: &Path, n: usize) -> Result<Vec<(String, usize)>
     })
 }
 
+/// jour-033: pretty JSON array of `{ "thread": ..., "messages": ... }` for
+/// [`journal_top_threads`]. Empty input yields `[]`.
+pub fn journal_top_threads_json(path: &Path, n: usize) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct Entry {
+        thread: String,
+        messages: usize,
+    }
+    let entries: Vec<Entry> = journal_top_threads(path, n)?
+        .into_iter()
+        .map(|(thread, messages)| Entry { thread, messages })
+        .collect();
+    serde_json::to_string_pretty(&entries).map_err(|e| format!("reducer: top threads json: {e}"))
+}
+
 /// jour-017: generates a synthetic, deterministic journal segment at `path`.
 ///
 /// Each of `turns` turns contributes one `turn_started` record followed by
@@ -2563,6 +2578,35 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_top_threads(&dir.join("main.jsonl"), 99).expect("fold"),
             vec![("t1".to_string(), 1), ("t2".to_string(), 1)]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // jour-033 ---------------------------------------------------------------
+
+    #[test]
+    fn journal_top_threads_json_seeded_is_exact_pretty_json() {
+        let dir = temp_dir("jour033-seeded");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+        }
+        assert_eq!(
+            journal_top_threads_json(&dir.join("main.jsonl"), 10).expect("json"),
+            "[\n  {\n    \"thread\": \"t2\",\n    \"messages\": 2\n  },\n  {\n    \"thread\": \"t1\",\n    \"messages\": 1\n  }\n]"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_top_threads_json_empty_yields_empty_array() {
+        let dir = temp_dir("jour033-empty");
+        Journal::open(&dir, "main").expect("open"); // creates an empty segment
+        assert_eq!(
+            journal_top_threads_json(&dir.join("main.jsonl"), 5).expect("json"),
+            "[]"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 49 (jour-033 + ctx-033 + set-027) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-033**: journal_top_threads_json.
+2. ✅ **ctx-033**: context_top_layers_json.
+3. ✅ **set-027**: settings_search_json.
+
+Verification: full workspace suite green — **882 tests, 0 failed**
+(876 → 882). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 48 (jour-032 + ctx-032 + set-026) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-032**: journal_kind_json.

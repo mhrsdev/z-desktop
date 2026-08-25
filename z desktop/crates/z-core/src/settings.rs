@@ -482,6 +482,27 @@ pub fn settings_diff_jsonl(current: &Settings) -> String {
     out
 }
 
+/// set-027: pretty JSON array of `{key, kind}` rows from [`search_defs`] for
+/// external UIs; no match ⇒ `"[]"`. Kind names match [`export_schema_json`].
+/// Single source is [`search_defs`], so this can never drift from the schema.
+pub fn settings_search_json(query: &str) -> String {
+    let rows: Vec<serde_json::Value> = search_defs(query)
+        .iter()
+        .map(|d| {
+            json!({
+                "key": d.key,
+                "kind": match d.kind {
+                    DefKind::U64 => "u64",
+                    DefKind::F32 => "f32",
+                    DefKind::Bool => "bool",
+                    DefKind::String => "string",
+                },
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&rows).expect("search rows always serialize")
+}
+
 /// set-015: one-line summary of `current` — `"{n} settings, {d} changed
 /// from default"` where `n` counts every [`schema_defs`] key and `d` comes
 /// from [`diff_from_default`], so "changed" can never drift from the schema.
@@ -1325,6 +1346,31 @@ mod settings_tests {
             settings_diff_jsonl(&s),
             "{\"key\":\"doom_threshold\",\"value\":\"5\"}\n"
         );
+    }
+
+    // ---- set-027: search as pretty JSON --------------------------------------
+
+    #[test]
+    fn settings_search_json_match_yields_key_kind_rows() {
+        let doc: serde_json::Value = serde_json::from_str(&settings_search_json("tool_round"))
+            .expect("search JSON parses as valid JSON");
+        let arr = doc.as_array().expect("top-level shape is an array");
+        assert_eq!(arr.len(), 1, "fragment matches exactly one def");
+        assert_eq!(arr[0]["key"], json!("max_tool_rounds"));
+        assert_eq!(arr[0]["kind"], json!("u64"), "kind spelling matches schema export");
+        // Empty query ⇒ every def, one {key, kind} row each.
+        let all: serde_json::Value =
+            serde_json::from_str(&settings_search_json("")).expect("valid JSON");
+        assert_eq!(
+            all.as_array().expect("array").len(),
+            schema_defs().len(),
+            "empty query ⇒ every def"
+        );
+    }
+
+    #[test]
+    fn settings_search_json_no_match_is_empty_array() {
+        assert_eq!(settings_search_json("zzz_no_such_setting"), "[]");
     }
 
     // ---- set-015: one-line summary -----------------------------------------

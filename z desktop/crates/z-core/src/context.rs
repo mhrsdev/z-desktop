@@ -621,6 +621,17 @@ pub fn context_tokens_by_layer_json(items: &[ContextItem]) -> String {
     serde_json::to_string_pretty(&rows).unwrap_or_default()
 }
 
+/// ctx-033: pretty JSON array export of [`context_top_layers`] — one
+/// {layer, count} object per row, largest count first, truncated to n.
+/// n=0 or empty input serializes as "[]". Pure inspector helper.
+pub fn context_top_layers_json(items: &[ContextItem], n: usize) -> String {
+    let rows: Vec<serde_json::Value> = context_top_layers(items, n)
+        .into_iter()
+        .map(|(l, count)| serde_json::json!({ "layer": layer_name(l), "count": count }))
+        .collect();
+    serde_json::to_string_pretty(&rows).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1670,5 +1681,34 @@ mod tests {
     #[test]
     fn context_tokens_by_layer_json_empty_is_empty_array() {
         assert_eq!(context_tokens_by_layer_json(&[]), "[]");
+    }
+
+    // ctx-033
+    #[test]
+    fn context_top_layers_json_seeded_matches_top_layers() {
+        let items = vec![
+            item(Layer::Turn, "t1", 1),
+            item(Layer::Prefix, "sys", 1),
+            item(Layer::Ephemeral, "e1", 1),
+            item(Layer::Session, "s1", 1),
+            item(Layer::Turn, "t2", 1),
+            item(Layer::Ephemeral, "e2", 1),
+        ];
+        let parsed: serde_json::Value =
+            serde_json::from_str(&context_top_layers_json(&items, 2)).expect("valid JSON");
+        assert_eq!(
+            parsed,
+            serde_json::json!([
+                { "layer": "turn", "count": 2 },
+                { "layer": "ephemeral", "count": 2 },
+            ])
+        );
+    }
+
+    #[test]
+    fn context_top_layers_json_n_zero_is_empty_array() {
+        let items = vec![item(Layer::Session, "s", 1)];
+        assert_eq!(context_top_layers_json(&items, 0), "[]");
+        assert_eq!(context_top_layers_json(&[], 5), "[]");
     }
 }

@@ -504,6 +504,21 @@ pub fn context_stale_jsonl(items: &[ContextItem]) -> String {
     out
 }
 
+/// ctx-039: compact JSONL export of pinned items only — one line per item
+/// where [`ContextItem::pinned`] is set, same per-item shape as
+/// [`context_export_jsonl`] (round-trips with [`load_session_layer`]'s line
+/// format). No pinned items yields an empty string. Pure.
+pub fn context_pinned_jsonl(items: &[ContextItem]) -> String {
+    let mut out = String::new();
+    for item in items.iter().filter(|i| i.pinned) {
+        if let Ok(line) = serde_json::to_string(item) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// ctx-036: pretty JSON array export of stale items only — one {layer, text}
 /// object per item where [`ContextItem::stale`] is set. No stale items
 /// serializes as "[]". Pure inspector helper.
@@ -1484,6 +1499,38 @@ mod tests {
         let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
         assert_eq!(context_stale_jsonl(&items), "");
         assert_eq!(context_stale_jsonl(&[]), "");
+    }
+
+    // ctx-039
+    #[test]
+    fn context_pinned_jsonl_seeded_yields_only_pinned_lines() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "pinned note", 5),
+            item(Layer::Session, "history", 4),
+            item(Layer::Turn, "latest", 3),
+        ];
+        items[0].pinned = true;
+        items[1].pinned = true;
+        let jsonl = context_pinned_jsonl(&items);
+        let lines: Vec<&str> = jsonl.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let parsed: Vec<ContextItem> = lines
+            .iter()
+            .map(|l| serde_json::from_str(l).expect("valid JSONL line"))
+            .collect();
+        assert_eq!(
+            parsed,
+            vec![items[0].clone(), items[1].clone()],
+            "only pinned items, input order preserved"
+        );
+    }
+
+    #[test]
+    fn context_pinned_jsonl_no_pinned_is_empty_string() {
+        let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
+        assert_eq!(context_pinned_jsonl(&items), "");
+        assert_eq!(context_pinned_jsonl(&[]), "");
     }
 
     // ctx-036

@@ -354,6 +354,40 @@ pub fn journal_kind_counts_jsonl(path: &Path) -> Result<String, String> {
     Ok(lines.join("\n"))
 }
 
+/// jour-038: compact JSONL of all records of one kind — one
+/// `{seq, kind, thread_id, ts_ms}` object per line, journal order, same
+/// metadata shape as [`journal_export_jsonl`]. Unknown/empty kind yields an
+/// empty string.
+pub fn journal_kind_jsonl(path: &Path, kind: &str) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct Entry<'a> {
+        seq: u64,
+        kind: &'a JournalKind,
+        thread_id: &'a Option<String>,
+        ts_ms: u128,
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for r in Journal::replay(path)? {
+        // Same name round-trip as journal_kind_counts (as_str is private).
+        let name = serde_json::to_string(&r.kind)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
+        if name != kind {
+            continue;
+        }
+        let line = serde_json::to_string(&Entry {
+            seq: r.seq,
+            kind: &r.kind,
+            thread_id: &r.thread_id,
+            ts_ms: r.ts_ms,
+        })
+        .map_err(|e| format!("reducer: kind jsonl: {e}"))?;
+        lines.push(line);
+    }
+    Ok(lines.join("\n"))
+}
+
 /// jour-028: per-thread persisted message counts for one segment, sorted by
 /// count descending (ties broken by thread id ascending). Reuses the shared
 /// [`fold`] so seq-gap handling matches every other view here.
@@ -2894,6 +2928,59 @@ pub(crate) mod reducer_tests {
         }
         assert_eq!(
             journal_thread_jsonl(&dir.join("main.jsonl"), "missing").expect("jsonl"),
+            ""
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_kind_jsonl_seeded_yields_only_that_kinds_lines() {
+        let dir = temp_dir("jour-038");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t1"),
+                json!({"text": "first"}),
+            );
+            append(
+                &mut j,
+                JournalKind::MessagePersisted,
+                Some("t2"),
+                json!({"text": "second"}),
+            );
+            append(&mut j, JournalKind::MessagePersisted, None, json!({}));
+            append(&mut j, JournalKind::ProviderError, Some("t1"), json!({}));
+        }
+        let out = journal_kind_jsonl(&dir.join("main.jsonl"), "message_persisted").expect("jsonl");
+        let lines: Vec<serde_json::Value> = out
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("line is compact json"))
+            .collect();
+        assert_eq!(out.lines().count(), 3);
+        // Only message_persisted records, journal order.
+        assert!(lines
+            .iter()
+            .all(|l| l["kind"] == "message_persisted" && l["seq"].as_u64().is_some()));
+        assert_eq!(lines[0]["thread_id"], "t1");
+        assert_eq!(lines[1]["thread_id"], "t2");
+        assert!(lines[2]["thread_id"].is_null());
+        // Compact: no spaces after separators.
+        assert!(out.lines().all(|l| l.starts_with("{\"seq\":")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_kind_jsonl_unknown_kind_is_empty_string() {
+        let dir = temp_dir("jour-038-empty");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+        }
+        assert_eq!(
+            journal_kind_jsonl(&dir.join("main.jsonl"), "message_persisted").expect("jsonl"),
             ""
         );
         let _ = std::fs::remove_dir_all(&dir);

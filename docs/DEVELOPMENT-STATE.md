@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 55 (jour-038 + ctx-039 + set-033) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-038**: journal_kind_jsonl scoped stream.
+2. ✅ **ctx-039**: context_pinned_jsonl.
+3. ✅ **set-033**: settings_schema_total.
+
+Verification: full workspace suite green — **920 tests, 0 failed**
+(914 → 920). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 54 (jour-037 + ctx-038 + set-032) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-037**: journal_kind_counts_jsonl.

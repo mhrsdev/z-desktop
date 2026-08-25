@@ -610,6 +610,13 @@ pub fn settings_prefix_count(prefix: &str) -> usize {
     settings_by_prefix(prefix).len()
 }
 
+/// set-033: total number of [`schema_defs`] entries — the schema size for
+/// external UIs. Single source is [`schema_defs`], so this can never drift
+/// from the schema.
+pub fn settings_schema_total() -> usize {
+    schema_defs().len()
+}
+
 /// set-019: count of [`schema_defs`] entries per [`DefKind`], as
 /// `(kind name, count)` pairs sorted by count descending (ties keep the
 /// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
@@ -1628,6 +1635,18 @@ mod settings_tests {
     #[test]
     fn settings_prefix_count_empty_prefix_returns_schema_len() {
         assert_eq!(settings_prefix_count(""), schema_defs().len());
+    }
+
+    // ---- set-033: schema total ------------------------------------------------
+
+    #[test]
+    fn settings_schema_total_matches_known_keys_len() {
+        assert_eq!(settings_schema_total(), known_keys().len());
+    }
+
+    #[test]
+    fn settings_schema_total_is_positive() {
+        assert!(settings_schema_total() > 0);
     }
 
     // ---- set-030: prefix JSON export --------------------------------------

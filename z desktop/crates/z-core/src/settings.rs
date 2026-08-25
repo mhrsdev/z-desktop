@@ -686,6 +686,18 @@ pub fn settings_health_jsonl(current: &Settings) -> String {
     .expect("health report always serializes")
 }
 
+/// set-046: pretty JSON summary `{total, changed}` — `total` schema keys
+/// ([`settings_schema_total`]), `changed` keys differing from their documented
+/// default ([`settings_diff_count`]). Single sources throughout, so this can
+/// never drift from the schema.
+pub fn settings_summary_json(current: &Settings) -> String {
+    serde_json::to_string_pretty(&json!({
+        "total": settings_schema_total(),
+        "changed": settings_diff_count(current),
+    }))
+    .expect("summary always serializes")
+}
+
 /// set-043: single-line compact JSON `{is_default, changed}` — `is_default`
 /// from [`settings_is_default`], `changed` keys differing from their
 /// documented default ([`settings_diff_count`]). Single sources throughout,
@@ -2185,6 +2197,47 @@ mod settings_tests {
             assert_eq!(out.lines().count(), 1, "single line: {out}");
             assert!(!out.contains(' '), "compact: no spaces: {out}");
         }
+    }
+
+    // ---- set-046: pretty summary JSON ----------------------------------------
+
+    #[test]
+    fn settings_summary_json_fresh_settings_are_total_and_zero_changed() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_summary_json(&Settings::default()))
+                .expect("summary parses as valid JSON");
+        assert_eq!(doc["total"], json!(settings_schema_total()));
+        assert_eq!(doc["changed"], json!(0));
+        assert!(settings_schema_total() > 0, "schema is non-empty");
+    }
+
+    #[test]
+    fn settings_summary_json_counts_changed_against_total() {
+        let mut s = Settings {
+            max_tool_rounds: 7,
+            ..Settings::default()
+        };
+        let total = settings_schema_total();
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_summary_json(&s)).expect("valid JSON");
+        assert_eq!(doc["total"], json!(total));
+        assert_eq!(doc["changed"], json!(1));
+        // A second changed key raises `changed`; `total` never moves.
+        s.approval_timeout_secs = 90;
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_summary_json(&s)).expect("valid JSON");
+        assert_eq!(doc["changed"], json!(2));
+        assert_eq!(doc["total"], json!(total));
+    }
+
+    #[test]
+    fn settings_summary_json_is_pretty_multiline() {
+        let out = settings_summary_json(&Settings::default());
+        assert!(out.contains('\n'), "pretty-printed, not compact: {out}");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&out).is_ok(),
+            "still valid JSON"
+        );
     }
 
     // ---- set-020: defaults JSON ---------------------------------------------

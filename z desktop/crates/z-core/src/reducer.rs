@@ -477,6 +477,13 @@ pub fn journal_thread_summary_jsonl(path: &Path) -> Result<String, String> {
     .map_err(|e| format!("reducer: thread summary jsonl: {e}"))
 }
 
+/// jour-050: total persisted message count — sum of [`ThreadSummary::message_count`]
+/// over [`ThreadsView::fold`]. Empty segment yields 0.
+pub fn journal_message_count(path: &Path) -> Result<usize, String> {
+    let view = ThreadsView::fold(path)?;
+    Ok(view.threads.values().map(|t| t.message_count).sum::<u64>() as usize)
+}
+
 /// jour-038: compact JSONL of all records of one kind — one
 /// `{seq, kind, thread_id, ts_ms}` object per line, journal order, same
 /// metadata shape as [`journal_export_jsonl`]. Unknown/empty kind yields an
@@ -1279,6 +1286,34 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_thread_summary_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
             "{\"messages\":0,\"threads\":0}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_message_count_seeded_sums_persisted_messages_exactly() {
+        let dir = temp_dir("jour-050");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+        }
+        assert_eq!(
+            journal_message_count(&dir.join("main.jsonl")).expect("count"),
+            3
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_message_count_empty_segment_is_zero() {
+        let dir = temp_dir("jour-050-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_message_count(&dir.join("main.jsonl")).expect("count"),
+            0
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

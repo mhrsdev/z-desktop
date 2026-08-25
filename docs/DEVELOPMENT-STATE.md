@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-24
 
+## Wave 68 (jour-050 + ctx-052 + set-046) — 2026-08-24 COMPLETE — 1000 TESTS
+
+Milestone: **1003 tests, 0 failed.**
+
+1. ✅ **jour-050**: journal_message_count.
+2. ✅ **ctx-052**: context_pinned_count_report (pinned/total/pct).
+3. ✅ **set-046**: settings_summary_json.
+
+Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 67 (jour-049 + ctx-051 + set-045) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-049**: journal_thread_summary_jsonl.

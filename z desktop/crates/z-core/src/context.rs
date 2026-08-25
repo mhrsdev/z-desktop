@@ -835,6 +835,16 @@ pub fn context_stale_count_json(items: &[ContextItem]) -> String {
     .unwrap_or_default()
 }
 
+/// ctx-052: single-line compact JSON pinned report —
+/// {"pinned":P,"total":T,"pct":N} where pct is pinned share of total
+/// (0 when empty). Pure.
+pub fn context_pinned_count_report(items: &[ContextItem]) -> String {
+    let pinned = context_pinned_count(items);
+    let total = items.len();
+    let pct = if total == 0 { 0 } else { pinned * 100 / total };
+    format!("{{\"pinned\":{pinned},\"total\":{total},\"pct\":{pct}}}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1765,6 +1775,34 @@ mod tests {
             r#"{"pinned":0,"total":1}"#
         );
         assert_eq!(context_pinned_count_jsonl(&[]), r#"{"pinned":0,"total":0}"#);
+    }
+
+    // ctx-052
+    #[test]
+    fn context_pinned_count_report_seeded_yields_exact_line() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "scratch", 3),
+        ];
+        items[0].pinned = true;
+        assert_eq!(
+            context_pinned_count_report(&items),
+            r#"{"pinned":1,"total":3,"pct":33}"#
+        );
+    }
+
+    #[test]
+    fn context_pinned_count_report_none_pinned_yields_zeros() {
+        let items = vec![item(Layer::Session, "hi", 2)];
+        assert_eq!(
+            context_pinned_count_report(&items),
+            r#"{"pinned":0,"total":1,"pct":0}"#
+        );
+        assert_eq!(
+            context_pinned_count_report(&[]),
+            r#"{"pinned":0,"total":0,"pct":0}"#
+        );
     }
 
     // ctx-050

@@ -904,6 +904,17 @@ pub fn settings_kind_counts_report() -> String {
         .expect("kind counts report always serializes")
 }
 
+/// set-059: pretty JSON report `{kinds: n}` — `n` being the length of
+/// [`schema_kind_counts`] (one entry per [`DefKind`], including zero-count
+/// kinds), reusing [`schema_kind_counts`] as its single source so it cannot
+/// drift from the schema; shape mirrors [`settings_kind_counts_report`] but
+/// pretty-printed.
+pub fn settings_kinds_count_json() -> String {
+    let n = schema_kind_counts().len();
+    serde_json::to_string_pretty(&json!({ "kinds": n }))
+        .expect("kind count always serializes")
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -2498,6 +2509,34 @@ mod settings_tests {
         assert!(
             doc["kinds"].as_u64().expect("kinds numeric") > 0,
             "at least one distinct kind present"
+        );
+    }
+
+    // ---- set-059: kinds count JSON -------------------------------------------
+
+    #[test]
+    fn settings_kinds_count_json_matches_schema_kind_counts_len_exactly() {
+        // Seeded from the current schema via its single source: one entry
+        // per DefKind, zero-count kinds included.
+        let expected = schema_kind_counts().len();
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_kinds_count_json()).expect("valid JSON");
+        assert_eq!(doc, json!({ "kinds": expected }), "exact {{kinds: n}} object");
+        let obj = doc.as_object().expect("top-level shape is an object");
+        assert_eq!(obj.len(), 1, "only the kinds field is present");
+        assert!(obj.contains_key("kinds"), "field named \"kinds\"");
+    }
+
+    #[test]
+    fn settings_kinds_count_json_is_pretty_multiline_and_positive() {
+        let out = settings_kinds_count_json();
+        assert!(out.contains('\n'), "pretty-printed, not compact: {out}");
+        assert!(out.starts_with("{\n"), "pretty object opens on its own line: {out}");
+        let doc: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        assert!(doc["kinds"].is_u64(), "kinds is a number: {out}");
+        assert!(
+            doc["kinds"].as_u64().expect("kinds numeric") > 0,
+            "at least one kind tracked"
         );
     }
 

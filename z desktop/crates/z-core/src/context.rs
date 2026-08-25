@@ -981,6 +981,17 @@ pub fn context_layer_names_json(items: &[ContextItem]) -> String {
     serde_json::to_string_pretty(&context_layer_names(items)).unwrap_or_default()
 }
 
+/// ctx-065: compact JSONL of [`context_layer_names`], one name per line.
+/// Empty slice yields an empty string. Pure inspector helper.
+pub fn context_layer_names_jsonl(items: &[ContextItem]) -> String {
+    let mut out = String::new();
+    for name in context_layer_names(items) {
+        out.push_str(&serde_json::to_string(&name).unwrap_or_default());
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2848,5 +2859,28 @@ mod tests {
     #[test]
     fn context_layer_names_json_empty_yields_empty_array() {
         assert_eq!(context_layer_names_json(&[]), "[]");
+    }
+
+    // ctx-065
+    #[test]
+    fn context_layer_names_jsonl_seeded_yields_valid_lines() {
+        let items = vec![
+            item(Layer::Turn, "now", 2),
+            item(Layer::Ephemeral, "scratch", 1),
+        ];
+        let out = context_layer_names_jsonl(&items);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2);
+        for line in &lines {
+            let parsed: String = serde_json::from_str(line).unwrap();
+            assert!(!parsed.is_empty());
+        }
+        assert_eq!(lines[0], "\"turn\"");
+        assert_eq!(out.ends_with('\n'), true);
+    }
+
+    #[test]
+    fn context_layer_names_jsonl_empty_yields_empty_string() {
+        assert_eq!(context_layer_names_jsonl(&[]), "");
     }
 }

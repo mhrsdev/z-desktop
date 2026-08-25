@@ -542,6 +542,17 @@ pub fn context_pinned_jsonl(items: &[ContextItem]) -> String {
     out
 }
 
+/// ctx-048: single-line compact JSON pinned-count summary —
+/// {"pinned":P,"total":T} — the count twin of [`context_pinned_jsonl`]
+/// for journal/inspector export. Empty slice yields zeros. Pure.
+pub fn context_pinned_count_jsonl(items: &[ContextItem]) -> String {
+    format!(
+        "{{\"pinned\":{},\"total\":{}}}",
+        items.iter().filter(|i| i.pinned).count(),
+        items.len()
+    )
+}
+
 /// ctx-036: pretty JSON array export of stale items only — one {layer, text}
 /// object per item where [`ContextItem::stale`] is set. No stale items
 /// serializes as "[]". Pure inspector helper.
@@ -1695,6 +1706,32 @@ mod tests {
             context_stale_jsonl_report(&[]),
             r#"{"total":0,"stale":0,"pct":0}"#
         );
+    }
+
+    // ctx-048
+    #[test]
+    fn context_pinned_count_jsonl_seeded_yields_exact_line() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "scratch", 3),
+        ];
+        items[0].pinned = true;
+        items[1].pinned = true;
+        assert_eq!(
+            context_pinned_count_jsonl(&items),
+            r#"{"pinned":2,"total":3}"#
+        );
+    }
+
+    #[test]
+    fn context_pinned_count_jsonl_none_pinned_yields_zeros() {
+        let items = vec![item(Layer::Session, "hi", 2)];
+        assert_eq!(
+            context_pinned_count_jsonl(&items),
+            r#"{"pinned":0,"total":1}"#
+        );
+        assert_eq!(context_pinned_count_jsonl(&[]), r#"{"pinned":0,"total":0}"#);
     }
 
     // ctx-022

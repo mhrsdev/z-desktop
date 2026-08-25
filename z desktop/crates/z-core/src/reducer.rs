@@ -857,6 +857,20 @@ pub fn task_counts_json(view: &TasksView) -> String {
     serde_json::to_string_pretty(&counts).unwrap_or_else(|_| "{}".into())
 }
 
+/// orch-029: single-line compact JSONL status counts
+/// (`{"done":n,"running":n,"failed":n,"pending":n}`) from [`task_counts`] —
+/// compact twin of [`task_counts_json`] for line-oriented exports.
+pub fn task_status_counts_jsonl(view: &TasksView) -> String {
+    let (done, running, failed, pending) = task_counts(view);
+    serde_json::json!({
+        "done": done,
+        "running": running,
+        "failed": failed,
+        "pending": pending,
+    })
+    .to_string()
+}
+
 /// orch-024: pretty JSON health snapshot combining [`task_counts`] with the
 /// total number of folded timeline events: `{counts: {...}, events: n}`.
 pub fn tasks_health_json(view: &TasksView) -> String {
@@ -2003,6 +2017,37 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             task_counts_json(&TasksView::default()),
             "{\n  \"done\": 0,\n  \"failed\": 0,\n  \"pending\": 0,\n  \"running\": 0\n}"
+        );
+    }
+
+    // orch-029 ---------------------------------------------------------------
+
+    #[test]
+    fn task_status_counts_jsonl_seeded_is_single_compact_line() {
+        let dir = temp_dir("orch029-seeded");
+        TaskStore::create(&dir, "d").expect("create d");
+        TaskStore::create(&dir, "r").expect("create r");
+        TaskStore::create(&dir, "f").expect("create f");
+        TaskStore::create(&dir, "p").expect("create p");
+        TaskStore::transition(&dir, "d", TaskStatus::Done).expect("d done");
+        TaskStore::transition(&dir, "r", TaskStatus::Running).expect("r running");
+        TaskStore::transition(&dir, "f", TaskStatus::Failed).expect("f failed");
+
+        let view = TasksView::fold(&dir.join(format!("{TASKS_SEGMENT}.jsonl"))).expect("fold");
+        // serde_json's json! orders object keys alphabetically; single line.
+        assert_eq!(
+            task_status_counts_jsonl(&view),
+            "{\"done\":1,\"failed\":1,\"pending\":1,\"running\":1}"
+        );
+        assert!(!task_status_counts_jsonl(&view).contains('\n'), "one line");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_status_counts_jsonl_empty_is_all_zeros() {
+        assert_eq!(
+            task_status_counts_jsonl(&TasksView::default()),
+            "{\"done\":0,\"failed\":0,\"pending\":0,\"running\":0}"
         );
     }
 

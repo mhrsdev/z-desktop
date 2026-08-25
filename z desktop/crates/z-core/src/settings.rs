@@ -673,6 +673,19 @@ pub fn settings_has_errors(current: &Settings) -> bool {
     !settings_is_valid(current)
 }
 
+/// set-042: single-line compact JSON health readout `{changed, errors}` —
+/// `changed` keys differ from their documented default
+/// ([`settings_diff_count`]), `errors` counts out-of-bounds values from
+/// [`validate_all`]. Single sources throughout, so this cannot drift from the
+/// schema; shape mirrors [`settings_diff_jsonl_report`].
+pub fn settings_health_jsonl(current: &Settings) -> String {
+    serde_json::to_string(&json!({
+        "changed": settings_diff_count(current),
+        "errors": validate_all(current).len(),
+    }))
+    .expect("health report always serializes")
+}
+
 /// set-019: count of [`schema_defs`] entries per [`DefKind`], as
 /// `(kind name, count)` pairs sorted by count descending (ties keep the
 /// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
@@ -1981,6 +1994,32 @@ mod settings_tests {
         assert!(settings_has_errors(&broken));
         // Mirrors settings_is_valid exactly.
         assert_eq!(settings_has_errors(&broken), !settings_is_valid(&broken));
+    }
+
+    // ---- set-042: health JSONL ------------------------------------------------
+
+    #[test]
+    fn settings_health_jsonl_defaults_are_zeroes() {
+        assert_eq!(
+            settings_health_jsonl(&Settings::default()),
+            r#"{"changed":0,"errors":0}"#
+        );
+    }
+
+    #[test]
+    fn settings_health_jsonl_counts_changed_and_errors() {
+        // Changed but valid: 7 rounds is in bounds.
+        let mut s = Settings {
+            max_tool_rounds: 7,
+            ..Settings::default()
+        };
+        assert_eq!(settings_health_jsonl(&s), r#"{"changed":1,"errors":0}"#);
+        // Broken: 0 is out of bounds AND differs from the default.
+        s.max_tool_rounds = 0;
+        assert_eq!(settings_health_jsonl(&s), r#"{"changed":1,"errors":1}"#);
+        // A second broken field adds an error and a change.
+        s.approval_timeout_secs = 0;
+        assert_eq!(settings_health_jsonl(&s), r#"{"changed":2,"errors":2}"#);
     }
 
     // ---- set-020: defaults JSON ---------------------------------------------

@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-24
 
+## Wave 44 (orch-025 + sup-032 + mem-029) — 2026-08-24 COMPLETE
+
+1. ✅ **orch-025**: tasks_export_jsonl.
+2. ✅ **sup-032**: evidence_export_jsonl.
+3. ✅ **mem-029**: memory_export_jsonl.
+
+JSONL export coverage complete across subsystems.
+
+Verification: full workspace suite green — **854 tests, 0 failed**
+(848 → 854). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 43 (sup-031 + mem-028 + tok-025) — 2026-08-24 COMPLETE
 
 1. ✅ **sup-031**: evidence_health_json (summary + by_kind).

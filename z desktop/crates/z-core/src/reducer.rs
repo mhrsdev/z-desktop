@@ -663,6 +663,16 @@ pub fn tasks_export_json(view: &TasksView) -> String {
     serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".into())
 }
 
+/// orch-025: compact JSONL export — one `{id, status}` object per line,
+/// sorted by id (via [`task_state_events`]). Empty view → empty string.
+pub fn tasks_export_jsonl(view: &TasksView) -> String {
+    task_state_events(view)
+        .into_iter()
+        .map(|(id, status)| serde_json::json!({ "id": id, "status": status }).to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// jour-022: idempotent re-sync batch — one shape-only draft per task whose
 /// folded status differs from its LAST `task_state_changed` event (or that
 /// has no recorded event yet). Each draft is identical in shape to what
@@ -1097,6 +1107,46 @@ pub(crate) mod reducer_tests {
     #[test]
     fn tasks_export_of_empty_view_is_bare_array() {
         assert_eq!(tasks_export_json(&TasksView::default()), "[]");
+    }
+
+    #[test]
+    fn tasks_export_jsonl_lists_sorted_compact_lines() {
+        let mut view = TasksView::default();
+        for (id, status) in [
+            ("b", TaskStatus::Done),
+            ("a", TaskStatus::Running),
+            ("c", TaskStatus::Failed),
+        ] {
+            view.tasks.insert(
+                id.into(),
+                TaskRecord {
+                    id: id.into(),
+                    status,
+                    deps: vec![],
+                },
+            );
+        }
+        let text = tasks_export_jsonl(&view);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines.iter().all(|l| !l.contains('\n')));
+        let parsed: Vec<serde_json::Value> = lines
+            .iter()
+            .map(|l| serde_json::from_str(l).expect("line parses"))
+            .collect();
+        assert_eq!(
+            parsed,
+            vec![
+                json!({ "id": "a", "status": "running" }),
+                json!({ "id": "b", "status": "done" }),
+                json!({ "id": "c", "status": "failed" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn tasks_export_jsonl_of_empty_view_is_empty_string() {
+        assert_eq!(tasks_export_jsonl(&TasksView::default()), "");
     }
 
     #[test]

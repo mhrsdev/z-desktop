@@ -684,6 +684,26 @@ pub fn evidence_health_json(view: &EvidenceView) -> String {
     serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// sup-032: compact JSON Lines export — one `{kind, ok, thread_id, summary}`
+/// object per line (newline-terminated, machine-diffable stream form; the
+/// internal record id and turn id stay out, same policy as [`evidence_export_json`]).
+/// An empty view exports an empty string.
+pub fn evidence_export_jsonl(view: &EvidenceView) -> String {
+    let mut out = String::new();
+    for e in &view.items {
+        let line = serde_json::to_string(&serde_json::json!({
+            "kind": e.kind,
+            "ok": e.ok,
+            "thread_id": e.thread_id,
+            "summary": e.summary,
+        }))
+        .unwrap_or_else(|_| "{}".to_string());
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
@@ -1693,5 +1713,41 @@ mod evidence_tests {
     #[test]
     fn evidence_by_kind_is_empty_for_an_empty_view() {
         assert!(evidence_by_kind(&EvidenceView::default(), EvidenceKind::Diff).is_empty());
+    }
+
+    // sup-032: compact JSONL export.
+
+    #[test]
+    fn evidence_export_jsonl_emits_one_valid_compact_line_per_record() {
+        let mut view = EvidenceView::default();
+        view.items.extend([
+            Evidence::tests("t1", "u1", 3, 0, "cargo test"),
+            Evidence::diff("t2", "u2", false, "wrote x"),
+        ]);
+        let out = evidence_export_jsonl(&view);
+        // N records -> N newline-terminated lines, each valid standalone JSON.
+        assert!(out.ends_with('\n'));
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let parsed: Vec<serde_json::Value> = lines
+            .iter()
+            .map(|l| serde_json::from_str(l).expect("valid JSONL line"))
+            .collect();
+        assert_eq!(parsed[0]["kind"], "tests");
+        assert_eq!(parsed[0]["ok"], true);
+        assert_eq!(parsed[0]["thread_id"], "t1");
+        assert_eq!(parsed[0]["summary"], "cargo test");
+        assert_eq!(parsed[1]["kind"], "diff");
+        assert_eq!(parsed[1]["ok"], false);
+        assert_eq!(parsed[1]["thread_id"], "t2");
+        assert_eq!(parsed[1]["summary"], "wrote x");
+        // Projection drops the internal ids; compact form has no pretty spacing.
+        assert!(out.lines().all(|l| !l.contains("\"turn_id\"")));
+        assert!(!out.contains(": ") && !out.contains(", "));
+    }
+
+    #[test]
+    fn evidence_export_jsonl_is_empty_for_an_empty_view() {
+        assert_eq!(evidence_export_jsonl(&EvidenceView::default()), "");
     }
 }

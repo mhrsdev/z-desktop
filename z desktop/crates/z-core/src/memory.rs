@@ -484,6 +484,36 @@ pub fn memory_export_report(view: &MemoryView) -> String {
     format!("{live} live / {total} records ({pct}% live)")
 }
 
+/// One compact JSONL row (mem-029): a named struct rather than a free-form
+/// [`serde_json::Value`] so the field set/order cannot drift.
+#[derive(Serialize)]
+struct MemoryExportRow<'a> {
+    id: &'a str,
+    layer: &'a str,
+    status: Status,
+    confidence: f32,
+}
+
+/// Exports the view's live records as compact JSONL (mem-029): one
+/// self-contained `{id, layer, status, confidence}` object per line
+/// (trailing newline included), same live predicate as [`export_json`].
+/// Line-per-record shape for streaming/append-friendly external UIs.
+pub fn memory_export_jsonl(view: &MemoryView) -> String {
+    let mut out = String::new();
+    for r in view.live() {
+        let line = serde_json::to_string(&MemoryExportRow {
+            id: &r.id,
+            layer: r.layer.as_str(),
+            status: r.status,
+            confidence: r.confidence,
+        })
+        .expect("memory export rows always serialize");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 /// Imports an array of MemoryRecord-shaped JSON objects (mem-019): each entry
 /// is validated through [`MemoryRecord::new`] (provenance + confidence rules)
 /// and recorded best-effort via [`record`]. Malformed entries are skipped with
@@ -2354,6 +2384,58 @@ mod memory_tests {
 
         view.records.push(rec("mem-two", Status::Promoted));
         assert_eq!(memory_export_report(&view), "2 live / 4 records (50% live)");
+    }
+
+    // ---- mem-029: JSONL export ----------------------------------------------
+
+    #[test]
+    fn memory_export_jsonl_emits_one_valid_line_per_live_record() {
+        let mut view = MemoryView::default();
+        view.records.push(rec("mem-a", Status::Promoted));
+        let mut sup = rec("mem-sup", Status::Promoted);
+        sup.superseded_by = Some("mem-a".into());
+        view.records.push(sup);
+        view.records
+            .push(rec_conf("mem-draft", "draft fact", 0.4, Status::Provisional));
+        view.records.push(
+            MemoryRecord::new(
+                "mem-sem",
+                Layer::Semantic,
+                "semantic fact",
+                prov("msg-2"),
+                0.75,
+                Status::Promoted,
+            )
+            .expect("valid record"),
+        );
+
+        let out = memory_export_jsonl(&view);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), view.live().len(), "one line per live record");
+
+        let rows: Vec<serde_json::Value> = lines
+            .iter()
+            .map(|l| serde_json::from_str(l).expect("each line is valid JSON"))
+            .collect();
+        let by_id: HashMap<&str, &serde_json::Value> =
+            rows.iter().map(|v| (v["id"].as_str().unwrap(), v)).collect();
+        assert_eq!(by_id.len(), 2, "only live records exported");
+
+        let a = by_id["mem-a"];
+        assert_eq!(a["layer"], "project");
+        assert_eq!(a["status"], "promoted");
+        assert_eq!(a["confidence"], 0.9);
+        let s = by_id["mem-sem"];
+        assert_eq!(s["layer"], "semantic");
+        assert_eq!(s["status"], "promoted");
+        assert_eq!(s["confidence"], 0.75);
+        assert!(!by_id.contains_key("mem-sup"), "superseded excluded");
+        assert!(!by_id.contains_key("mem-draft"), "provisional excluded");
+    }
+
+    #[test]
+    fn memory_export_jsonl_empty_view_is_empty_string() {
+        assert_eq!(memory_export_jsonl(&MemoryView::default()), "");
     }
 
     #[test]

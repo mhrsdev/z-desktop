@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 48 (jour-032 + ctx-032 + set-026) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-032**: journal_kind_json.
+2. ✅ **ctx-032**: context_tokens_by_layer_json.
+3. ✅ **set-026**: settings_diff_jsonl.
+
+Verification: full workspace suite green — **876 tests, 0 failed**
+(870 → 876). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 47 (orch-027 + ctx-031 + set-025) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-027**: tasks_by_status_json.

@@ -295,6 +295,22 @@ pub fn journal_kind_counts(path: &Path) -> Result<Vec<(String, usize)>, String> 
     Ok(pairs)
 }
 
+/// jour-032: per-kind counts as pretty JSON — array of `{kind, count}` in the
+/// same count-desc/name-asc order as [`journal_kind_counts`]. Empty segment
+/// yields `[]`.
+pub fn journal_kind_json(path: &Path) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct Entry {
+        kind: String,
+        count: usize,
+    }
+    let entries: Vec<Entry> = journal_kind_counts(path)?
+        .into_iter()
+        .map(|(kind, count)| Entry { kind, count })
+        .collect();
+    serde_json::to_string_pretty(&entries).map_err(|e| format!("reducer: kind json: {e}"))
+}
+
 /// jour-028: per-thread persisted message counts for one segment, sorted by
 /// count descending (ties broken by thread id ascending). Reuses the shared
 /// [`fold`] so seq-gap handling matches every other view here.
@@ -903,6 +919,34 @@ pub(crate) mod reducer_tests {
         assert!(journal_kind_counts(&dir.join("main.jsonl"))
             .expect("counts")
             .is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_kind_json_seeded_matches_counts_order_exactly() {
+        let dir = temp_dir("jour-032");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t2"), json!({}));
+        }
+        assert_eq!(
+            journal_kind_json(&dir.join("main.jsonl")).expect("json"),
+            "[\n  {\n    \"kind\": \"message_persisted\",\n    \"count\": 3\n  },\n  {\n    \"kind\": \"turn_started\",\n    \"count\": 1\n  }\n]"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_kind_json_empty_segment_is_empty_array() {
+        let dir = temp_dir("jour-032-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_kind_json(&dir.join("main.jsonl")).expect("json"),
+            "[]"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

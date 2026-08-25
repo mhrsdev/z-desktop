@@ -610,6 +610,17 @@ pub fn context_layer_jsonl(items: &[ContextItem], layer: Layer) -> String {
     out
 }
 
+/// ctx-032: pretty JSON array export of [`context_tokens_by_layer`] — one
+/// {layer, tokens} object per non-empty layer in enum order. Empty input
+/// serializes as "[]". Pure inspector helper.
+pub fn context_tokens_by_layer_json(items: &[ContextItem]) -> String {
+    let rows: Vec<serde_json::Value> = context_tokens_by_layer(items)
+        .into_iter()
+        .map(|(l, tok)| serde_json::json!({ "layer": layer_name(l), "tokens": tok }))
+        .collect();
+    serde_json::to_string_pretty(&rows).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1631,5 +1642,33 @@ mod tests {
         assert_eq!(context_layer_jsonl(&[], Layer::Turn), "");
         let items = vec![item(Layer::Prefix, "sys", 1)];
         assert_eq!(context_layer_jsonl(&items, Layer::Ephemeral), "");
+    }
+
+    // ctx-032
+    #[test]
+    fn context_tokens_by_layer_json_seeded_matches_tokens_by_layer() {
+        let items = vec![
+            item(Layer::Turn, "t1", 3),
+            item(Layer::Prefix, "sys", 10),
+            item(Layer::Ephemeral, "e1", 5),
+            item(Layer::Session, "s1", 2),
+            item(Layer::Turn, "t2", 4),
+        ];
+        let parsed: serde_json::Value =
+            serde_json::from_str(&context_tokens_by_layer_json(&items)).expect("valid JSON");
+        assert_eq!(
+            parsed,
+            serde_json::json!([
+                { "layer": "prefix", "tokens": 10 },
+                { "layer": "session", "tokens": 2 },
+                { "layer": "turn", "tokens": 7 },
+                { "layer": "ephemeral", "tokens": 5 },
+            ])
+        );
+    }
+
+    #[test]
+    fn context_tokens_by_layer_json_empty_is_empty_array() {
+        assert_eq!(context_tokens_by_layer_json(&[]), "[]");
     }
 }

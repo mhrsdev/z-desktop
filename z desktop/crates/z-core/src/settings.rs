@@ -467,6 +467,21 @@ pub fn settings_diff_json(current: &Settings) -> String {
     serde_json::to_string_pretty(&rows).expect("diff rows always serialize")
 }
 
+/// set-026: compact JSONL of [`diff_from_default`] — one `{key, value}` object
+/// per changed key (trailing newline included); fresh defaults ⇒ empty string.
+/// Single source is [`diff_from_default`], so this can never drift from the
+/// schema; line shape mirrors [`schema_defs_jsonl`].
+pub fn settings_diff_jsonl(current: &Settings) -> String {
+    let mut out = String::new();
+    for (key, value) in diff_from_default(current) {
+        let line = serde_json::to_string(&json!({ "key": key, "value": value }))
+            .expect("diff rows always serialize");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 /// set-015: one-line summary of `current` — `"{n} settings, {d} changed
 /// from default"` where `n` counts every [`schema_defs`] key and `d` comes
 /// from [`diff_from_default`], so "changed" can never drift from the schema.
@@ -1292,6 +1307,23 @@ mod settings_tests {
         assert_eq!(
             settings_diff_json(&s),
             "[\n  {\n    \"key\": \"doom_threshold\",\n    \"value\": \"5\"\n  }\n]"
+        );
+    }
+
+    // ---- set-026: diff as compact JSONL --------------------------------------
+
+    #[test]
+    fn settings_diff_jsonl_fresh_defaults_is_empty_string() {
+        assert_eq!(settings_diff_jsonl(&Settings::default()), "");
+    }
+
+    #[test]
+    fn settings_diff_jsonl_one_changed_field_is_one_compact_line() {
+        let mut s = Settings::default();
+        s.doom_threshold = 5;
+        assert_eq!(
+            settings_diff_jsonl(&s),
+            "{\"key\":\"doom_threshold\",\"value\":\"5\"}\n"
         );
     }
 

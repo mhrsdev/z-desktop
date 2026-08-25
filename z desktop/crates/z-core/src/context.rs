@@ -323,6 +323,15 @@ pub fn context_layer_names_exists_report(items: &[ContextItem]) -> String {
     format!("{{\"layers\":{}}}", context_layer_names_exists(items))
 }
 
+/// ctx-070: pretty JSON layer-existence summary — {layers:B}. Empty slice
+/// yields {\"layers\":false}. Pure inspector helper.
+pub fn context_layer_names_exists_json(items: &[ContextItem]) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "layers": context_layer_names_exists(items)
+    }))
+    .unwrap_or_default()
+}
+
 /// ctx-055: percentage of stale items, [`stale_report`] pct accessor.
 /// Empty slice yields 0 (avoids division by zero). Pure inspector helper.
 pub fn context_stale_pct(items: &[ContextItem]) -> usize {
@@ -2722,6 +2731,24 @@ mod tests {
     #[test]
     fn context_layer_names_exists_report_empty_is_false() {
         assert_eq!(context_layer_names_exists_report(&[]), "{\"layers\":false}");
+    }
+
+    // ctx-070
+    #[test]
+    fn context_layer_names_exists_json_seeded_is_true() {
+        let items = vec![item(Layer::Session, "a", 1)];
+        assert_eq!(
+            context_layer_names_exists_json(&items),
+            "{\n  \"layers\": true\n}"
+        );
+    }
+
+    #[test]
+    fn context_layer_names_exists_json_empty_is_false() {
+        assert_eq!(
+            context_layer_names_exists_json(&[]),
+            "{\n  \"layers\": false\n}"
+        );
     }
 
     // ctx-055

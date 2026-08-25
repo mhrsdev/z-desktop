@@ -958,6 +958,17 @@ pub fn settings_kinds_names_jsonl() -> String {
         .collect()
 }
 
+/// set-064: single-line compact JSON `{kinds: n}` from
+/// [`settings_kinds_names`] — `n` being its length (non-zero kinds only),
+/// distinct from [`settings_kind_counts_report`] which counts over all of
+/// [`schema_kind_counts`]. Single source is [`settings_kinds_names`], so this
+/// cannot drift from the schema; shape mirrors [`settings_kind_counts_report`].
+pub fn settings_kinds_names_report() -> String {
+    let n = settings_kinds_names().len();
+    serde_json::to_string(&json!({ "kinds": n }))
+        .expect("kinds names report always serializes")
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -2667,6 +2678,31 @@ mod settings_tests {
             .collect();
         assert_eq!(parsed.len(), settings_kinds_names().len(), "one line per name");
         assert_eq!(parsed, settings_kinds_names());
+    }
+
+    // ---- set-064: kinds names report -----------------------------------------
+
+    #[test]
+    fn settings_kinds_names_report_matches_current_schema_exactly() {
+        // Current schema is all-u64: only u64 has a positive count.
+        assert_eq!(settings_kinds_names_report(), r#"{"kinds":1}"#);
+    }
+
+    #[test]
+    fn settings_kinds_names_report_is_positive_and_single_sourced() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_kinds_names_report()).expect("valid JSON");
+        assert_eq!(
+            doc,
+            json!({ "kinds": settings_kinds_names().len() }),
+            "exact {{kinds: n}} object from settings_kinds_names"
+        );
+        let obj = doc.as_object().expect("top-level shape is an object");
+        assert_eq!(obj.len(), 1, "only the kinds field is present");
+        assert!(
+            doc["kinds"].as_u64().unwrap() > 0,
+            "schema always has at least one non-zero kind: {doc}"
+        );
     }
 
     // ---- set-035: validate count ---------------------------------------------

@@ -6,6 +6,20 @@
 
 Last updated: 2026-08-24
 
+## Wave 43 (sup-031 + mem-028 + tok-025) — 2026-08-24 COMPLETE
+
+1. ✅ **sup-031**: evidence_health_json (summary + by_kind).
+2. ✅ **mem-028**: memory_health_json (summary + per-layer counts).
+3. ✅ **tok-025**: tokens_health_json (mape + worst sample).
+
+Health JSON coverage now spans all seven subsystems.
+
+Verification: full workspace suite green — **848 tests, 0 failed**
+(841 → 848). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 42 (orch-024 + ctx-029 + set-023) — 2026-08-24 COMPLETE
 
 1. ✅ **orch-024**: tasks_health_json (counts + event totals).

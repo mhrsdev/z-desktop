@@ -670,6 +670,20 @@ pub fn evidence_export_json(view: &EvidenceView) -> String {
     serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string())
 }
 
+/// sup-031: pretty JSON health snapshot — `{summary, by_kind}` where
+/// `summary` is [`detector_noise_report`] and `by_kind` is [`evidence_summary`]
+/// projected to `[kind, total, ok]` triples in enum declaration order.
+pub fn evidence_health_json(view: &EvidenceView) -> String {
+    let doc = serde_json::json!({
+        "summary": detector_noise_report(view),
+        "by_kind": evidence_summary(view)
+            .iter()
+            .map(|(kind, total, ok)| serde_json::json!([kind, total, ok]))
+            .collect::<Vec<_>>(),
+    });
+    serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string())
+}
+
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
@@ -1591,6 +1605,45 @@ mod evidence_tests {
     #[test]
     fn evidence_export_json_empty_view_is_bare_array() {
         assert_eq!(evidence_export_json(&EvidenceView::default()), "[]");
+    }
+
+    // sup-031: health JSON.
+
+    #[test]
+    fn evidence_health_json_seeded_view_is_exact() {
+        let mut view = EvidenceView::default();
+        view.items.extend([
+            Evidence::tests("t", "u", 3, 0, "cargo test"),
+            Evidence::diff("t", "u", false, "wrote x"),
+            Evidence::diff("t", "u", true, "wrote y"),
+        ]);
+        assert_eq!(
+            evidence_health_json(&view),
+            r#"{
+  "by_kind": [
+    [
+      "tests",
+      1,
+      1
+    ],
+    [
+      "diff",
+      2,
+      1
+    ]
+  ],
+  "summary": "3 evidence records, 66% ok, 2 kinds"
+}"#
+        );
+    }
+
+    #[test]
+    fn evidence_health_json_empty_view_has_empty_by_kind() {
+        let parsed: serde_json::Value =
+            serde_json::from_str(&evidence_health_json(&EvidenceView::default()))
+                .expect("valid JSON");
+        assert_eq!(parsed["summary"], "0 evidence records");
+        assert_eq!(parsed["by_kind"], serde_json::json!([]));
     }
 
     // sup-029: one-line health line.

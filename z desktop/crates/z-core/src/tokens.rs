@@ -135,6 +135,43 @@ pub fn estimate_accuracy_report(samples: &[(String, u32)]) -> String {
     format!("estimator MAPE {mape:.1}% (worst: {head}… {worst_err:.1}%)")
 }
 
+/// Escape a string for embedding in a JSON document (quotes, backslash,
+/// control chars). Private helper for [`tokens_health_json`].
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Pretty JSON health snapshot of the token estimator: overall MAPE plus the
+/// worst sample. Nulls when there are no usable samples.
+pub fn tokens_health_json(samples: &[(String, u32)]) -> String {
+    let owned: Vec<AccuracySample> = samples
+        .iter()
+        .map(|(text, tokens)| AccuracySample { text: text.clone(), actual_tokens: *tokens })
+        .collect();
+    let Some(mape) = estimator_error(&owned) else {
+        return "{\n  \"mape_pct\": null,\n  \"worst\": null\n}".to_string();
+    };
+    // Same zero-filter as estimator_error, so a Some here implies a worst exists.
+    let (worst_text, worst_err) =
+        worst_sample(&owned).expect("usable samples imply a worst sample");
+    format!(
+        "{{\n  \"mape_pct\": {mape:.1},\n  \"worst\": {{\n    \"text\": \"{}\",\n    \"err\": {worst_err:.1}\n  }}\n}}",
+        json_escape(worst_text)
+    )
+}
+
 /// Budget verdict for a would-be request.
 #[derive(Debug, PartialEq)]
 pub enum Budget {
@@ -382,5 +419,33 @@ mod tests {
     #[test]
     fn accuracy_report_empty_says_no_samples() {
         assert_eq!(estimate_accuracy_report(&[]), "no samples");
+    }
+
+    #[test]
+    fn tokens_health_json_empty_is_nulls() {
+        assert_eq!(
+            tokens_health_json(&[]),
+            "{\n  \"mape_pct\": null,\n  \"worst\": null\n}"
+        );
+    }
+
+    #[test]
+    fn tokens_health_json_with_samples_has_exact_fields() {
+        // Same known errors as above: MAPE 62.5%, worst sample error 75%.
+        let samples = vec![
+            ("hello world".to_string(), 12u32),
+            ("hello world".to_string(), 6),
+        ];
+        assert_eq!(
+            tokens_health_json(&samples),
+            "{\n  \"mape_pct\": 62.5,\n  \"worst\": {\n    \"text\": \"hello world\",\n    \"err\": 75.0\n  }\n}"
+        );
+    }
+
+    #[test]
+    fn tokens_health_json_escapes_quotes_in_text() {
+        let samples = vec![("say \"hi\"".to_string(), 6u32)];
+        let json = tokens_health_json(&samples);
+        assert!(json.contains("\"text\": \"say \\\"hi\\\"\""), "got {json}");
     }
 }

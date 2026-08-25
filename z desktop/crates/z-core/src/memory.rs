@@ -719,6 +719,44 @@ pub fn memory_health_line(store: &MemoryStore, journal_path: &Path) -> String {
     format!("{health} | {export}")
 }
 
+/// Pretty-JSON status block (mem-028): [`memory_health`] summary plus
+/// per-layer live view counts, for tool/UI consumers. A failing half
+/// degrades in place rather than losing the whole report. Struct-shaped
+/// (not `json!`) so field order in the output stays as documented
+/// regardless of serde_json's alphabetical map-key ordering.
+#[derive(Serialize)]
+struct MemoryHealthJson {
+    summary: String,
+    layers: MemoryLayerCounts,
+}
+
+#[derive(Serialize)]
+struct MemoryLayerCounts {
+    project: usize,
+    semantic: usize,
+    episodic: usize,
+}
+
+pub fn memory_health_json(store: &MemoryStore, journal_path: &Path) -> String {
+    let summary =
+        memory_health(store, journal_path).unwrap_or_else(|e| format!("unavailable ({e})"));
+    let count = |layer| {
+        store
+            .read_layer(layer)
+            .map(|records| records.len())
+            .unwrap_or(0)
+    };
+    let report = MemoryHealthJson {
+        summary,
+        layers: MemoryLayerCounts {
+            project: count(Layer::Project),
+            semantic: count(Layer::Semantic),
+            episodic: count(Layer::Episodic),
+        },
+    };
+    serde_json::to_string_pretty(&report).expect("static shape serializes")
+}
+
 /// One-line layer summary (mem-024): live-record count for one layer's
 /// derived view, using the ADR-0014 D4 predicate via [`MemoryView::live`].
 /// An unreadable view counts as 0 — views are caches, not truth.
@@ -2092,6 +2130,77 @@ mod memory_tests {
             memory_health_line(&MemoryStore::open(&dir), &path),
             "0 events, 0 live (0 project/0 semantic/0 episodic), 0 provisional \
              | 0 live / 0 records (0% live)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_health_json_seeded_matches_exact_pretty_json() {
+        let dir = temp_dir("memory-health-json");
+        let path = dir.join("runtime.jsonl");
+        let journal = Mutex::new(Journal::open(&dir, "runtime").expect("open"));
+        let mut a = rec("mem-a", Status::Promoted);
+        record(&journal, &a);
+        record(&journal, &rec("mem-b", Status::Promoted));
+        let semantic = MemoryRecord::new(
+            "mem-s",
+            Layer::Semantic,
+            "semantic note",
+            prov("pass-2"),
+            0.6,
+            Status::Promoted,
+        )
+        .expect("valid");
+        let episodic = MemoryRecord::new(
+            "mem-e",
+            Layer::Episodic,
+            "episodic note",
+            prov("pass-3"),
+            0.5,
+            Status::Provisional,
+        )
+        .expect("valid");
+        record(&journal, &semantic);
+        record(&journal, &episodic);
+        a.superseded_by = Some("mem-b".into());
+        record(&journal, &a);
+        drop(journal);
+
+        let store = MemoryStore::open(&dir);
+        store.rebuild_views(&path).expect("rebuild");
+
+        // Views hold live-only records per layer: superseded mem-a drops out
+        // of the project view and provisional mem-e never reaches episodic.
+        assert_eq!(
+            memory_health_json(&store, &path),
+            r#"{
+  "summary": "4 events, 2 live (1 project/1 semantic/0 episodic), 1 provisional",
+  "layers": {
+    "project": 1,
+    "semantic": 1,
+    "episodic": 0
+  }
+}"#
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_health_json_empty_journal_is_zero_summary() {
+        let dir = temp_dir("memory-health-json-empty");
+        let path = dir.join("runtime.jsonl");
+        drop(Journal::open(&dir, "runtime").expect("open")); // empty segment
+
+        assert_eq!(
+            memory_health_json(&MemoryStore::open(&dir), &path),
+            r#"{
+  "summary": "0 events, 0 live (0 project/0 semantic/0 episodic), 0 provisional",
+  "layers": {
+    "project": 0,
+    "semantic": 0,
+    "episodic": 0
+  }
+}"#
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -573,6 +573,29 @@ pub fn settings_by_prefix(prefix: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// set-030: pretty JSON array of `{ key, kind }` rows for [`schema_defs`]
+/// entries whose key starts with `prefix` — same case-insensitive matching
+/// and order as [`settings_by_prefix`]. No match ⇒ `"[]"`.
+pub fn settings_prefix_json(prefix: &str) -> String {
+    let p = prefix.to_lowercase();
+    let rows: Vec<serde_json::Value> = schema_defs()
+        .iter()
+        .filter(|d| d.key.to_lowercase().starts_with(&p))
+        .map(|d| {
+            json!({
+                "key": d.key,
+                "kind": match d.kind {
+                    DefKind::U64 => "u64",
+                    DefKind::F32 => "f32",
+                    DefKind::Bool => "bool",
+                    DefKind::String => "string",
+                },
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&rows).expect("prefix rows always serialize")
+}
+
 /// set-019: count of [`schema_defs`] entries per [`DefKind`], as
 /// `(kind name, count)` pairs sorted by count descending (ties keep the
 /// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
@@ -1554,6 +1577,31 @@ mod settings_tests {
     #[test]
     fn settings_by_prefix_no_match_is_empty() {
         assert!(settings_by_prefix("zzz_").is_empty());
+    }
+
+    // ---- set-030: prefix JSON export --------------------------------------
+
+    #[test]
+    fn settings_prefix_json_matching_prefix_renders_rows() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_prefix_json("doom")).expect("valid JSON");
+        let arr = doc.as_array().expect("top-level shape is an array");
+        assert_eq!(arr.len(), 1, "prefix matches exactly one def");
+        assert_eq!(arr[0]["key"], json!("doom_threshold"));
+        assert_eq!(arr[0]["kind"], json!("u64"), "kind matches schema export");
+
+        // Empty prefix ⇒ every def, one {key, kind} row each, schema order.
+        let all: serde_json::Value =
+            serde_json::from_str(&settings_prefix_json("")).expect("valid JSON");
+        let all = all.as_array().unwrap();
+        assert_eq!(all.len(), schema_defs().len(), "one row per def");
+        let keys: Vec<&str> = all.iter().filter_map(|o| o["key"].as_str()).collect();
+        assert_eq!(keys, known_keys(), "rows follow schema order");
+    }
+
+    #[test]
+    fn settings_prefix_json_no_match_is_empty_array() {
+        assert_eq!(settings_prefix_json("zzz_"), "[]");
     }
 
     // ---- set-019: schema kind counts ---------------------------------------

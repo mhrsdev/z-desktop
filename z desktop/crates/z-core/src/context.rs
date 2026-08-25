@@ -504,6 +504,18 @@ pub fn context_stale_jsonl(items: &[ContextItem]) -> String {
     out
 }
 
+/// ctx-036: pretty JSON array export of stale items only — one {layer, text}
+/// object per item where [`ContextItem::stale`] is set. No stale items
+/// serializes as "[]". Pure inspector helper.
+pub fn context_stale_json(items: &[ContextItem]) -> String {
+    let rows: Vec<serde_json::Value> = items
+        .iter()
+        .filter(|i| i.stale)
+        .map(|i| serde_json::json!({ "layer": layer_name(i.layer), "text": i.text }))
+        .collect();
+    serde_json::to_string_pretty(&rows).unwrap_or_default()
+}
+
 /// ctx-022: one-line combined health report for the inspector —
 /// [`budget_report`] and [`stale_report`] joined with " | ". Pure.
 pub fn context_health_line(items: &[ContextItem], budget_tokens: usize, now_ms: u128) -> String {
@@ -1435,6 +1447,33 @@ mod tests {
         let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
         assert_eq!(context_stale_jsonl(&items), "");
         assert_eq!(context_stale_jsonl(&[]), "");
+    }
+
+    // ctx-036
+    #[test]
+    fn context_stale_json_seeded_yields_only_stale_rows() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Ephemeral, "stale body /tmp/a.rs", 5),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "fresh scratch", 3),
+        ];
+        items[1].stale = true;
+        items[2].stale = true;
+        let parsed: Vec<serde_json::Value> =
+            serde_json::from_str(&context_stale_json(&items)).expect("valid JSON");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0]["layer"], "ephemeral");
+        assert_eq!(parsed[0]["text"], "stale body /tmp/a.rs");
+        assert_eq!(parsed[1]["layer"], "session");
+        assert_eq!(parsed[1]["text"], "history");
+    }
+
+    #[test]
+    fn context_stale_json_no_stale_is_empty_array() {
+        let items = vec![item(Layer::Prefix, "sys", 7), item(Layer::Turn, "now", 4)];
+        assert_eq!(context_stale_json(&items), "[]");
+        assert_eq!(context_stale_json(&[]), "[]");
     }
 
     // ctx-022

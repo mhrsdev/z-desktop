@@ -6,6 +6,19 @@
 
 Last updated: 2026-08-24
 
+## Wave 52 (jour-035 + ctx-036 + set-030) — 2026-08-24 COMPLETE — 900 TESTS
+
+Milestone: **900 tests, 0 failed.**
+
+1. ✅ **jour-035**: journal_thread_counts_json.
+2. ✅ **ctx-036**: context_stale_json.
+3. ✅ **set-030**: settings_prefix_json.
+
+Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 51 (jour-034 + ctx-035 + set-029) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-034**: journal_thread_jsonl scoped stream.

@@ -1034,6 +1034,13 @@ pub fn context_layer_names_exists_jsonl(items: &[ContextItem]) -> String {
     format!("{{\"layers\":{}}}", !context_layer_names(items).is_empty())
 }
 
+/// ctx-072: dedup alias of [`context_layer_names_exists_report`] in JSONL
+/// shape — single-line compact JSON `{"layers":B}` from
+/// [`context_layer_names_exists`]. Pure inspector helper.
+pub fn context_layer_names_exists_report_jsonl(items: &[ContextItem]) -> String {
+    format!("{{\"layers\":{}}}", context_layer_names_exists(items))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3019,5 +3026,22 @@ mod tests {
     #[test]
     fn context_layer_names_exists_jsonl_empty_yields_false() {
         assert_eq!(context_layer_names_exists_jsonl(&[]), "{\"layers\":false}");
+    }
+
+    #[test]
+    fn context_layer_names_exists_report_jsonl_seeded_yields_true() {
+        let items = vec![item(Layer::Prefix, "sys", 10)];
+        assert_eq!(
+            context_layer_names_exists_report_jsonl(&items),
+            "{\"layers\":true}"
+        );
+    }
+
+    #[test]
+    fn context_layer_names_exists_report_jsonl_empty_yields_false() {
+        assert_eq!(
+            context_layer_names_exists_report_jsonl(&[]),
+            "{\"layers\":false}"
+        );
     }
 }

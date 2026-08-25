@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 88 (jour-070 + ctx-072 + set-066) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-070**: journal_thread_names_exists_json.
+2. ✅ **ctx-072**: context_layer_names_exists_report_jsonl.
+3. ✅ **set-066**: settings_kinds_names_exists_json.
+
+Verification: full workspace suite green — **1126 tests, 0 failed**
+(1120 → 1126). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 87 (jour-069 + ctx-071 + set-065) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-069**: journal_thread_names_exists_jsonl.

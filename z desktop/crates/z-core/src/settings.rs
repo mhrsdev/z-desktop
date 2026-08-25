@@ -976,6 +976,14 @@ pub fn settings_kinds_names_exists() -> bool {
     !settings_kinds_names().is_empty()
 }
 
+/// set-066: pretty JSON `{kinds: bool}` from [`settings_kinds_names_exists`]
+/// — single source, so this can never drift from the schema; shape mirrors
+/// [`settings_kinds_names_report`] but boolean and pretty-printed.
+pub fn settings_kinds_names_exists_json() -> String {
+    serde_json::to_string_pretty(&json!({ "kinds": settings_kinds_names_exists() }))
+        .expect("kinds exists always serializes")
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -2735,6 +2743,36 @@ mod settings_tests {
             schema_kind_counts().iter().any(|(_, c)| *c > 0),
             "a non-empty schema always has a positive-count kind"
         );
+    }
+
+    // ---- set-066: kinds names exists JSON ------------------------------------
+
+    #[test]
+    fn settings_kinds_names_exists_json_matches_current_schema_exactly() {
+        // Current schema is all-u64: at least one kind present => true.
+        assert_eq!(settings_kinds_names_exists_json(), "{\n  \"kinds\": true\n}");
+        let doc: serde_json::Value =
+            serde_json::from_str(&settings_kinds_names_exists_json()).expect("valid JSON");
+        assert_eq!(doc, json!({ "kinds": true }));
+        let obj = doc.as_object().expect("top-level shape is an object");
+        assert_eq!(obj.len(), 1, "only the kinds field is present");
+        assert!(obj.contains_key("kinds"), "field named \"kinds\"");
+    }
+
+    #[test]
+    fn settings_kinds_names_exists_json_always_true_and_single_sourced() {
+        // The schema always has at least one def, so this is always true.
+        assert!(!schema_defs().is_empty(), "schema is non-empty");
+        let out = settings_kinds_names_exists_json();
+        assert!(out.contains('\n'), "pretty-printed, not compact: {out}");
+        let doc: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        assert_eq!(
+            doc,
+            json!({ "kinds": settings_kinds_names_exists() }),
+            "single-sourced on settings_kinds_names_exists"
+        );
+        assert_eq!(doc["kinds"], json!(true), "always true for current schema");
+        assert!(doc["kinds"].is_boolean(), "kinds is a bool: {doc}");
     }
 
     // ---- set-035: validate count ---------------------------------------------

@@ -6,6 +6,18 @@
 
 Last updated: 2026-08-24
 
+## Wave 66 (jour-048 + ctx-050 + set-044) — 2026-08-24 COMPLETE
+
+1. ✅ **jour-048**: journal_thread_summary_json.
+2. ✅ **ctx-050**: context_pinned_count_json.
+3. ✅ **set-044**: settings_validate_jsonl.
+
+Verification: full workspace suite green — **989 tests, 0 failed**
+(982 → 989). Ledger: 152 IMPLEMENTED.
+
+Next work continues → ui-050 usage dashboard panel data, mcp-001 MCP
+study, or ext-001 plugin manifest research.
+
 ## Wave 65 (jour-047 + ctx-049 + set-043) — 2026-08-24 COMPLETE
 
 1. ✅ **jour-047**: journal_health_jsonl.

@@ -699,6 +699,18 @@ pub fn settings_is_default_jsonl(current: &Settings) -> String {
     .expect("is-default report always serializes")
 }
 
+/// set-044: single-line compact JSON `{valid, errors}` — `valid` from
+/// [`settings_is_valid`], `errors` counting out-of-bounds values from
+/// [`validate_all`]. Single sources throughout, so this cannot drift from the
+/// schema; shape mirrors [`settings_health_jsonl`].
+pub fn settings_validate_jsonl(current: &Settings) -> String {
+    serde_json::to_string(&json!({
+        "valid": settings_is_valid(current),
+        "errors": validate_all(current).len(),
+    }))
+    .expect("validation report always serializes")
+}
+
 /// set-019: count of [`schema_defs`] entries per [`DefKind`], as
 /// `(kind name, count)` pairs sorted by count descending (ties keep the
 /// [`DefKind`] declaration order). Kind names match [`export_schema_json`].
@@ -2068,6 +2080,48 @@ mod settings_tests {
         let out = settings_is_default_jsonl(&Settings::default());
         assert_eq!(out.lines().count(), 1, "single line");
         assert!(!out.contains(' '), "compact: no spaces: {out}");
+    }
+
+    // ---- set-044: validate JSONL --------------------------------------------
+
+    #[test]
+    fn settings_validate_jsonl_fresh_settings_are_true_and_zero() {
+        assert_eq!(
+            settings_validate_jsonl(&Settings::default()),
+            r#"{"errors":0,"valid":true}"#
+        );
+    }
+
+    #[test]
+    fn settings_validate_jsonl_broken_settings_are_false_with_count() {
+        let broken = Settings {
+            max_tool_rounds: 0,
+            ..Settings::default()
+        };
+        let n = validate_all(&broken).len();
+        assert!(n >= 1, "broken field yields at least one message: {n}");
+        assert_eq!(
+            settings_validate_jsonl(&broken),
+            format!("{{\"errors\":{n},\"valid\":false}}")
+        );
+        // Consistent with the underlying single sources.
+        assert_eq!(n, settings_validate_count(&broken));
+        assert_eq!(n == 0, settings_is_valid(&broken));
+    }
+
+    #[test]
+    fn settings_validate_jsonl_is_single_compact_line() {
+        for s in [
+            Settings::default(),
+            Settings {
+                doom_threshold: 99,
+                ..Settings::default()
+            },
+        ] {
+            let out = settings_validate_jsonl(&s);
+            assert_eq!(out.lines().count(), 1, "single line: {out}");
+            assert!(!out.contains(' '), "compact: no spaces: {out}");
+        }
     }
 
     // ---- set-020: defaults JSON ---------------------------------------------

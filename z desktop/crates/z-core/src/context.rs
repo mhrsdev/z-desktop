@@ -813,6 +813,17 @@ pub fn context_has_pinned(items: &[ContextItem]) -> bool {
     context_pinned_count(items) > 0
 }
 
+/// ctx-050: pretty JSON pinned-count summary — {pinned, total} — the pretty
+/// twin of [`context_pinned_count_jsonl`] for inspector/external tooling.
+/// Empty slice yields zeros. Pure.
+pub fn context_pinned_count_json(items: &[ContextItem]) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "pinned": context_pinned_count(items),
+        "total": items.len()
+    }))
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1743,6 +1754,35 @@ mod tests {
             r#"{"pinned":0,"total":1}"#
         );
         assert_eq!(context_pinned_count_jsonl(&[]), r#"{"pinned":0,"total":0}"#);
+    }
+
+    // ctx-050
+    #[test]
+    fn context_pinned_count_json_seeded_yields_exact_pretty_object() {
+        let mut items = vec![
+            item(Layer::Prefix, "sys", 7),
+            item(Layer::Session, "history", 4),
+            item(Layer::Ephemeral, "scratch", 3),
+        ];
+        items[0].pinned = true;
+        items[1].pinned = true;
+        assert_eq!(
+            context_pinned_count_json(&items),
+            "{\n  \"pinned\": 2,\n  \"total\": 3\n}"
+        );
+    }
+
+    #[test]
+    fn context_pinned_count_json_none_pinned_yields_zeros() {
+        let items = vec![item(Layer::Session, "hi", 2)];
+        assert_eq!(
+            context_pinned_count_json(&items),
+            "{\n  \"pinned\": 0,\n  \"total\": 1\n}"
+        );
+        assert_eq!(
+            context_pinned_count_json(&[]),
+            "{\n  \"pinned\": 0,\n  \"total\": 0\n}"
+        );
     }
 
     // ctx-049

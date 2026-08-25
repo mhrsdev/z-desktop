@@ -315,6 +315,17 @@ pub fn journal_thread_names_json(path: &Path) -> Result<String, String> {
         .map_err(|e| format!("reducer: thread names json: {e}"))
 }
 
+/// jour-066: [`journal_thread_names`] as compact JSONL — one thread id
+/// string per line, ascending. An empty segment yields an empty string.
+pub fn journal_thread_names_jsonl(path: &Path) -> Result<String, String> {
+    let names = journal_thread_names(path)?;
+    names
+        .iter()
+        .map(|n| serde_json::to_string(n).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|lines| lines.join("\n"))
+}
+
 /// jour-025: combined journal health line — [`seq_health`] and
 /// [`journal_size_report`] joined with " | ".
 pub fn journal_health_line(path: &Path) -> Result<String, String> {
@@ -3687,6 +3698,36 @@ pub(crate) mod reducer_tests {
         assert_eq!(
             journal_thread_names_json(&dir.join("main.jsonl")).expect("json"),
             "[]"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_names_jsonl_seeded_is_one_valid_line_per_name() {
+        let dir = temp_dir("jour-066");
+        {
+            let mut j = Journal::open(&dir, "main").expect("open");
+            append(&mut j, JournalKind::TurnStarted, Some("t2"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, Some("t1"), json!({}));
+            append(&mut j, JournalKind::MessagePersisted, None, json!({}));
+        }
+        let jsonl = journal_thread_names_jsonl(&dir.join("main.jsonl")).expect("jsonl");
+        let lines: Vec<&str> = jsonl.lines().collect();
+        assert_eq!(lines, vec![r#""t1""#, r#""t2""#]);
+        for line in &lines {
+            serde_json::from_str::<String>(line).expect("valid json line");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn journal_thread_names_jsonl_empty_segment_is_empty_string() {
+        let dir = temp_dir("jour-066-empty");
+        let _ = Journal::open(&dir, "main").expect("open");
+        assert_eq!(
+            journal_thread_names_jsonl(&dir.join("main.jsonl")).expect("jsonl"),
+            ""
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

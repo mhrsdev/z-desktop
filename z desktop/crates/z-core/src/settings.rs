@@ -937,6 +937,15 @@ pub fn settings_kinds_names() -> Vec<String> {
         .collect()
 }
 
+/// set-062: pretty JSON array of [`settings_kinds_names`] — one string per
+/// [`DefKind`] actually present in [`schema_defs`], in [`schema_kind_counts`]
+/// order. Single source is [`settings_kinds_names`], so this cannot drift
+/// from the schema.
+pub fn settings_kinds_names_json() -> String {
+    serde_json::to_string_pretty(&settings_kinds_names())
+        .expect("kinds names always serialize")
+}
+
 /// set-020: pretty JSON of [`defaults_map`] as `{ key: value }` — one entry
 /// per schema key in schema order, values being the same string renderings
 /// [`defaults_map`] produces. Single source is [`defaults_map`], so this can
@@ -2615,6 +2624,19 @@ mod settings_tests {
         for name in &names {
             assert!(!name.is_empty(), "kind names are non-empty: {name}");
         }
+    }
+
+    #[test]
+    fn settings_kinds_names_json_matches_current_schema_exactly() {
+        // Current schema is all-u64: only u64 has a positive count.
+        assert_eq!(settings_kinds_names_json(), "[\n  \"u64\"\n]");
+    }
+
+    #[test]
+    fn settings_kinds_names_json_parses_to_the_names_vector() {
+        let parsed: Vec<String> = serde_json::from_str(&settings_kinds_names_json())
+            .expect("kinds names json is a valid JSON string array");
+        assert_eq!(parsed, settings_kinds_names());
     }
 
     // ---- set-035: validate count ---------------------------------------------

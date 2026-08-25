@@ -310,6 +310,13 @@ pub fn context_has_stale(items: &[ContextItem]) -> bool {
     stats(items).stale_count > 0
 }
 
+/// ctx-068: true when at least one non-empty layer exists — i.e. any item is
+/// present (every item carries a [`Layer`]). Empty slice yields false. Pure
+/// inspector helper.
+pub fn context_layer_names_exists(items: &[ContextItem]) -> bool {
+    !items.is_empty()
+}
+
 /// ctx-055: percentage of stale items, [`stale_report`] pct accessor.
 /// Empty slice yields 0 (avoids division by zero). Pure inspector helper.
 pub fn context_stale_pct(items: &[ContextItem]) -> usize {
@@ -2682,6 +2689,18 @@ mod tests {
         assert!(!context_has_stale(&[]));
         let items = vec![item(Layer::Ephemeral, "fresh", 1)];
         assert!(!context_has_stale(&items));
+    }
+
+    // ctx-068
+    #[test]
+    fn context_layer_names_exists_true_when_seeded() {
+        let items = vec![item(Layer::Session, "a", 1)];
+        assert!(context_layer_names_exists(&items));
+    }
+
+    #[test]
+    fn context_layer_names_exists_false_when_empty() {
+        assert!(!context_layer_names_exists(&[]));
     }
 
     // ctx-055
